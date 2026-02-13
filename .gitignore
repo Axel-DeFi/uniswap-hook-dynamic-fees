@@ -1,0 +1,22 @@
+# Foundry
+out/
+cache/
+broadcast/
+deployments/
+gas-snapshots/
+*.snap
+
+# Env
+.env
+.env.*
+
+# OS / Editor
+.DS_Store
+.vscode/
+.idea/
+
+# Local junk
+_trash/
+
+# Node (if any)
+node_modules/
