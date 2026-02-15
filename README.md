@@ -31,6 +31,12 @@ forge install uniswap/v4-periphery --no-commit
 forge install uniswapfoundation/v4-hooks-public --no-commit
 ```
 
+```bash
+git clone --recurse-submodules <repo>
+# or
+git submodule update --init --recursive
+```
+
 Build:
 
 ```bash

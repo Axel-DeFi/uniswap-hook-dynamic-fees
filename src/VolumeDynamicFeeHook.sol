@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 pragma solidity ^0.8.26;
 
+import {BaseHook} from "@uniswap/v4-hooks-public/src/base/BaseHook.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
@@ -9,8 +10,6 @@ import {BalanceDelta, BalanceDeltaLibrary} from "@uniswap/v4-core/src/types/Bala
 import {SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {Hooks} from "@uniswap/v4-core/src/libraries/Hooks.sol";
 import {LPFeeLibrary} from "@uniswap/v4-core/src/libraries/LPFeeLibrary.sol";
-
-import {BaseHook} from "@uniswap/v4-hooks-public/src/base/BaseHook.sol";
 
 /// @title VolumeDynamicFeeHook
 /// @notice Single-pool Uniswap v4 hook that updates dynamic LP fees using stable-coin volume heuristics.
