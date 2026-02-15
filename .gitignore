@@ -2,21 +2,11 @@
 out/
 cache/
 broadcast/
-deployments/
-gas-snapshots/
-*.snap
 
-# Env
-.env
-.env.*
-
-# OS / Editor
+# OS / IDE
 .DS_Store
 .vscode/
-.idea/
 
-# Local junk
-_trash/
-
-# Node (if any)
-node_modules/
+# Secrets
+.env
+docs/PROMPT_FOR_AI.md
