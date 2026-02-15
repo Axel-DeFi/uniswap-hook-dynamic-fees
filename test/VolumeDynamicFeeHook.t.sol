@@ -8,6 +8,7 @@ import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {BalanceDelta, toBalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
+import {SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {LPFeeLibrary} from "@uniswap/v4-core/src/libraries/LPFeeLibrary.sol";
 import {Hooks} from "@uniswap/v4-core/src/libraries/Hooks.sol";
 
@@ -16,10 +17,11 @@ import {HookMiner} from "@uniswap/v4-hooks-public/src/utils/HookMiner.sol";
 import {VolumeDynamicFeeHook} from "../src/VolumeDynamicFeeHook.sol";
 import {MockPoolManager} from "./mocks/MockPoolManager.sol";
 
-/// @notice Minimal local-deploy test:
-/// 1) mines a CREATE2 salt so the hook address has correct v4 flags,
-/// 2) deploys the hook via CREATE2 (inside the test VM),
-/// 3) initializes a dynamic-fee pool via a mock pool manager.
+/// @notice Minimal security-hardening tests:
+/// - Deploy hook locally with correct v4 address flags (CREATE2 + mined salt)
+/// - Verify basic access control (only PoolManager for callbacks)
+/// - Verify key validation + expected revert paths
+/// - Verify pause/unpause fee application via PoolManager
 ///
 /// @dev This is NOT a network deploy. Everything runs inside Foundry's local EVM during `forge test`.
 contract VolumeDynamicFeeHookTest is Test {
@@ -44,7 +46,7 @@ contract VolumeDynamicFeeHookTest is Test {
     function setUp() public {
         manager = new MockPoolManager();
 
-        // Choose deterministic addresses (stable must be either token0 or token1).
+        // Deterministic test addresses (stable must be either token0 or token1).
         // IMPORTANT: currency0 must be < currency1 by address.
         address token0 = address(0x0000000000000000000000000000000000001111);
         address token1 = address(0x0000000000000000000000000000000000002222);
@@ -73,11 +75,12 @@ contract VolumeDynamicFeeHookTest is Test {
             EMA_PERIODS,
             DEADBAND_BPS,
             LULL_RESET_SECONDS,
-            address(this),
+            address(this), // guardian
             PAUSE_FEE_IDX
         );
 
-        (address mined, bytes32 salt) = HookMiner.find(address(this), flags, type(VolumeDynamicFeeHook).creationCode, constructorArgs);
+        (address mined, bytes32 salt) =
+            HookMiner.find(address(this), flags, type(VolumeDynamicFeeHook).creationCode, constructorArgs);
 
         hook = new VolumeDynamicFeeHook{salt: salt}(
             IPoolManager(address(manager)),
@@ -93,7 +96,7 @@ contract VolumeDynamicFeeHookTest is Test {
             EMA_PERIODS,
             DEADBAND_BPS,
             LULL_RESET_SECONDS,
-            address(this),
+            address(this), // guardian
             PAUSE_FEE_IDX
         );
 
@@ -108,8 +111,16 @@ contract VolumeDynamicFeeHookTest is Test {
         });
     }
 
+    function _deltaStableAbs1k() internal pure returns (BalanceDelta) {
+        // 1,000 units of a 6-decimal stable (e.g. USDC) => 1_000_000_000
+        return toBalanceDelta(int128(-1_000_000_000), 0);
+    }
+
+    // -----------------------------------------------------------------------
+    // Happy path smoke
+    // -----------------------------------------------------------------------
+
     function test_localDeploy_and_afterInitialize_setsFee() public {
-        // Calls hook.afterInitialize with msg.sender == poolManager (the mock).
         manager.callAfterInitialize(hook, key);
 
         assertEq(manager.updateCount(), 1, "expected 1 fee update");
@@ -119,18 +130,92 @@ contract VolumeDynamicFeeHookTest is Test {
     function test_localDeploy_and_afterSwap_updatesVolumeState() public {
         manager.callAfterInitialize(hook, key);
 
-        // Simulate a swap where stable (currency0) amount changes by 1,000 USDC (6 decimals).
-        // Sign doesn't matter: hook takes absolute value.
-        BalanceDelta delta = toBalanceDelta(int128(-1_000_000_000), 0);
-        manager.callAfterSwap(hook, key, delta);
+        manager.callAfterSwap(hook, key, _deltaStableAbs1k());
 
         (uint64 periodVolUsd6, uint96 emaUsd6, uint32 periodStart, uint8 feeIdx, uint8 lastDir) = hook.unpackedState();
 
-        // Silence "unused" warnings; also nice sanity checks.
         assertTrue(periodStart != 0, "expected initialized state");
         assertTrue(periodVolUsd6 != 0, "expected volume to accumulate");
         assertTrue(feeIdx <= CAP_IDX, "feeIdx in range");
         assertTrue(lastDir <= 2, "dir in range");
         assertTrue(emaUsd6 >= 0, "ema ok");
+    }
+
+    // -----------------------------------------------------------------------
+    // Hardening: access control / revert paths
+    // -----------------------------------------------------------------------
+
+    function test_onlyPoolManager_can_call_afterInitialize() public {
+        vm.expectRevert();
+        hook.afterInitialize(address(0xBEEF), key, 0, 0);
+    }
+
+    function test_onlyPoolManager_can_call_afterSwap() public {
+        SwapParams memory params = SwapParams({zeroForOne: true, amountSpecified: 0, sqrtPriceLimitX96: 0});
+
+        vm.expectRevert();
+        hook.afterSwap(address(0xBEEF), key, params, _deltaStableAbs1k(), "");
+    }
+
+    function test_afterSwap_beforeInitialize_reverts() public {
+        vm.expectRevert(VolumeDynamicFeeHook.NotInitialized.selector);
+        manager.callAfterSwap(hook, key, _deltaStableAbs1k());
+    }
+
+    function test_afterInitialize_twice_reverts() public {
+        manager.callAfterInitialize(hook, key);
+
+        vm.expectRevert(VolumeDynamicFeeHook.AlreadyInitialized.selector);
+        manager.callAfterInitialize(hook, key);
+    }
+
+    function test_invalidPoolKey_reverts() public {
+        PoolKey memory bad = key;
+        bad.tickSpacing = int24(int256(key.tickSpacing) + 1);
+
+        vm.expectRevert(VolumeDynamicFeeHook.InvalidPoolKey.selector);
+        manager.callAfterInitialize(hook, bad);
+    }
+
+    function test_nonDynamicFeePool_reverts() public {
+        PoolKey memory bad = key;
+        bad.fee = 3000; // fixed fee, not dynamic
+
+        vm.expectRevert(VolumeDynamicFeeHook.NotDynamicFeePool.selector);
+        manager.callAfterInitialize(hook, bad);
+    }
+
+    function test_pause_onlyGuardian() public {
+        vm.prank(address(0xB0B));
+        vm.expectRevert(VolumeDynamicFeeHook.NotGuardian.selector);
+        hook.pause();
+    }
+
+    function test_pause_unpause_applyFeeOnNextSwap() public {
+        manager.callAfterInitialize(hook, key);
+        assertEq(manager.updateCount(), 1, "expected 1 fee update after init");
+
+        // Pause should NOT immediately call PoolManager; it sets a pending apply.
+        hook.pause();
+        assertTrue(hook.isPaused(), "expected paused");
+        assertEq(manager.updateCount(), 1, "pause should not update fee immediately");
+
+        // Next swap should apply pause fee.
+        manager.callAfterSwap(hook, key, _deltaStableAbs1k());
+        assertEq(manager.updateCount(), 2, "expected pause fee update on next swap");
+
+        uint24 pauseFee = hook.feeTiers(uint256(PAUSE_FEE_IDX));
+        assertEq(manager.lastFee(), pauseFee, "pause fee mismatch");
+
+        // Unpause should again defer fee update to next swap.
+        hook.unpause();
+        assertTrue(!hook.isPaused(), "expected unpaused");
+        assertEq(manager.updateCount(), 2, "unpause should not update fee immediately");
+
+        manager.callAfterSwap(hook, key, _deltaStableAbs1k());
+        assertEq(manager.updateCount(), 3, "expected fee update on next swap after unpause");
+
+        uint24 expected = hook.feeTiers(uint256(INITIAL_FEE_IDX));
+        assertEq(manager.lastFee(), expected, "unpause fee mismatch");
     }
 }
