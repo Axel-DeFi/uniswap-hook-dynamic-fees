@@ -1,0 +1,26 @@
+[profile.default]
+src = "src"
+out = "out"
+cache_path = "cache"
+libs = ["lib"]
+solc_version = "0.8.26"
+optimizer = true
+optimizer_runs = 200
+via_ir = true
+evm_version = "cancun"
+bytecode_hash = "ipfs"
+gas_reports = ["VolumeDynamicFeeHook"]
+
+
+
+# Keep remappings in remappings.txt for reproducibility.
+auto_detect_remappings = false
+
+[fuzz]
+runs = 5000
+
+[fmt]
+line_length = 110
+
+# Needed for scripts that read environment variables
+fs_permissions = [{ access = "read", path = "./" }]

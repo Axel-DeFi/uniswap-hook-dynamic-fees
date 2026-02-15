@@ -1,0 +1,26 @@
+{
+  "lib/forge-std": {
+    "tag": {
+      "name": "v1.14.0",
+      "rev": "1801b0541f4fda118a10798fd3486bb7051c5dd6"
+    }
+  },
+  "lib/v4-core": {
+    "branch": {
+      "name": "main",
+      "rev": "d153b048868a60c2403a3ef5b2301bb247884d46"
+    }
+  },
+  "lib/v4-hooks-public": {
+    "branch": {
+      "name": "main",
+      "rev": "bae291c271be69882e084baa5993a033cb09362b"
+    }
+  },
+  "lib/v4-periphery": {
+    "branch": {
+      "name": "main",
+      "rev": "5da22e609fd78c01fb7ddf2a6abb1f2ec7dc2b87"
+    }
+  }
+}
