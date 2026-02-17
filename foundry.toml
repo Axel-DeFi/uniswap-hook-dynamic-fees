@@ -1,7 +1,7 @@
 [profile.default]
 src = "src"
 out = "out"
-cache_path = "cache"
+cache_path = "scripts/out/cache"
 libs = ["lib"]
 solc_version = "0.8.26"
 optimizer = true
@@ -11,16 +11,20 @@ evm_version = "cancun"
 bytecode_hash = "ipfs"
 gas_reports = ["VolumeDynamicFeeHook"]
 
-
+# Store forge script broadcast artifacts under scripts/out as well.
+broadcast = "scripts/out/broadcast"
 
 # Keep remappings in remappings.txt for reproducibility.
 auto_detect_remappings = false
+
+# Needed for scripts that read environment variables and write deployment artifacts
+fs_permissions = [
+  { access = "read", path = "./" },
+  { access = "read-write", path = "scripts/out" }
+]
 
 [fuzz]
 runs = 5000
 
 [fmt]
 line_length = 110
-
-# Needed for scripts that read environment variables
-fs_permissions = [{ access = "read", path = "./" }]

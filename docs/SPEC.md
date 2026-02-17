@@ -78,17 +78,16 @@ The guardian can pause/unpause the algorithm, but cannot set arbitrary fees.
 - `pause()`:
   - Freezes model updates.
   - Resets volumes/EMA and sets the **target fee tier** to `pauseFeeIdx`.
-  - Marks a **one-shot pending fee update**.
+  - Applies the target fee **immediately** via `PoolManager.unlock()` if the pool is already initialized.
+  - If called before pool initialization, keeps a one-shot pending update that is resolved on init.
 - `unpause()`:
   - Resets volumes/EMA and sets target to `initialFeeIdx`.
-  - Marks a **one-shot pending fee update**.
+  - Applies the target fee **immediately** via `PoolManager.unlock()` if the pool is already initialized.
+  - If called before pool initialization, keeps a one-shot pending update that is resolved on init.
 
-**Important:** The PoolManager dynamic fee is updated **only during hook callbacks** (e.g., `afterInitialize`, `afterSwap`), because the PoolManager is unlocked there.
-Therefore:
-- Pause/unpause **do not** directly call `updateDynamicLPFee`.
-- The fee update is applied on the **next callback** (init or next swap).
-
-This is deliberate and avoids reverts due to calling PoolManager update functions while locked.
+**Important:** Pause/unpause do not call `updateDynamicLPFee` directly.
+They enter the manager lock context with `PoolManager.unlock()`, and the hook applies the update in `unlockCallback`.
+This keeps the update path safe while still making pause/unpause immediate for initialized pools.
 
 ## Storage and packing
 
@@ -123,8 +122,8 @@ See `docs/FAQ.md` for the full rationale (“Why no oracles”).
 
 ### Threats we explicitly accept
 
-- If a pool becomes extremely inactive, some updates happen only on the next swap (lull reset and pause/unpause application).
-  - **Runbook:** if you need an immediate state transition, trigger a minimal swap on the pool to invoke `afterSwap`.
+- If a pool becomes extremely inactive, a lull reset still occurs only when a swap arrives.
+  - **Runbook:** trigger a minimal swap to force `afterSwap` and apply the reset.
 
 ### Guardian key risk
 

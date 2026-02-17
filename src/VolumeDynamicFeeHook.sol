@@ -366,13 +366,19 @@ contract VolumeDynamicFeeHook is BaseHook {
 
         (uint64 periodVol, uint96 emaVol, uint32 periodStart, uint8 feeIdx, uint8 lastDir,,) =
             _unpackState(_state);
+        bool initialized = periodStart != 0;
         periodVol = 0;
         emaVol = 0;
-        periodStart = (periodStart != 0) ? _now32() : uint32(0);
+        periodStart = initialized ? _now32() : uint32(0);
         feeIdx = pauseFeeIdx;
         lastDir = DIR_NONE;
 
         _state = _packState(periodVol, emaVol, periodStart, feeIdx, lastDir, true, true);
+
+        // Apply pause fee immediately for initialized pools.
+        if (initialized) {
+            poolManager.unlock("");
+        }
 
         emit Paused(_feeTier(pauseFeeIdx), pauseFeeIdx);
     }
@@ -383,13 +389,20 @@ contract VolumeDynamicFeeHook is BaseHook {
 
         (uint64 periodVol, uint96 emaVol, uint32 periodStart, uint8 feeIdx, uint8 lastDir,,) =
             _unpackState(_state);
+        bool initialized = periodStart != 0;
         periodVol = 0;
         emaVol = 0;
-        periodStart = (periodStart != 0) ? _now32() : uint32(0);
+        periodStart = initialized ? _now32() : uint32(0);
         feeIdx = initialFeeIdx;
         lastDir = DIR_NONE;
 
         _state = _packState(periodVol, emaVol, periodStart, feeIdx, lastDir, false, true);
+
+        // Apply unpause fee immediately for initialized pools.
+        if (initialized) {
+            poolManager.unlock("");
+        }
+
         emit Unpaused();
     }
 

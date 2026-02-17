@@ -49,9 +49,14 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+CLI_RPC_URL="${RPC_URL}"
+
 HOOK_CONF="./config/hook.conf"
 if [[ -n "${CHAIN}" ]]; then
-  HOOK_CONF="./config/hook.${CHAIN}.conf"
+  CHAIN_HOOK_CONF="./config/hook.${CHAIN}.conf"
+  if [[ -f "${CHAIN_HOOK_CONF}" ]]; then
+    HOOK_CONF="${CHAIN_HOOK_CONF}"
+  fi
 fi
 
 if [[ ! -f "${HOOK_CONF}" ]]; then
@@ -65,14 +70,31 @@ source "${HOOK_CONF}"
 set +a
 
 # Resolve RPC URL: CLI > config RPC_URL
-if [[ -z "${RPC_URL}" ]]; then
-  RPC_URL="${RPC_URL:-}"
-fi
+CONFIG_RPC_URL="${RPC_URL:-}"
+RPC_URL="${CLI_RPC_URL:-${CONFIG_RPC_URL:-}}"
 if [[ -z "${RPC_URL}" ]]; then
   echo "ERROR: RPC URL not provided. Set RPC_URL in ${HOOK_CONF} or pass it as an argument."
   exit 1
 fi
 
+if [[ -z "${POOL_MANAGER:-}" ]]; then
+  echo "ERROR: POOL_MANAGER must be set in ${HOOK_CONF}"
+  exit 1
+fi
+
+HAS_BROADCAST=0
+HAS_WALLET_FLAG=0
+for a in "${PASSTHROUGH[@]}"; do
+  case "$a" in
+    --broadcast) HAS_BROADCAST=1 ;;
+    --private-key|--private-keys|--mnemonics|--mnemonic-passphrases|--mnemonic-derivation-paths|--mnemonic-indexes|--keystore|--account|--ledger|--trezor|--unlocked|--sender)
+      HAS_WALLET_FLAG=1
+      ;;
+  esac
+done
+if [[ "${HAS_BROADCAST}" -eq 1 && "${HAS_WALLET_FLAG}" -eq 0 && -n "${PRIVATE_KEY:-}" ]]; then
+  PASSTHROUGH+=(--private-key "${PRIVATE_KEY}")
+fi
 
 # Optional safety: verify STABLE_DECIMALS matches the token's on-chain decimals().
 # Set SKIP_DECIMALS_CHECK=1 to bypass.

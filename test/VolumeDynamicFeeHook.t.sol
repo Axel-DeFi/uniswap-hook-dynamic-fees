@@ -56,7 +56,7 @@ contract VolumeDynamicFeeHookTest is Test {
         Currency c1 = Currency.wrap(token1);
         Currency usd = Currency.wrap(stable);
 
-        int24 tickSpacing = 60;
+        int24 tickSpacing = 10;
 
         // Hook must have flags encoded in its address.
         uint160 flags = uint160(Hooks.AFTER_INITIALIZE_FLAG | Hooks.AFTER_SWAP_FLAG);
@@ -114,6 +114,14 @@ contract VolumeDynamicFeeHookTest is Test {
     function _deltaStableAbs1k() internal pure returns (BalanceDelta) {
         // 1,000 units of a 6-decimal stable (e.g. USDC) => 1_000_000_000
         return toBalanceDelta(int128(-1_000_000_000), 0);
+    }
+
+    function _deltaStableAbs(uint128 amountStable6) internal pure returns (BalanceDelta) {
+        return toBalanceDelta(-int128(amountStable6), 0);
+    }
+
+    function _deltaZero() internal pure returns (BalanceDelta) {
+        return toBalanceDelta(0, 0);
     }
 
     // -----------------------------------------------------------------------
@@ -192,69 +200,160 @@ contract VolumeDynamicFeeHookTest is Test {
         hook.pause();
     }
 
-    function test_pause_unpause_applyFeeOnNextSwap() public {
-        manager.callAfterInitialize(hook, key);
-        assertEq(manager.updateCount(), 1, "expected 1 fee update after init");
-
-        // Pause should NOT immediately call PoolManager; it sets a pending apply.
-        hook.pause();
-        assertTrue(hook.isPaused(), "expected paused");
-        assertEq(manager.updateCount(), 1, "pause should not update fee immediately");
-
-        // Next swap should apply pause fee.
-        manager.callAfterSwap(hook, key, _deltaStableAbs1k());
-        assertEq(manager.updateCount(), 2, "expected pause fee update on next swap");
-
-        uint24 pauseFee = hook.feeTiers(uint256(PAUSE_FEE_IDX));
-        assertEq(manager.lastFee(), pauseFee, "pause fee mismatch");
-
-        // Unpause should again defer fee update to next swap.
-        hook.unpause();
-        assertTrue(!hook.isPaused(), "expected unpaused");
-        assertEq(manager.updateCount(), 2, "unpause should not update fee immediately");
-
-        manager.callAfterSwap(hook, key, _deltaStableAbs1k());
-        assertEq(manager.updateCount(), 3, "expected fee update on next swap after unpause");
-
-        uint24 expected = hook.feeTiers(uint256(INITIAL_FEE_IDX));
-        assertEq(manager.lastFee(), expected, "unpause fee mismatch");
-    }
-
-    function test_pause_applyPendingPause_appliesImmediately_viaUnlock() public {
+    function test_pause_unpause_applyFeeImmediately() public {
         manager.callAfterInitialize(hook, key);
         assertEq(manager.updateCount(), 1, "expected 1 fee update after init");
 
         hook.pause();
         assertTrue(hook.isPaused(), "expected paused");
-        assertTrue(hook.isPauseApplyPending(), "expected pending apply");
-        assertEq(manager.updateCount(), 1, "pause should not update fee immediately");
-
-        hook.applyPendingPause();
-        assertEq(manager.updateCount(), 2, "expected immediate fee update via unlock");
+        assertTrue(!hook.isPauseApplyPending(), "expected no pending after immediate pause apply");
+        assertEq(manager.updateCount(), 2, "expected immediate pause fee update");
 
         uint24 pauseFee = hook.feeTiers(uint256(PAUSE_FEE_IDX));
         assertEq(manager.lastFee(), pauseFee, "pause fee mismatch");
 
-        assertTrue(!hook.isPauseApplyPending(), "expected pending cleared");
-    }
-
-    function test_unpause_applyPendingPause_appliesImmediately_viaUnlock() public {
-        manager.callAfterInitialize(hook, key);
-
-        hook.pause();
-        hook.applyPendingPause();
-        assertEq(manager.updateCount(), 2, "expected pause applied");
-
         hook.unpause();
         assertTrue(!hook.isPaused(), "expected unpaused");
-        assertTrue(hook.isPauseApplyPending(), "expected pending apply");
-
-        hook.applyPendingPause();
-        assertEq(manager.updateCount(), 3, "expected immediate unpause fee update via unlock");
+        assertTrue(!hook.isPauseApplyPending(), "expected no pending after immediate unpause apply");
+        assertEq(manager.updateCount(), 3, "expected immediate unpause fee update");
 
         uint24 expected = hook.feeTiers(uint256(INITIAL_FEE_IDX));
         assertEq(manager.lastFee(), expected, "unpause fee mismatch");
+    }
 
-        assertTrue(!hook.isPauseApplyPending(), "expected pending cleared");
+    function test_applyPendingPause_isNoop_whenNothingPending() public {
+        manager.callAfterInitialize(hook, key);
+        assertEq(manager.updateCount(), 1, "expected 1 fee update after init");
+
+        hook.pause();
+        assertTrue(hook.isPaused(), "expected paused");
+        assertTrue(!hook.isPauseApplyPending(), "expected pending cleared by immediate apply");
+        assertEq(manager.updateCount(), 2, "expected immediate pause fee update");
+
+        hook.applyPendingPause();
+        assertEq(manager.updateCount(), 2, "applyPendingPause should be no-op");
+    }
+
+    function test_pause_beforeInitialize_appliesOnInitialize() public {
+        hook.pause();
+        assertTrue(hook.isPaused(), "expected paused");
+        assertTrue(hook.isPauseApplyPending(), "expected pending before initialize");
+        assertEq(manager.updateCount(), 0, "no fee update before initialize");
+
+        manager.callAfterInitialize(hook, key);
+        assertEq(manager.updateCount(), 1, "expected pause fee set on initialize");
+
+        uint24 pauseFee = hook.feeTiers(uint256(PAUSE_FEE_IDX));
+        assertEq(manager.lastFee(), pauseFee, "pause fee mismatch after initialize");
+        assertTrue(hook.isPaused(), "expected still paused");
+        assertTrue(!hook.isPauseApplyPending(), "expected pending cleared on initialize");
+
+        hook.unpause();
+        assertEq(manager.updateCount(), 2, "expected immediate unpause fee update");
+
+        uint24 expected = hook.feeTiers(uint256(INITIAL_FEE_IDX));
+        assertEq(manager.lastFee(), expected, "unpause fee mismatch");
+        assertTrue(!hook.isPaused(), "expected unpaused");
+        assertTrue(!hook.isPauseApplyPending(), "expected no pending");
+    }
+
+    // -----------------------------------------------------------------------
+    // Fee model behavior (deadband / reversal lock / catch-up / lull reset)
+    // -----------------------------------------------------------------------
+
+    function test_deadband_keeps_fee_unchanged() public {
+        manager.callAfterInitialize(hook, key);
+
+        // Period #1: seed EMA with 1,000 stable swap volume.
+        manager.callAfterSwap(hook, key, _deltaStableAbs1k());
+        vm.warp(block.timestamp + PERIOD_SECONDS);
+        manager.callAfterSwap(hook, key, _deltaZero());
+
+        // Period #2 close volume ~= 97.5% of Period #1 (inside 5% deadband after EMA update).
+        manager.callAfterSwap(hook, key, _deltaStableAbs(975_000_000));
+        vm.warp(block.timestamp + PERIOD_SECONDS);
+        manager.callAfterSwap(hook, key, _deltaZero());
+
+        (,, uint32 periodStart, uint8 feeIdx, uint8 lastDir) = hook.unpackedState();
+        assertTrue(periodStart != 0, "expected initialized");
+        assertEq(feeIdx, INITIAL_FEE_IDX, "fee should remain unchanged in deadband");
+        assertEq(lastDir, 0, "dir should be NONE");
+    }
+
+    function test_reversal_lock_blocks_immediate_flip() public {
+        manager.callAfterInitialize(hook, key);
+
+        // Period #1: seed EMA (no fee move).
+        manager.callAfterSwap(hook, key, _deltaStableAbs1k());
+        vm.warp(block.timestamp + PERIOD_SECONDS);
+        manager.callAfterSwap(hook, key, _deltaZero());
+
+        // Period #2: zero volume -> move DOWN by one step.
+        vm.warp(block.timestamp + PERIOD_SECONDS);
+        manager.callAfterSwap(hook, key, _deltaZero());
+
+        (,, uint32 ps1, uint8 feeAfterDown, uint8 dirAfterDown) = hook.unpackedState();
+        assertTrue(ps1 != 0, "expected initialized");
+        assertEq(feeAfterDown, INITIAL_FEE_IDX - 1, "expected one step down");
+        assertEq(dirAfterDown, 2, "expected DOWN dir");
+
+        // Period #3: high volume would normally signal UP, but reversal lock must block immediate flip.
+        manager.callAfterSwap(hook, key, _deltaStableAbs(2_000_000_000));
+        vm.warp(block.timestamp + PERIOD_SECONDS);
+        manager.callAfterSwap(hook, key, _deltaZero());
+
+        (,, uint32 ps2, uint8 feeAfterFlipAttempt, uint8 dirAfterFlipAttempt) = hook.unpackedState();
+        assertTrue(ps2 != 0, "expected initialized");
+        assertEq(feeAfterFlipAttempt, INITIAL_FEE_IDX - 1, "reversal lock should block flip");
+        assertEq(dirAfterFlipAttempt, 0, "dir should reset to NONE after blocked reversal");
+    }
+
+    function test_catchup_applies_multiple_period_closes_in_one_swap() public {
+        manager.callAfterInitialize(hook, key);
+        assertEq(manager.updateCount(), 1, "expected one update on init");
+
+        // Accumulate volume for the first close.
+        manager.callAfterSwap(hook, key, _deltaStableAbs1k());
+
+        // Miss three full periods but stay below lull reset threshold.
+        vm.warp(block.timestamp + (PERIOD_SECONDS * 3) + 10);
+        manager.callAfterSwap(hook, key, _deltaZero());
+
+        (,, uint32 periodStart, uint8 feeIdx, uint8 lastDir) = hook.unpackedState();
+        assertTrue(periodStart != 0, "expected initialized");
+        assertEq(feeIdx, INITIAL_FEE_IDX - 2, "expected two-step downward catch-up");
+        assertEq(lastDir, 2, "expected DOWN dir after catch-up");
+
+        // One PoolManager write for the final fee after in-memory fast-forward.
+        assertEq(manager.updateCount(), 2, "expected a single dynamic fee write during catch-up");
+    }
+
+    function test_lull_reset_restores_initial_fee_and_clears_ema() public {
+        manager.callAfterInitialize(hook, key);
+
+        // Seed EMA and move fee down by one step.
+        manager.callAfterSwap(hook, key, _deltaStableAbs1k());
+        vm.warp(block.timestamp + PERIOD_SECONDS);
+        manager.callAfterSwap(hook, key, _deltaZero());
+        vm.warp(block.timestamp + PERIOD_SECONDS);
+        manager.callAfterSwap(hook, key, _deltaZero());
+
+        (uint64 pvBefore, uint96 emaBefore, uint32 psBefore, uint8 feeBefore, uint8 dirBefore) = hook.unpackedState();
+        assertTrue(psBefore != 0, "expected initialized");
+        assertEq(feeBefore, INITIAL_FEE_IDX - 1, "expected fee moved down before lull");
+        assertTrue(emaBefore > 0, "expected non-zero EMA before lull");
+        assertEq(dirBefore, 2, "expected DOWN dir before lull");
+        assertEq(pvBefore, 0, "expected zero period volume after close");
+
+        // Long inactivity triggers lull reset on the next swap.
+        vm.warp(block.timestamp + LULL_RESET_SECONDS);
+        manager.callAfterSwap(hook, key, _deltaZero());
+
+        (uint64 pvAfter, uint96 emaAfter, uint32 psAfter, uint8 feeAfter, uint8 dirAfter) = hook.unpackedState();
+        assertTrue(psAfter > psBefore, "expected periodStart reset");
+        assertEq(feeAfter, INITIAL_FEE_IDX, "expected fee reset to initial on lull");
+        assertEq(emaAfter, 0, "expected EMA cleared on lull reset");
+        assertEq(dirAfter, 0, "expected dir reset to NONE");
+        assertEq(pvAfter, 0, "expected zero period volume after zero trigger swap");
     }
 }

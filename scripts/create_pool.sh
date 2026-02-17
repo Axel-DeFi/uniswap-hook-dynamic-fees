@@ -45,9 +45,14 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+CLI_RPC_URL="${RPC_URL}"
+
 POOL_CONF="./config/pool.conf"
 if [[ -n "${CHAIN}" ]]; then
-  POOL_CONF="./config/pool.${CHAIN}.conf"
+  CHAIN_POOL_CONF="./config/pool.${CHAIN}.conf"
+  if [[ -f "${CHAIN_POOL_CONF}" ]]; then
+    POOL_CONF="${CHAIN_POOL_CONF}"
+  fi
 fi
 
 if [[ ! -f "${POOL_CONF}" ]]; then
@@ -61,12 +66,30 @@ source "${POOL_CONF}"
 set +a
 
 # Resolve RPC URL: CLI > config RPC_URL
-if [[ -z "${RPC_URL}" ]]; then
-  RPC_URL="${RPC_URL:-}"
-fi
+CONFIG_RPC_URL="${RPC_URL:-}"
+RPC_URL="${CLI_RPC_URL:-${CONFIG_RPC_URL:-}}"
 if [[ -z "${RPC_URL}" ]]; then
   echo "ERROR: RPC URL not provided. Set RPC_URL in ${POOL_CONF} or pass it as an argument."
   exit 1
+fi
+
+if [[ -z "${POOL_MANAGER:-}" ]]; then
+  echo "ERROR: POOL_MANAGER must be set in ${POOL_CONF}"
+  exit 1
+fi
+
+HAS_BROADCAST=0
+HAS_WALLET_FLAG=0
+for a in "${PASSTHROUGH[@]}"; do
+  case "$a" in
+    --broadcast) HAS_BROADCAST=1 ;;
+    --private-key|--private-keys|--mnemonics|--mnemonic-passphrases|--mnemonic-derivation-paths|--mnemonic-indexes|--keystore|--account|--ledger|--trezor|--unlocked|--sender)
+      HAS_WALLET_FLAG=1
+      ;;
+  esac
+done
+if [[ "${HAS_BROADCAST}" -eq 1 && "${HAS_WALLET_FLAG}" -eq 0 && -n "${PRIVATE_KEY:-}" ]]; then
+  PASSTHROUGH+=(--private-key "${PRIVATE_KEY}")
 fi
 
 if [[ -z "${HOOK_ADDRESS:-}" ]]; then
@@ -79,15 +102,15 @@ if [[ -z "${HOOK_ADDRESS:-}" ]]; then
     exit 1
   fi
 
-  HOOK_ADDRESS="$(python3 - <<'PY'
+  HOOK_ADDRESS="$(python3 - "${DEPLOY_JSON}" <<'PY'
 import json
 import sys
 path = sys.argv[1]
 with open(path,'r',encoding='utf-8') as f:
     data=json.load(f)
-print(data.get('deploy',{}).get('hook',''))
+print((data.get('hook') or data.get('deploy',{}).get('hook') or '').strip())
 PY
-"${DEPLOY_JSON}")"
+  )"
 
   if [[ -z "${HOOK_ADDRESS}" ]]; then
     echo "ERROR: failed to read hook address from ${DEPLOY_JSON}"
@@ -98,7 +121,6 @@ PY
 
   # Persist it back into the config for convenience (idempotent).
   if grep -qE '^\s*HOOK_ADDRESS=' "${POOL_CONF}"; then
-    # replace existing line
     sed -i.bak -E "s|^\s*HOOK_ADDRESS=.*$|HOOK_ADDRESS=${HOOK_ADDRESS}|g" "${POOL_CONF}"
   else
     echo "" >> "${POOL_CONF}"

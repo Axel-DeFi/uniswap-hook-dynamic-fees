@@ -8,8 +8,8 @@ This project uses plain-text `.conf` files in `./config/` and a small set of she
 - `create_pool.sh` — creates + initializes the Uniswap v4 pool (dynamic fee flag) using a deployed hook
 - `deploy.sh` — one-shot convenience wrapper: deploy hook, then create + initialize pool
 - `foundry/` — Foundry Solidity scripts used internally by the shell scripts
-- `scripts/out/` — script outputs (JSON)
-- `out/` / `cache/` — Foundry build artifacts
+- `scripts/out/` — script outputs, cache, and broadcast artifacts
+- `out/` — Foundry build artifacts
 
 ## Usage
 
@@ -25,8 +25,8 @@ All scripts support an optional chain selector:
 
 Scripts load configuration from:
 
-- Hook deployment: `./config/hook.<chain>.conf` (preferred) or `./config/hook.conf`
-- Pool creation: `./config/pool.<chain>.conf` (preferred) or `./config/pool.conf`
+- Hook deployment: `./config/hook.<chain>.conf` (preferred) or `./config/hook.conf` (fallback)
+- Pool creation: `./config/pool.<chain>.conf` (preferred) or `./config/pool.conf` (fallback)
 
 You can also pass `--rpc-url <...>` or a positional RPC URL; CLI overrides config.
 
@@ -43,20 +43,22 @@ export SKIP_DECIMALS_CHECK=1
 
 - Hook deployment output: `./scripts/out/deploy.<chain>.json`
 - Pool creation reads the hook address from the deploy JSON unless `HOOK_ADDRESS` is set in `pool.conf`.
+- Foundry script broadcast logs: `./scripts/out/broadcast/`
+- Foundry script cache: `./scripts/out/cache/`
 
 ## Notes
 
-- Foundry build artifacts are written under `./out` and `./cache` (see `foundry.toml`).
+- Foundry build artifacts are written under `./out` (see `foundry.toml`).
 - For verification options (`--verify` etc.), pass flags through to the underlying `forge script` command.
 
 
 ## Apply pending pause/unpause immediately
 
 - `./scripts/apply_pending_pause.sh --chain <chain> [<rpc_url>] [--broadcast]`
-  Applies a pending pause/unpause fee update immediately via PoolManager.unlock.
+  Applies any still-pending pause/unpause update via PoolManager.unlock.
+  Normally pause/unpause are already immediate for initialized pools; this is mainly a recovery helper.
 
 ## Script separation
 
 > `/scripts` contains production/ops scripts only.
 > Test-only scripts live under `/test/scripts` and `/test/foundry`.
-

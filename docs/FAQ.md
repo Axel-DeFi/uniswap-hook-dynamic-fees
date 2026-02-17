@@ -53,13 +53,7 @@ If a stable depegs, the USD proxy volume becomes inaccurate. This is an accepted
 ## How should I choose tickSpacing?
 
 This hook is compatible with any tickSpacing supported by the pool.
-Typical reference points (Uniswap v3 style intuition):
-
-- 0.05% pools often use tickSpacing **10**
-- 0.3% pools often use tickSpacing **60**
-- 1% pools often use tickSpacing **200**
-
-(Exact values depend on the deployment; follow the canonical tickSpacing for your target fee class on the chain.)
+In this repository, deployment configs are standardized to **tickSpacing = 10** across environments.
 
 ## Can I use WBTC or other non-ETH assets?
 
@@ -67,8 +61,9 @@ Yes, as long as the pool has a stable (USD proxy) token on one side and you conf
 - which currency is stable (`STABLE`)
 - stable decimals (`STABLE_DECIMALS`) — deployment script validates on-chain decimals()
 
-## Why does pause/unpause apply on the next swap?
+## Does pause/unpause apply immediately?
 
-PoolManager fee updates are safe inside hook callbacks (PoolManager is unlocked there).
-Calling `updateDynamicLPFee` from an external admin function can revert when PoolManager is locked.
-So pause/unpause set a pending flag and apply on the next callback.
+Yes, for initialized pools.
+`pause()` / `unpause()` enter `PoolManager.unlock()` and apply the fee in the hook callback immediately in the same transaction.
+
+If called before pool initialization, the hook keeps a pending flag and finalizes state on initialize.
