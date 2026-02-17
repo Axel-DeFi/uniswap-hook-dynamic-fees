@@ -8,7 +8,7 @@ import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {HookMiner} from "@uniswap/v4-hooks-public/src/utils/HookMiner.sol";
 
-import {VolumeDynamicFeeHook} from "../src/VolumeDynamicFeeHook.sol";
+import {VolumeDynamicFeeHook} from "src/VolumeDynamicFeeHook.sol";
 
 /// @notice Mines the hook address flags and deploys VolumeDynamicFeeHook via CREATE2.
 /// @dev See scripts/README.md and config/hook.conf for environment variables.
@@ -62,7 +62,9 @@ contract DeployHook is Script {
             periodSeconds,
             emaPeriods,
             deadbandBps,
-            lullResetSeconds
+            lullResetSeconds,
+            guardian,
+            pauseFeeIdx
         );
 
         (address minedHookAddress, bytes32 salt) =
@@ -82,7 +84,9 @@ contract DeployHook is Script {
             periodSeconds,
             emaPeriods,
             deadbandBps,
-            lullResetSeconds
+            lullResetSeconds,
+            guardian,
+            pauseFeeIdx
         );
         vm.stopBroadcast();
 

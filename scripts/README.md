@@ -48,3 +48,15 @@ export SKIP_DECIMALS_CHECK=1
 
 - Foundry build artifacts are written under `./out` and `./cache` (see `foundry.toml`).
 - For verification options (`--verify` etc.), pass flags through to the underlying `forge script` command.
+
+
+## Apply pending pause/unpause immediately
+
+- `./scripts/apply_pending_pause.sh --chain <chain> [<rpc_url>] [--broadcast]`
+  Applies a pending pause/unpause fee update immediately via PoolManager.unlock.
+
+## Script separation
+
+> `/scripts` contains production/ops scripts only.
+> Test-only scripts live under `/test/scripts` and `/test/foundry`.
+

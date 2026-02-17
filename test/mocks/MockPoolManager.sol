@@ -5,7 +5,12 @@ import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 
-import {VolumeDynamicFeeHook} from "../../src/VolumeDynamicFeeHook.sol";
+import {VolumeDynamicFeeHook} from "src/VolumeDynamicFeeHook.sol";
+
+/// @notice Minimal unlock callback interface used by PoolManager.unlock().
+interface IUnlockCallback {
+    function unlockCallback(bytes calldata data) external returns (bytes memory);
+}
 
 /// @notice Minimal PoolManager mock for compilation and basic hook call flow.
 /// @dev Not a full IPoolManager implementation; only what the hook uses.
@@ -20,6 +25,11 @@ contract MockPoolManager {
         if (msg.sender != address(key.hooks)) revert NotHook();
         lastFee = newFee;
         updateCount += 1;
+    }
+
+    /// @notice Mimics PoolManager.unlock by calling back into the caller (msg.sender).
+    function unlock(bytes calldata data) external returns (bytes memory) {
+        return IUnlockCallback(msg.sender).unlockCallback(data);
     }
 
     function callAfterInitialize(VolumeDynamicFeeHook hook, PoolKey calldata key) external {
