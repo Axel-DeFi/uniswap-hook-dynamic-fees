@@ -14,8 +14,8 @@ import {Hooks} from "@uniswap/v4-core/src/libraries/Hooks.sol";
 
 import {HookMiner} from "@uniswap/v4-hooks-public/src/utils/HookMiner.sol";
 
-import {VolumeDynamicFeeHook} from "../src/VolumeDynamicFeeHook.sol";
-import {MockPoolManager} from "./mocks/MockPoolManager.sol";
+import {VolumeDynamicFeeHook} from "src/VolumeDynamicFeeHook.sol";
+import {MockPoolManager} from "test/mocks/MockPoolManager.sol";
 
 /// @notice Minimal security-hardening tests:
 /// - Deploy hook locally with correct v4 address flags (CREATE2 + mined salt)
@@ -132,7 +132,8 @@ contract VolumeDynamicFeeHookTest is Test {
 
         manager.callAfterSwap(hook, key, _deltaStableAbs1k());
 
-        (uint64 periodVolUsd6, uint96 emaUsd6, uint32 periodStart, uint8 feeIdx, uint8 lastDir) = hook.unpackedState();
+        (uint64 periodVolUsd6, uint96 emaUsd6, uint32 periodStart, uint8 feeIdx, uint8 lastDir) =
+            hook.unpackedState();
 
         assertTrue(periodStart != 0, "expected initialized state");
         assertTrue(periodVolUsd6 != 0, "expected volume to accumulate");
@@ -217,5 +218,43 @@ contract VolumeDynamicFeeHookTest is Test {
 
         uint24 expected = hook.feeTiers(uint256(INITIAL_FEE_IDX));
         assertEq(manager.lastFee(), expected, "unpause fee mismatch");
+    }
+
+    function test_pause_applyPendingPause_appliesImmediately_viaUnlock() public {
+        manager.callAfterInitialize(hook, key);
+        assertEq(manager.updateCount(), 1, "expected 1 fee update after init");
+
+        hook.pause();
+        assertTrue(hook.isPaused(), "expected paused");
+        assertTrue(hook.isPauseApplyPending(), "expected pending apply");
+        assertEq(manager.updateCount(), 1, "pause should not update fee immediately");
+
+        hook.applyPendingPause();
+        assertEq(manager.updateCount(), 2, "expected immediate fee update via unlock");
+
+        uint24 pauseFee = hook.feeTiers(uint256(PAUSE_FEE_IDX));
+        assertEq(manager.lastFee(), pauseFee, "pause fee mismatch");
+
+        assertTrue(!hook.isPauseApplyPending(), "expected pending cleared");
+    }
+
+    function test_unpause_applyPendingPause_appliesImmediately_viaUnlock() public {
+        manager.callAfterInitialize(hook, key);
+
+        hook.pause();
+        hook.applyPendingPause();
+        assertEq(manager.updateCount(), 2, "expected pause applied");
+
+        hook.unpause();
+        assertTrue(!hook.isPaused(), "expected unpaused");
+        assertTrue(hook.isPauseApplyPending(), "expected pending apply");
+
+        hook.applyPendingPause();
+        assertEq(manager.updateCount(), 3, "expected immediate unpause fee update via unlock");
+
+        uint24 expected = hook.feeTiers(uint256(INITIAL_FEE_IDX));
+        assertEq(manager.lastFee(), expected, "unpause fee mismatch");
+
+        assertTrue(!hook.isPauseApplyPending(), "expected pending cleared");
     }
 }
