@@ -1,6 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Auto-load local .env (ignored by git) if present.
+if [[ -f "./.env" ]]; then
+  set -a
+  # shellcheck disable=SC1091
+  source "./.env"
+  set +a
+fi
+
 # Deploy the hook (CREATE2 mined for permission bits) using Foundry Solidity script.
 #
 # Usage:
@@ -82,6 +90,22 @@ if [[ -z "${POOL_MANAGER:-}" ]]; then
   exit 1
 fi
 
+GUARDIAN_LC="$(printf '%s' "${GUARDIAN:-}" | tr '[:upper:]' '[:lower:]')"
+if [[ ( -z "${GUARDIAN:-}" || "${GUARDIAN_LC}" == "0x0000000000000000000000000000000000000000" ) && -n "${PRIVATE_KEY:-}" ]]; then
+  DERIVED_GUARDIAN="$(cast wallet address --private-key "${PRIVATE_KEY}" 2>/dev/null || true)"
+  if [[ -n "${DERIVED_GUARDIAN}" ]]; then
+    GUARDIAN="${DERIVED_GUARDIAN}"
+    export GUARDIAN
+    GUARDIAN_LC="$(printf '%s' "${GUARDIAN}" | tr '[:upper:]' '[:lower:]')"
+    echo "==> GUARDIAN not set; using deployer address ${GUARDIAN}"
+  fi
+fi
+
+if [[ -z "${GUARDIAN:-}" || "${GUARDIAN_LC}" == "0x0000000000000000000000000000000000000000" ]]; then
+  echo "ERROR: GUARDIAN must be a non-zero address (set ARB_SEPOLIA_GUARDIAN in .env or GUARDIAN in ${HOOK_CONF})"
+  exit 1
+fi
+
 HAS_BROADCAST=0
 HAS_WALLET_FLAG=0
 for a in "${PASSTHROUGH[@]}"; do
@@ -94,6 +118,10 @@ for a in "${PASSTHROUGH[@]}"; do
 done
 if [[ "${HAS_BROADCAST}" -eq 1 && "${HAS_WALLET_FLAG}" -eq 0 && -n "${PRIVATE_KEY:-}" ]]; then
   PASSTHROUGH+=(--private-key "${PRIVATE_KEY}")
+fi
+if [[ "${HAS_BROADCAST}" -eq 1 && "${HAS_WALLET_FLAG}" -eq 0 && -z "${PRIVATE_KEY:-}" ]]; then
+  echo "ERROR: --broadcast requires a signer. Set PRIVATE_KEY/ARB_SEPOLIA_PRIVATE_KEY or pass a wallet flag."
+  exit 1
 fi
 
 # Optional safety: verify STABLE_DECIMALS matches the token's on-chain decimals().

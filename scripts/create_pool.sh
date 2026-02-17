@@ -1,6 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Auto-load local .env (ignored by git) if present.
+if [[ -f "./.env" ]]; then
+  set -a
+  # shellcheck disable=SC1091
+  source "./.env"
+  set +a
+fi
+
 # Create + initialize the pool using Foundry Solidity script.
 #
 # Usage:
@@ -90,6 +98,10 @@ for a in "${PASSTHROUGH[@]}"; do
 done
 if [[ "${HAS_BROADCAST}" -eq 1 && "${HAS_WALLET_FLAG}" -eq 0 && -n "${PRIVATE_KEY:-}" ]]; then
   PASSTHROUGH+=(--private-key "${PRIVATE_KEY}")
+fi
+if [[ "${HAS_BROADCAST}" -eq 1 && "${HAS_WALLET_FLAG}" -eq 0 && -z "${PRIVATE_KEY:-}" ]]; then
+  echo "ERROR: --broadcast requires a signer. Set PRIVATE_KEY/ARB_SEPOLIA_PRIVATE_KEY or pass a wallet flag."
+  exit 1
 fi
 
 if [[ -z "${HOOK_ADDRESS:-}" ]]; then
