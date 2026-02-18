@@ -58,6 +58,21 @@ export SKIP_DECIMALS_CHECK=1
   Applies any still-pending pause/unpause update via PoolManager.unlock.
   Normally pause/unpause are already immediate for initialized pools; this is mainly a recovery helper.
 
+## Dynamic fee cycle simulation (manual run + report)
+
+- `./scripts/simulate_fee_cycle.sh --chain <chain> [--rpc-url <url>] [--swap-test-address <addr>]`
+  Runs a full live sequence on the configured hook/pool with adaptive swap sizing from current EMA:
+  1. force an `UP` move,
+  2. reversal-lock check (fee/index unchanged),
+  3. force a `DOWN` move.
+  Prints the final report directly to console (stdout), including tx hashes and before/after states.
+
+Required:
+
+- `HOOK_ADDRESS`, `TOKEN0`, `TOKEN1`, `TICK_SPACING`, `PRIVATE_KEY` from `config/pool.<chain>.conf` (+ `.env` key interpolation).
+- `PoolSwapTest` helper address, passed via `--swap-test-address`, `SWAP_TEST_ADDRESS`, or autodetected from
+  `scripts/out/broadcast/03_PoolSwapTest.s.sol/<chainId>/run-latest.json`.
+
 ## Script separation
 
 > `/scripts` contains production/ops scripts only.
