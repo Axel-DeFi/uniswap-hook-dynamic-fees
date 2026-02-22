@@ -17,6 +17,8 @@ interface IUnlockCallback {
 contract MockPoolManager {
     uint24 public lastFee;
     uint256 public updateCount;
+    uint256 public unlockCount;
+    bool public skipUnlockCallback;
 
     error NotHook();
 
@@ -29,7 +31,13 @@ contract MockPoolManager {
 
     /// @notice Mimics PoolManager.unlock by calling back into the caller (msg.sender).
     function unlock(bytes calldata data) external returns (bytes memory) {
+        unlockCount += 1;
+        if (skipUnlockCallback) return "";
         return IUnlockCallback(msg.sender).unlockCallback(data);
+    }
+
+    function setSkipUnlockCallback(bool v) external {
+        skipUnlockCallback = v;
     }
 
     function callAfterInitialize(VolumeDynamicFeeHook hook, PoolKey calldata key) external {

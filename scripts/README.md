@@ -8,6 +8,7 @@ This project uses plain-text `.conf` files in `./config/` and a small set of she
 - `create_pool.sh` — creates + initializes the Uniswap v4 pool (dynamic fee flag) using a deployed hook
 - `deploy.sh` — one-shot convenience wrapper: deploy hook, then create + initialize pool
 - `foundry/` — Foundry Solidity scripts used internally by the shell scripts
+- `tools/` — manual helper scripts for human on-chain interaction (approve/liquidity/swap/wrap)
 - `scripts/out/` — script outputs, cache, and broadcast artifacts
 - `out/` — Foundry build artifacts
 
@@ -72,6 +73,15 @@ Required:
 - `HOOK_ADDRESS`, `TOKEN0`, `TOKEN1`, `TICK_SPACING`, `PRIVATE_KEY` from `config/pool.<chain>.conf` (+ `.env` key interpolation).
 - `PoolSwapTest` helper address, passed via `--swap-test-address`, `SWAP_TEST_ADDRESS`, or autodetected from
   `scripts/out/broadcast/03_PoolSwapTest.s.sol/<chainId>/run-latest.json`.
+
+## Manual interaction tools
+
+- See `./scripts/tools/README.md` for step-by-step manual flows.
+- Quick commands:
+  - `./scripts/tools/wrap_weth.sh --chain ethereum --amount-eth 0.1`
+  - `./scripts/tools/approve_tokens.sh --chain ethereum --spender both`
+  - `./scripts/tools/add_liquidity.sh --chain ethereum --liquidity 1000000000000000`
+  - `./scripts/tools/swap.sh --chain ethereum --amount 1000000 --zero-for-one true`
 
 ## Script separation
 
