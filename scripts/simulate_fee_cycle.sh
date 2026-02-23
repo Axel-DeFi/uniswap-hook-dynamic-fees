@@ -109,25 +109,25 @@ cast_rpc() {
 
 CLI_RPC_URL="${RPC_URL}"
 
-POOL_CONF="./config/pool.conf"
-if [[ -n "${CHAIN}" && -f "./config/pool.${CHAIN}.conf" ]]; then
-  POOL_CONF="./config/pool.${CHAIN}.conf"
+HOOK_CONF="./config/hook.conf"
+if [[ -n "${CHAIN}" && -f "./config/hook.${CHAIN}.conf" ]]; then
+  HOOK_CONF="./config/hook.${CHAIN}.conf"
 fi
-if [[ ! -f "${POOL_CONF}" ]]; then
-  echo "ERROR: missing ${POOL_CONF}"
+if [[ ! -f "${HOOK_CONF}" ]]; then
+  echo "ERROR: missing ${HOOK_CONF}"
   exit 1
 fi
 
 set -a
 # shellcheck disable=SC1090
-source "${POOL_CONF}"
+source "${HOOK_CONF}"
 set +a
 
 # Resolve RPC URL: CLI > config RPC_URL
 CONFIG_RPC_URL="${RPC_URL:-}"
 RPC_URL="${CLI_RPC_URL:-${CONFIG_RPC_URL:-}}"
 if [[ -z "${RPC_URL}" ]]; then
-  echo "ERROR: RPC URL not provided. Set RPC_URL in ${POOL_CONF} or pass --rpc-url."
+  echo "ERROR: RPC URL not provided. Set RPC_URL in ${HOOK_CONF} or pass --rpc-url."
   exit 1
 fi
 
@@ -135,17 +135,17 @@ if [[ -n "${HOOK_ADDRESS_OVERRIDE}" ]]; then
   HOOK_ADDRESS="${HOOK_ADDRESS_OVERRIDE}"
 fi
 if [[ -z "${HOOK_ADDRESS:-}" ]]; then
-  echo "ERROR: HOOK_ADDRESS must be set in ${POOL_CONF} or passed via --hook-address."
+  echo "ERROR: HOOK_ADDRESS must be set in ${HOOK_CONF} or passed via --hook-address."
   exit 1
 fi
 
 if [[ -z "${TOKEN0:-}" || -z "${TOKEN1:-}" || -z "${TICK_SPACING:-}" ]]; then
-  echo "ERROR: TOKEN0, TOKEN1 and TICK_SPACING must be set in ${POOL_CONF}."
+  echo "ERROR: TOKEN0, TOKEN1 and TICK_SPACING must be set in ${HOOK_CONF}."
   exit 1
 fi
 
 if [[ -z "${PRIVATE_KEY:-}" ]]; then
-  echo "ERROR: PRIVATE_KEY must be set (via ${POOL_CONF} env interpolation from .env)."
+  echo "ERROR: PRIVATE_KEY must be set (via ${HOOK_CONF} env interpolation from .env)."
   exit 1
 fi
 DEPLOYER="$(cast_rpc wallet address --private-key "${PRIVATE_KEY}" | awk '{print $1}')"

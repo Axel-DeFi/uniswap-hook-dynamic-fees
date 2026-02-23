@@ -206,7 +206,6 @@ contract VolumeDynamicFeeHookTest is Test {
 
         hook.pause();
         assertTrue(hook.isPaused(), "expected paused");
-        assertTrue(!hook.isPauseApplyPending(), "expected no pending after immediate pause apply");
         assertEq(manager.updateCount(), 2, "expected immediate pause fee update");
 
         uint24 pauseFee = hook.feeTiers(uint256(PAUSE_FEE_IDX));
@@ -214,30 +213,15 @@ contract VolumeDynamicFeeHookTest is Test {
 
         hook.unpause();
         assertTrue(!hook.isPaused(), "expected unpaused");
-        assertTrue(!hook.isPauseApplyPending(), "expected no pending after immediate unpause apply");
         assertEq(manager.updateCount(), 3, "expected immediate unpause fee update");
 
         uint24 expected = hook.feeTiers(uint256(INITIAL_FEE_IDX));
         assertEq(manager.lastFee(), expected, "unpause fee mismatch");
     }
 
-    function test_applyPendingPause_isNoop_whenNothingPending() public {
-        manager.callAfterInitialize(hook, key);
-        assertEq(manager.updateCount(), 1, "expected 1 fee update after init");
-
-        hook.pause();
-        assertTrue(hook.isPaused(), "expected paused");
-        assertTrue(!hook.isPauseApplyPending(), "expected pending cleared by immediate apply");
-        assertEq(manager.updateCount(), 2, "expected immediate pause fee update");
-
-        hook.applyPendingPause();
-        assertEq(manager.updateCount(), 2, "applyPendingPause should be no-op");
-    }
-
     function test_pause_beforeInitialize_appliesOnInitialize() public {
         hook.pause();
         assertTrue(hook.isPaused(), "expected paused");
-        assertTrue(hook.isPauseApplyPending(), "expected pending before initialize");
         assertEq(manager.updateCount(), 0, "no fee update before initialize");
 
         manager.callAfterInitialize(hook, key);
@@ -246,7 +230,6 @@ contract VolumeDynamicFeeHookTest is Test {
         uint24 pauseFee = hook.feeTiers(uint256(PAUSE_FEE_IDX));
         assertEq(manager.lastFee(), pauseFee, "pause fee mismatch after initialize");
         assertTrue(hook.isPaused(), "expected still paused");
-        assertTrue(!hook.isPauseApplyPending(), "expected pending cleared on initialize");
 
         hook.unpause();
         assertEq(manager.updateCount(), 2, "expected immediate unpause fee update");
@@ -254,7 +237,6 @@ contract VolumeDynamicFeeHookTest is Test {
         uint24 expected = hook.feeTiers(uint256(INITIAL_FEE_IDX));
         assertEq(manager.lastFee(), expected, "unpause fee mismatch");
         assertTrue(!hook.isPaused(), "expected unpaused");
-        assertTrue(!hook.isPauseApplyPending(), "expected no pending");
     }
 
     // -----------------------------------------------------------------------
@@ -338,7 +320,8 @@ contract VolumeDynamicFeeHookTest is Test {
         vm.warp(block.timestamp + PERIOD_SECONDS);
         manager.callAfterSwap(hook, key, _deltaZero());
 
-        (uint64 pvBefore, uint96 emaBefore, uint32 psBefore, uint8 feeBefore, uint8 dirBefore) = hook.unpackedState();
+        (uint64 pvBefore, uint96 emaBefore, uint32 psBefore, uint8 feeBefore, uint8 dirBefore) =
+            hook.unpackedState();
         assertTrue(psBefore != 0, "expected initialized");
         assertEq(feeBefore, INITIAL_FEE_IDX - 1, "expected fee moved down before lull");
         assertTrue(emaBefore > 0, "expected non-zero EMA before lull");
@@ -349,7 +332,8 @@ contract VolumeDynamicFeeHookTest is Test {
         vm.warp(block.timestamp + LULL_RESET_SECONDS);
         manager.callAfterSwap(hook, key, _deltaZero());
 
-        (uint64 pvAfter, uint96 emaAfter, uint32 psAfter, uint8 feeAfter, uint8 dirAfter) = hook.unpackedState();
+        (uint64 pvAfter, uint96 emaAfter, uint32 psAfter, uint8 feeAfter, uint8 dirAfter) =
+            hook.unpackedState();
         assertTrue(psAfter > psBefore, "expected periodStart reset");
         assertEq(feeAfter, INITIAL_FEE_IDX, "expected fee reset to initial on lull");
         assertEq(emaAfter, 0, "expected EMA cleared on lull reset");

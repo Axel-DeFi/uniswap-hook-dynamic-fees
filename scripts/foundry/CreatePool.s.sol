@@ -11,7 +11,7 @@ import {LPFeeLibrary} from "@uniswap/v4-core/src/libraries/LPFeeLibrary.sol";
 
 /// @notice Creates + initializes a Uniswap v4 pool that uses a previously deployed hook.
 /// @dev Requires the pool to be configured as a dynamic fee pool (PoolKey.fee = LPFeeLibrary.DYNAMIC_FEE_FLAG).
-///      This script expects HOOK_ADDRESS to be provided via config (config/pool.<chain>.conf).
+///      This script expects HOOK_ADDRESS to be provided via config (config/hook.<chain>.conf).
 contract CreatePool is Script {
     function run() external {
         address poolManager = vm.envAddress("POOL_MANAGER");

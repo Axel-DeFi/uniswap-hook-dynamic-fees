@@ -44,7 +44,7 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-load_pool_config "${CHAIN}"
+load_hook_config "${CHAIN}"
 resolve_private_key
 resolve_rpc
 
@@ -172,8 +172,7 @@ read_state() {
   idx="$(printf '%s\n' "${out}" | sed -n '4p' | awk '{print $1}')"
   dir="$(printf '%s\n' "${out}" | sed -n '5p' | awk '{print $1}')"
   paused="$(call_fork "${HOOK_ADDRESS}" "isPaused()(bool)" | awk '{print $1}')"
-  pending="$(call_fork "${HOOK_ADDRESS}" "isPauseApplyPending()(bool)" | awk '{print $1}')"
-  echo "${fee}|${pv}|${ema}|${ps}|${idx}|${dir}|${paused}|${pending}"
+  echo "${fee}|${pv}|${ema}|${ps}|${idx}|${dir}|${paused}"
 }
 
 advance_time() {
@@ -186,7 +185,7 @@ advance_time() {
 }
 
 validate_invariants() {
-  local fee="$1" idx="$2" paused="$3" pending="$4"
+  local fee="$1" idx="$2" paused="$3"
   if (( idx < FLOOR_IDX || idx > CAP_IDX )); then
     echo "ERROR: feeIdx=${idx} out of bounds [${FLOOR_IDX}, ${CAP_IDX}]" >&2
     exit 1
@@ -201,17 +200,13 @@ validate_invariants() {
     echo "ERROR: hook unexpectedly paused during activity simulation." >&2
     exit 1
   fi
-  if [[ "${pending}" != "false" ]]; then
-    echo "ERROR: pauseApplyPending unexpectedly true during activity simulation." >&2
-    exit 1
-  fi
 }
 
 echo "==> Running ${SWAPS} swaps with time travel step=${STEP_SECONDS}s (total=$((SWAPS * STEP_SECONDS))s)"
 
 INITIAL_STATE="$(read_state)"
-IFS='|' read -r START_FEE START_PV START_EMA START_PS START_IDX START_DIR START_PAUSED START_PENDING <<<"${INITIAL_STATE}"
-validate_invariants "${START_FEE}" "${START_IDX}" "${START_PAUSED}" "${START_PENDING}"
+IFS='|' read -r START_FEE START_PV START_EMA START_PS START_IDX START_DIR START_PAUSED <<<"${INITIAL_STATE}"
+validate_invariants "${START_FEE}" "${START_IDX}" "${START_PAUSED}"
 
 UP=0
 DOWN=0
@@ -222,8 +217,8 @@ ERR=0
 
 for ((i=1; i<=SWAPS; i++)); do
   BEFORE="$(read_state)"
-  IFS='|' read -r B_FEE _ _ B_PS B_IDX _ B_PAUSED B_PENDING <<<"${BEFORE}"
-  validate_invariants "${B_FEE}" "${B_IDX}" "${B_PAUSED}" "${B_PENDING}"
+  IFS='|' read -r B_FEE _ _ B_PS B_IDX _ B_PAUSED <<<"${BEFORE}"
+  validate_invariants "${B_FEE}" "${B_IDX}" "${B_PAUSED}"
 
   AMOUNT="${SMALL_TOKEN0_IN}"
   if (( i % BIG_EVERY == 0 )); then
@@ -241,7 +236,7 @@ for ((i=1; i<=SWAPS; i++)); do
 
   AFTER="$(read_state)"
   IFS='|' read -r A_FEE _ _ A_PS A_IDX _ A_PAUSED A_PENDING <<<"${AFTER}"
-  validate_invariants "${A_FEE}" "${A_IDX}" "${A_PAUSED}" "${A_PENDING}"
+  validate_invariants "${A_FEE}" "${A_IDX}" "${A_PAUSED}"
 
   if (( A_IDX > B_IDX )); then
     UP=$((UP + 1))
@@ -293,6 +288,6 @@ echo
 echo "Invariant checks:"
 echo "  [OK] feeIdx always within [floorIdx, capIdx]"
 echo "  [OK] currentFeeBips always matches feeTiers(feeIdx)"
-echo "  [OK] paused=false and pauseApplyPending=false throughout simulation"
+echo "  [OK] paused=false throughout simulation"
 echo "  [OK] periodStart monotonic non-decreasing"
 echo "===== Simulation successful ====="

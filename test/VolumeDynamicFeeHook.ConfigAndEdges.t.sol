@@ -340,13 +340,11 @@ contract VolumeDynamicFeeHookConfigAndEdgesTest is Test {
 
         hook.pause();
         uint256 updatesAfterFirstPause = manager.updateCount();
-        uint256 unlocksAfterFirstPause = manager.unlockCount();
         assertEq(updatesAfterFirstPause, 2);
         assertTrue(hook.isPaused());
 
         hook.pause();
         assertEq(manager.updateCount(), updatesAfterFirstPause);
-        assertEq(manager.unlockCount(), unlocksAfterFirstPause);
     }
 
     function test_unpause_is_idempotent() public {
@@ -356,71 +354,11 @@ contract VolumeDynamicFeeHookConfigAndEdgesTest is Test {
 
         hook.unpause();
         uint256 updatesAfterFirstUnpause = manager.updateCount();
-        uint256 unlocksAfterFirstUnpause = manager.unlockCount();
         assertEq(updatesAfterFirstUnpause, 3);
         assertFalse(hook.isPaused());
 
         hook.unpause();
         assertEq(manager.updateCount(), updatesAfterFirstUnpause);
-        assertEq(manager.unlockCount(), unlocksAfterFirstUnpause);
-    }
-
-    function test_applyPendingPause_reverts_for_non_guardian() public {
-        vm.prank(address(0x000000000000000000000000000000000000b0b0));
-        vm.expectRevert(VolumeDynamicFeeHook.NotGuardian.selector);
-        hook.applyPendingPause();
-    }
-
-    function test_applyPendingPause_reverts_when_pending_but_not_initialized() public {
-        hook.pause();
-        assertTrue(hook.isPauseApplyPending());
-
-        vm.expectRevert(VolumeDynamicFeeHook.NotInitialized.selector);
-        hook.applyPendingPause();
-    }
-
-    function test_applyPendingPause_processes_deferred_pause_and_unpause() public {
-        manager.callAfterInitialize(hook, key);
-        assertEq(manager.updateCount(), 1);
-
-        manager.setSkipUnlockCallback(true);
-        hook.pause();
-        assertTrue(hook.isPaused());
-        assertTrue(hook.isPauseApplyPending());
-        assertEq(manager.updateCount(), 1);
-
-        manager.setSkipUnlockCallback(false);
-        hook.applyPendingPause();
-        assertFalse(hook.isPauseApplyPending());
-        assertEq(manager.updateCount(), 2);
-        assertEq(manager.lastFee(), hook.feeTiers(PAUSE_FEE_IDX));
-
-        manager.setSkipUnlockCallback(true);
-        hook.unpause();
-        assertFalse(hook.isPaused());
-        assertTrue(hook.isPauseApplyPending());
-        assertEq(manager.updateCount(), 2);
-
-        manager.setSkipUnlockCallback(false);
-        hook.applyPendingPause();
-        assertFalse(hook.isPauseApplyPending());
-        assertEq(manager.updateCount(), 3);
-        assertEq(manager.lastFee(), hook.feeTiers(INITIAL_FEE_IDX));
-    }
-
-    function test_unlockCallback_reverts_for_non_pool_manager() public {
-        vm.expectRevert();
-        hook.unlockCallback("");
-    }
-
-    function test_unlockCallback_is_noop_when_not_pending() public {
-        manager.callAfterInitialize(hook, key);
-        uint256 before = manager.updateCount();
-
-        vm.prank(address(manager));
-        bytes memory out = hook.unlockCallback("");
-        assertEq(out.length, 0);
-        assertEq(manager.updateCount(), before);
     }
 
     function test_afterSwap_while_paused_does_not_change_volume_or_fee() public {

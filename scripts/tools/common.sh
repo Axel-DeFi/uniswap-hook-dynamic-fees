@@ -14,14 +14,14 @@ cast_rpc() {
   NO_PROXY='*' no_proxy='*' HTTPS_PROXY='' HTTP_PROXY='' ALL_PROXY='' cast "$@"
 }
 
-load_pool_config() {
+load_hook_config() {
   local chain="$1"
-  local conf="${ROOT_DIR}/config/pool.${chain}.conf"
+  local conf="${ROOT_DIR}/config/hook.${chain}.conf"
   if [[ ! -f "${conf}" ]]; then
-    conf="${ROOT_DIR}/config/pool.conf"
+    conf="${ROOT_DIR}/config/hook.conf"
   fi
   if [[ ! -f "${conf}" ]]; then
-    echo "ERROR: pool config not found for chain=${chain}" >&2
+    echo "ERROR: hook config not found for chain=${chain}" >&2
     exit 1
   fi
 

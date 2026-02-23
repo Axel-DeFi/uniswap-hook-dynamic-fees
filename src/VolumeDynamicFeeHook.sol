@@ -91,7 +91,6 @@ contract VolumeDynamicFeeHook is BaseHook {
     uint16 private constant MAX_LULL_PERIODS = 24;
 
     uint256 private constant PAUSED_BIT = 202;
-    uint256 private constant PAUSE_APPLY_PENDING_BIT = 203;
 
     // -----------------------------------------------------------------------
     // Events
@@ -205,7 +204,7 @@ contract VolumeDynamicFeeHook is BaseHook {
     {
         _validateKey(key);
 
-        (,, uint32 periodStart,,,,) = _unpackState(_state);
+        (,, uint32 periodStart,,,) = _unpackState(_state);
         if (periodStart != 0) revert AlreadyInitialized();
 
         bool paused_ = isPaused();
@@ -213,7 +212,7 @@ contract VolumeDynamicFeeHook is BaseHook {
 
         uint8 feeIdx = paused_ ? pauseFeeIdx : initialFeeIdx;
 
-        _state = _packState(0, 0, nowTs, feeIdx, DIR_NONE, paused_, false);
+        _state = _packState(0, 0, nowTs, feeIdx, DIR_NONE, paused_);
 
         poolManager.updateDynamicLPFee(key, _feeTier(feeIdx));
         emit FeeUpdated(_feeTier(feeIdx), feeIdx, 0, 0);
@@ -231,28 +230,12 @@ contract VolumeDynamicFeeHook is BaseHook {
         _validateKey(key);
 
         if (isPaused()) {
-            if (isPauseApplyPending()) {
-                poolManager.updateDynamicLPFee(key, _feeTier(pauseFeeIdx));
-                _setPauseApplyPending(false);
-                emit FeeUpdated(_feeTier(pauseFeeIdx), pauseFeeIdx, 0, 0);
-            }
+            // Fee is applied immediately in pause()/unpause(); swaps while paused do not update state.
             return (IHooks.afterSwap.selector, 0);
         }
 
-        (
-            uint64 periodVol,
-            uint96 emaVol,
-            uint32 periodStart,
-            uint8 feeIdx,
-            uint8 lastDir,,
-            bool pauseApplyPending
-        ) = _unpackState(_state);
-
-        if (pauseApplyPending) {
-            poolManager.updateDynamicLPFee(key, _feeTier(feeIdx));
-            emit FeeUpdated(_feeTier(feeIdx), feeIdx, 0, emaVol);
-            pauseApplyPending = false;
-        }
+        (uint64 periodVol, uint96 emaVol, uint32 periodStart, uint8 feeIdx, uint8 lastDir, bool paused_) =
+            _unpackState(_state);
 
         if (periodStart == 0) revert NotInitialized();
 
@@ -269,7 +252,7 @@ contract VolumeDynamicFeeHook is BaseHook {
 
             periodVol = _addSwapVolumeUsd6(0, delta);
 
-            _state = _packState(periodVol, emaVol, periodStart, feeIdx, lastDir, false, pauseApplyPending);
+            _state = _packState(periodVol, emaVol, periodStart, feeIdx, lastDir, paused_);
 
             if (feeIdx != oldFeeIdx) {
                 poolManager.updateDynamicLPFee(key, _feeTier(feeIdx));
@@ -319,7 +302,7 @@ contract VolumeDynamicFeeHook is BaseHook {
 
         periodVol = _addSwapVolumeUsd6(periodVol, delta);
 
-        _state = _packState(periodVol, emaVol, periodStart, feeIdx, lastDir, false, pauseApplyPending);
+        _state = _packState(periodVol, emaVol, periodStart, feeIdx, lastDir, paused_);
         return (IHooks.afterSwap.selector, 0);
     }
 
@@ -331,12 +314,8 @@ contract VolumeDynamicFeeHook is BaseHook {
         return ((_state >> PAUSED_BIT) & 1) == 1;
     }
 
-    function isPauseApplyPending() public view returns (bool) {
-        return ((_state >> PAUSE_APPLY_PENDING_BIT) & 1) == 1;
-    }
-
     function currentFeeBips() external view returns (uint24) {
-        (,, uint32 periodStart, uint8 feeIdx,,,) = _unpackState(_state);
+        (,, uint32 periodStart, uint8 feeIdx,,) = _unpackState(_state);
         if (periodStart == 0) revert NotInitialized();
         return _feeTier(feeIdx);
     }
@@ -352,7 +331,7 @@ contract VolumeDynamicFeeHook is BaseHook {
             uint8 lastDir
         )
     {
-        (uint64 pv, uint96 ev, uint32 ps, uint8 fi, uint8 ld,,) = _unpackState(_state);
+        (uint64 pv, uint96 ev, uint32 ps, uint8 fi, uint8 ld,) = _unpackState(_state);
         return (pv, ev, ps, fi, ld);
     }
 
@@ -364,20 +343,24 @@ contract VolumeDynamicFeeHook is BaseHook {
         if (msg.sender != guardian) revert NotGuardian();
         if (isPaused()) return;
 
-        (uint64 periodVol, uint96 emaVol, uint32 periodStart, uint8 feeIdx, uint8 lastDir,,) =
+        (uint64 periodVol, uint96 emaVol, uint32 periodStart, uint8 feeIdx, uint8 lastDir, bool paused_) =
             _unpackState(_state);
         bool initialized = periodStart != 0;
+
+        // Reset state and force a conservative fee bucket.
         periodVol = 0;
         emaVol = 0;
         periodStart = initialized ? _now32() : uint32(0);
         feeIdx = pauseFeeIdx;
         lastDir = DIR_NONE;
+        paused_ = true;
 
-        _state = _packState(periodVol, emaVol, periodStart, feeIdx, lastDir, true, true);
+        _state = _packState(periodVol, emaVol, periodStart, feeIdx, lastDir, paused_);
 
         // Apply pause fee immediately for initialized pools.
         if (initialized) {
-            poolManager.unlock("");
+            poolManager.updateDynamicLPFee(_poolKey(), _feeTier(feeIdx));
+            emit FeeUpdated(_feeTier(feeIdx), feeIdx, 0, 0);
         }
 
         emit Paused(_feeTier(pauseFeeIdx), pauseFeeIdx);
@@ -387,61 +370,37 @@ contract VolumeDynamicFeeHook is BaseHook {
         if (msg.sender != guardian) revert NotGuardian();
         if (!isPaused()) return;
 
-        (uint64 periodVol, uint96 emaVol, uint32 periodStart, uint8 feeIdx, uint8 lastDir,,) =
+        (uint64 periodVol, uint96 emaVol, uint32 periodStart, uint8 feeIdx, uint8 lastDir, bool paused_) =
             _unpackState(_state);
         bool initialized = periodStart != 0;
+
+        // Reset state and return to the initial fee bucket.
         periodVol = 0;
         emaVol = 0;
         periodStart = initialized ? _now32() : uint32(0);
         feeIdx = initialFeeIdx;
         lastDir = DIR_NONE;
+        paused_ = false;
 
-        _state = _packState(periodVol, emaVol, periodStart, feeIdx, lastDir, false, true);
+        _state = _packState(periodVol, emaVol, periodStart, feeIdx, lastDir, paused_);
 
         // Apply unpause fee immediately for initialized pools.
         if (initialized) {
-            poolManager.unlock("");
+            poolManager.updateDynamicLPFee(_poolKey(), _feeTier(feeIdx));
+            emit FeeUpdated(_feeTier(feeIdx), feeIdx, 0, 0);
         }
 
         emit Unpaused();
     }
 
-    /// @notice Applies a pending pause/unpause fee update immediately, without waiting for the next swap.
-    /// @dev This uses PoolManager.unlock() to enter the manager's lock context and call updateDynamicLPFee safely.
-    ///      If no update is pending, this is a no-op.
-    function applyPendingPause() external {
-        if (msg.sender != guardian) revert NotGuardian();
-        if (!isPauseApplyPending()) return;
-
-        (,, uint32 periodStart,,,,) = _unpackState(_state);
-        if (periodStart == 0) revert NotInitialized();
-
-        // Data is unused; we can reconstruct PoolKey from immutables.
-        poolManager.unlock("");
-    }
-
-    /// @notice PoolManager unlock callback used by applyPendingPause().
-    /// @dev Only the configured PoolManager can call this.
-    function unlockCallback(bytes calldata) external returns (bytes memory) {
-        if (msg.sender != address(poolManager)) revert NotPoolManager();
-        if (!isPauseApplyPending()) return "";
-
-        (uint64 periodVol, uint96 emaVol, uint32 periodStart, uint8 feeIdx, uint8 lastDir, bool paused_,) =
-            _unpackState(_state);
-
-        PoolKey memory key = PoolKey({
+    function _poolKey() internal view returns (PoolKey memory key) {
+        key = PoolKey({
             currency0: poolCurrency0,
             currency1: poolCurrency1,
             fee: LPFeeLibrary.DYNAMIC_FEE_FLAG,
             tickSpacing: poolTickSpacing,
             hooks: IHooks(address(this))
         });
-
-        poolManager.updateDynamicLPFee(key, _feeTier(feeIdx));
-        _state = _packState(periodVol, emaVol, periodStart, feeIdx, lastDir, paused_, false);
-
-        emit FeeUpdated(_feeTier(feeIdx), feeIdx, 0, emaVol);
-        return "";
     }
 
     // -----------------------------------------------------------------------
@@ -461,11 +420,6 @@ contract VolumeDynamicFeeHook is BaseHook {
 
     function _now32() internal view returns (uint32) {
         return uint32(block.timestamp);
-    }
-
-    function _setPauseApplyPending(bool v) private {
-        if (v) _state |= (uint256(1) << PAUSE_APPLY_PENDING_BIT);
-        else _state &= ~(uint256(1) << PAUSE_APPLY_PENDING_BIT);
     }
 
     function _addSwapVolumeUsd6(uint64 current, BalanceDelta delta) internal view returns (uint64) {
@@ -556,8 +510,7 @@ contract VolumeDynamicFeeHook is BaseHook {
         uint32 periodStart,
         uint8 feeIdx,
         uint8 lastDir,
-        bool paused,
-        bool pauseApplyPending
+        bool paused
     ) internal pure returns (uint256 packed) {
         packed = uint256(periodVol);
         packed |= uint256(emaVol) << 64;
@@ -566,7 +519,6 @@ contract VolumeDynamicFeeHook is BaseHook {
         packed |= (uint256(lastDir) & 0x3) << 200;
 
         if (paused) packed |= uint256(1) << PAUSED_BIT;
-        if (pauseApplyPending) packed |= uint256(1) << PAUSE_APPLY_PENDING_BIT;
     }
 
     function _unpackState(uint256 packed)
@@ -578,8 +530,7 @@ contract VolumeDynamicFeeHook is BaseHook {
             uint32 periodStart,
             uint8 feeIdx,
             uint8 lastDir,
-            bool paused,
-            bool pauseApplyPending
+            bool paused
         )
     {
         // forge-lint: disable-next-line(unsafe-typecast)
@@ -593,6 +544,5 @@ contract VolumeDynamicFeeHook is BaseHook {
         lastDir = uint8((packed >> 200) & 0x3);
 
         paused = ((packed >> PAUSED_BIT) & 1) == 1;
-        pauseApplyPending = ((packed >> PAUSE_APPLY_PENDING_BIT) & 1) == 1;
     }
 }

@@ -2,33 +2,51 @@
 set -euo pipefail
 
 usage() {
-  echo "Usage: $0 <pool-config-name-in-config-dir> [--write]"
+  echo "Usage: $0 <config-name-in-config-dir|path> [--from-usd] [--sqrt-only]"
+  echo
   echo "Examples:"
-  echo "  $0 pool.local.conf"
-  echo "  $0 pool.local --write"
+  echo "  $0 hook.local.conf"
+  echo "  $0 hook.optimism.conf --from-usd"
+  echo "  $0 hook.optimism --from-usd --sqrt-only"
+  echo
+  echo "Notes:"
+  echo "  - --from-usd uses INIT_PRICE_USD + STABLE from the config, interpreting INIT_PRICE_USD as STABLE per 1 VOLATILE token."
+  echo "  - The utility automatically sorts TOKEN0/TOKEN1 by address (same as CreatePool.s.sol)."
   exit 1
 }
 
 CONFIG_NAME="${1:-}"
 [[ -z "$CONFIG_NAME" ]] && usage
 
-WRITE_MODE="${2:-}"
-if [[ "$WRITE_MODE" != "" && "$WRITE_MODE" != "--write" ]]; then
-  usage
-fi
+FROM_USD=0
+SQRT_ONLY=0
 
-if [[ "$CONFIG_NAME" != *.conf ]]; then
+shift || true
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --from-usd) FROM_USD=1; shift ;;
+    --sqrt-only) SQRT_ONLY=1; shift ;;
+    *) usage ;;
+  esac
+done
+
+if [[ "$CONFIG_NAME" != *.conf && "$CONFIG_NAME" != */*.conf ]]; then
   CONFIG_NAME="${CONFIG_NAME}.conf"
 fi
 
-CONFIG_PATH="config/${CONFIG_NAME}"
+if [[ "$CONFIG_NAME" == */* ]]; then
+  CONFIG_PATH="$CONFIG_NAME"
+else
+  CONFIG_PATH="config/${CONFIG_NAME}"
+fi
+
 if [[ ! -f "$CONFIG_PATH" ]]; then
-  echo "ERROR: missing ./${CONFIG_PATH}"
+  echo "ERROR: missing ./${CONFIG_PATH}" >&2
   exit 1
 fi
 
 if ! command -v cast >/dev/null 2>&1; then
-  echo "ERROR: 'cast' not found. Install Foundry (foundryup) first."
+  echo "ERROR: 'cast' not found. Install Foundry (foundryup) first." >&2
   exit 1
 fi
 
@@ -37,17 +55,16 @@ set -a
 source "$CONFIG_PATH"
 set +a
 
-# Must come from config (no hidden defaults)
 RPC_URL="${RPC_URL:-}"
 if [[ -z "$RPC_URL" ]]; then
-  echo "ERROR: RPC_URL is empty in ./${CONFIG_PATH}"
+  echo "ERROR: RPC_URL is empty in ./${CONFIG_PATH}" >&2
   exit 1
 fi
 
 TOKEN0="${TOKEN0:-}"
 TOKEN1="${TOKEN1:-}"
 if [[ -z "$TOKEN0" || -z "$TOKEN1" ]]; then
-  echo "ERROR: TOKEN0 and TOKEN1 must be set in ./${CONFIG_PATH}"
+  echo "ERROR: TOKEN0 and TOKEN1 must be set in ./${CONFIG_PATH}" >&2
   exit 1
 fi
 
@@ -59,8 +76,8 @@ lower() {
 _t0="$(lower "$TOKEN0")"
 _t1="$(lower "$TOKEN1")"
 if [[ "$_t0" > "$_t1" ]]; then
-  echo "Note: swapping TOKEN0/TOKEN1 to match canonical ordering (address sort)."
   tmp="$TOKEN0"; TOKEN0="$TOKEN1"; TOKEN1="$tmp"
+  _t0="$(lower "$TOKEN0")"; _t1="$(lower "$TOKEN1")"
 fi
 
 read_decimals() {
@@ -79,40 +96,66 @@ read_decimals() {
     return
   fi
 
-  while true; do
-    read -r -p "Could not fetch decimals() for ${addr}. Enter decimals manually: " out
-    if [[ "$out" =~ ^[0-9]+$ ]] && (( out >= 0 )) && (( out <= 36 )); then
-      echo "$out"
-      return
-    fi
-    echo "Invalid decimals. Try again."
-  done
+  echo "ERROR: could not fetch decimals() for ${addr}." >&2
+  exit 1
 }
 
 DEC0="$(read_decimals "$TOKEN0")"
 DEC1="$(read_decimals "$TOKEN1")"
 
-echo
-echo "=== Inputs from ./${CONFIG_PATH} ==="
-echo "RPC_URL : $RPC_URL"
-echo "TOKEN0  : $TOKEN0 (decimals=$DEC0)"
-echo "TOKEN1  : $TOKEN1 (decimals=$DEC1)"
-echo
+PRICE_STR=""
+QUOTE="Y"  # Y => TOKEN0 per 1 TOKEN1
 
-# If this is not an interactive terminal, don't try to prompt.
-if [[ ! -t 0 ]]; then
-  echo "ERROR: interactive input required (no TTY)."
-  exit 1
+if [[ "$FROM_USD" -eq 1 ]]; then
+  STABLE="${STABLE:-}"
+  INIT_PRICE_USD="${INIT_PRICE_USD:-}"
+  if [[ -z "$STABLE" || -z "$INIT_PRICE_USD" ]]; then
+    echo "ERROR: --from-usd requires STABLE and INIT_PRICE_USD in ./${CONFIG_PATH}" >&2
+    exit 1
+  fi
+
+  stable_lc="$(lower "$STABLE")"
+  if [[ "$stable_lc" != "$(lower "$TOKEN0")" && "$stable_lc" != "$(lower "$TOKEN1")" ]]; then
+    echo "ERROR: STABLE must equal TOKEN0 or TOKEN1 (after canonical sorting)." >&2
+    echo "  TOKEN0=${TOKEN0}" >&2
+    echo "  TOKEN1=${TOKEN1}" >&2
+    echo "  STABLE=${STABLE}" >&2
+    exit 1
+  fi
+
+  PRICE_STR="$INIT_PRICE_USD"
+
+  # INIT_PRICE_USD is STABLE per 1 VOLATILE.
+  # If STABLE==TOKEN0, then it's TOKEN0 per 1 TOKEN1 (QUOTE=Y).
+  # If STABLE==TOKEN1, then it's TOKEN1 per 1 TOKEN0, so set QUOTE=n.
+  if [[ "$stable_lc" == "$(lower "$TOKEN1")" ]]; then
+    QUOTE="n"
+  else
+    QUOTE="Y"
+  fi
+else
+  # Interactive input
+  if [[ ! -t 0 ]]; then
+    echo "ERROR: interactive input required (no TTY). Use --from-usd." >&2
+    exit 1
+  fi
+
+  echo
+  echo "=== Inputs from ./${CONFIG_PATH} ==="
+  echo "RPC_URL : $RPC_URL"
+  echo "TOKEN0  : $TOKEN0 (decimals=$DEC0)"
+  echo "TOKEN1  : $TOKEN1 (decimals=$DEC1)"
+  echo
+
+  read -r -p "Enter price value (e.g. 2200.5): " PRICE_STR
+  if [[ -z "$PRICE_STR" ]]; then
+    echo "ERROR: price is empty" >&2
+    exit 1
+  fi
+
+  read -r -p "Is this price TOKEN0 per 1 TOKEN1? [Y/n]: " QUOTE
+  QUOTE="${QUOTE:-Y}"
 fi
-
-read -r -p "Enter price value (e.g. 2200.5): " PRICE_STR
-if [[ -z "$PRICE_STR" ]]; then
-  echo "ERROR: price is empty"
-  exit 1
-fi
-
-read -r -p "Is this price TOKEN0 per 1 TOKEN1? [Y/n]: " QUOTE
-QUOTE="${QUOTE:-Y}"
 
 RESULT="$(python3 - <<PY
 from fractions import Fraction
@@ -159,30 +202,16 @@ SQRT_PRICE_X96="$(echo "$RESULT" | sed -n '1p')"
 IMPLIED_0_PER_1="$(echo "$RESULT" | sed -n '2p')"
 IMPLIED_1_PER_0="$(echo "$RESULT" | sed -n '3p')"
 
+if [[ "$SQRT_ONLY" -eq 1 ]]; then
+  echo "$SQRT_PRICE_X96"
+  exit 0
+fi
+
 echo
 echo "=== Result ==="
 echo "INIT_SQRT_PRICE_X96=$SQRT_PRICE_X96"
 echo
-echo "Sanity (implied):"
+echo "Sanity (implied, after canonical token sorting):"
 echo "  TOKEN0 per 1 TOKEN1 ~= $IMPLIED_0_PER_1"
 echo "  TOKEN1 per 1 TOKEN0 ~= $IMPLIED_1_PER_0"
 echo
-
-if [[ "$WRITE_MODE" == "--write" ]]; then
-  python3 - <<PY
-import re
-from pathlib import Path
-
-path = Path("$CONFIG_PATH")
-text = path.read_text()
-
-if "INIT_SQRT_PRICE_X96=" not in text:
-    # append if missing
-    text += "\nINIT_SQRT_PRICE_X96=$SQRT_PRICE_X96\n"
-else:
-    text = re.sub(r"^INIT_SQRT_PRICE_X96=.*$", f"INIT_SQRT_PRICE_X96=$SQRT_PRICE_X96", text, flags=re.M)
-
-path.write_text(text)
-print(f"Wrote INIT_SQRT_PRICE_X96 to ./{path}")
-PY
-fi

@@ -49,7 +49,7 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-load_pool_config "${CHAIN}"
+load_hook_config "${CHAIN}"
 resolve_private_key
 resolve_rpc
 

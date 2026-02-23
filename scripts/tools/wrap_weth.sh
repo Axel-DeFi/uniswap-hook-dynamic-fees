@@ -30,7 +30,7 @@ if [[ -z "${AMOUNT_ETH}" ]]; then
   exit 1
 fi
 
-load_pool_config "${CHAIN}"
+load_hook_config "${CHAIN}"
 resolve_private_key
 resolve_rpc
 

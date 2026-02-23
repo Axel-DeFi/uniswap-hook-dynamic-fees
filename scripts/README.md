@@ -24,10 +24,12 @@ All scripts support an optional chain selector:
 
 ### Config files
 
-Scripts load configuration from:
+Scripts load configuration from a single source of truth:
 
-- Hook deployment: `./config/hook.<chain>.conf` (preferred) or `./config/hook.conf` (fallback)
-- Pool creation: `./config/pool.<chain>.conf` (preferred) or `./config/pool.conf` (fallback)
+- `./config/hook.<chain>.conf` (preferred) or `./config/hook.conf` (fallback)
+
+For pool initialization, provide:
+- `INIT_PRICE_USD` — stable per 1 volatile token (used to derive `INIT_SQRT_PRICE_X96` automatically)
 
 You can also pass `--rpc-url <...>` or a positional RPC URL; CLI overrides config.
 
@@ -43,7 +45,7 @@ export SKIP_DECIMALS_CHECK=1
 ### Outputs
 
 - Hook deployment output: `./scripts/out/deploy.<chain>.json`
-- Pool creation reads the hook address from the deploy JSON unless `HOOK_ADDRESS` is set in `pool.conf`.
+- Pool creation reads the hook address from the deploy JSON unless `HOOK_ADDRESS` is set in the hook config.
 - Foundry script broadcast logs: `./scripts/out/broadcast/`
 - Foundry script cache: `./scripts/out/cache/`
 
@@ -70,7 +72,7 @@ export SKIP_DECIMALS_CHECK=1
 
 Required:
 
-- `HOOK_ADDRESS`, `TOKEN0`, `TOKEN1`, `TICK_SPACING`, `PRIVATE_KEY` from `config/pool.<chain>.conf` (+ `.env` key interpolation).
+- `HOOK_ADDRESS`, `TOKEN0`, `TOKEN1`, `TICK_SPACING`, `PRIVATE_KEY` from `config/hook.<chain>.conf` (+ `.env` key interpolation).
 - `PoolSwapTest` helper address, passed via `--swap-test-address`, `SWAP_TEST_ADDRESS`, or autodetected from
   `scripts/out/broadcast/03_PoolSwapTest.s.sol/<chainId>/run-latest.json`.
 

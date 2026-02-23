@@ -78,16 +78,15 @@ The guardian can pause/unpause the algorithm, but cannot set arbitrary fees.
 - `pause()`:
   - Freezes model updates.
   - Resets volumes/EMA and sets the **target fee tier** to `pauseFeeIdx`.
-  - Applies the target fee **immediately** via `PoolManager.unlock()` if the pool is already initialized.
-  - If called before pool initialization, keeps a one-shot pending update that is resolved on init.
+  - If the pool is initialized, applies the fee **immediately** via `PoolManager.updateDynamicLPFee(...)` (called directly by the hook).
+  - If called before pool initialization, it only updates the hook state; `afterInitialize` will set `pauseFeeIdx` as the initial fee.
+
 - `unpause()`:
   - Resets volumes/EMA and sets target to `initialFeeIdx`.
-  - Applies the target fee **immediately** via `PoolManager.unlock()` if the pool is already initialized.
-  - If called before pool initialization, keeps a one-shot pending update that is resolved on init.
+  - If the pool is initialized, applies the fee **immediately** via `PoolManager.updateDynamicLPFee(...)` (called directly by the hook).
+  - If called before pool initialization, it only updates the hook state; `afterInitialize` will set `initialFeeIdx` as the initial fee.
 
-**Important:** Pause/unpause do not call `updateDynamicLPFee` directly.
-They enter the manager lock context with `PoolManager.unlock()`, and the hook applies the update in `unlockCallback`.
-This keeps the update path safe while still making pause/unpause immediate for initialized pools.
+**Important:** There is no deferred/pending pause apply. Pause/unpause are immediate for initialized pools and deterministic for pre-init calls.
 
 ## Storage and packing
 
@@ -98,7 +97,6 @@ All per-pool state is packed into a single `uint256`:
 - `feeIdx` (uint8)
 - `lastDir` (2 bits)
 - `paused` bit
-- `pauseApplyPending` bit
 
 This keeps updates efficient and minimizes SSTOREs.
 

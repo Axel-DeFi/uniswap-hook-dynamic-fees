@@ -64,6 +64,6 @@ Yes, as long as the pool has a stable (USD proxy) token on one side and you conf
 ## Does pause/unpause apply immediately?
 
 Yes, for initialized pools.
-`pause()` / `unpause()` enter `PoolManager.unlock()` and apply the fee in the hook callback immediately in the same transaction.
+`pause()` / `unpause()` call `PoolManager.updateDynamicLPFee(...)` directly (the PoolManager authorizes the hook address as the caller).
 
-If called before pool initialization, the hook keeps a pending flag and finalizes state on initialize.
+If called before pool initialization, the hook only updates its internal state; `afterInitialize` will set the correct initial fee based on the paused flag.
