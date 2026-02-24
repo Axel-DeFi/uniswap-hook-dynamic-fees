@@ -1,0 +1,168 @@
+diff --git a/config/hook.sepolia.conf b/config/hook.sepolia.conf
+new file mode 100644
+--- /dev/null
++++ b/config/hook.sepolia.conf
+@@
++# Hook deployment config (dotenv-style KEY=VALUE)
++# Chain: Ethereum Sepolia
++#
++# This file is intentionally minimal. Copy your strategy params from your main hook config.
++
++# RPC endpoint for this chain (optional if you pass it on CLI)
++RPC_URL=
++
++# Network
++POOL_MANAGER=
++
++# Pool binding (explicit roles, no guessing)
++VOLATILE=
++STABLE=
++STABLE_DECIMALS=6
++TICK_SPACING=10
++
++# Init (human price: STABLE per 1 VOLATILE)
++INIT_PRICE_USD=
++
++# Deployer (required for --broadcast)
++PRIVATE_KEY=${DEFAULT_PRIVATE_KEY:-}
++
+diff --git a/scripts/check_config.sh b/scripts/check_config.sh
+new file mode 100755
+--- /dev/null
++++ b/scripts/check_config.sh
+@@
++#!/usr/bin/env bash
++set -euo pipefail
++
++CFG="${1:-}"
++if [[ -z "$CFG" ]]; then
++  echo "Usage: $0 <path-to-config>"
++  exit 1
++fi
++
++if [[ ! -f "$CFG" ]]; then
++  echo "Config not found: $CFG"
++  exit 1
++fi
++
++# shellcheck disable=SC1090
++source "$CFG"
++
++required=(
++  "POOL_MANAGER"
++  "VOLATILE"
++  "STABLE"
++  "STABLE_DECIMALS"
++  "TICK_SPACING"
++  "INIT_PRICE_USD"
++)
++
++missing=0
++for k in "${required[@]}"; do
++  if [[ -z "${!k:-}" ]]; then
++    echo "Missing/empty: $k"
++    missing=1
++  fi
++done
++
++if [[ "$missing" -ne 0 ]]; then
++  echo "Config validation FAILED"
++  exit 1
++fi
++
++echo "Config validation OK"
++echo "  VOLATILE=$VOLATILE"
++echo "  STABLE=$STABLE"
++echo "  STABLE_DECIMALS=$STABLE_DECIMALS"
++echo "  TICK_SPACING=$TICK_SPACING"
++echo "  INIT_PRICE_USD=$INIT_PRICE_USD"
++
+diff --git a/scripts/migrate_hook_conf_to_volatile_stable.sh b/scripts/migrate_hook_conf_to_volatile_stable.sh
+new file mode 100755
+--- /dev/null
++++ b/scripts/migrate_hook_conf_to_volatile_stable.sh
+@@
++#!/usr/bin/env bash
++set -euo pipefail
++
++CFG="${1:-}"
++if [[ -z "$CFG" ]]; then
++  echo "Usage: $0 <path-to-hook.conf>"
++  exit 1
++fi
++
++if [[ ! -f "$CFG" ]]; then
++  echo "Config not found: $CFG"
++  exit 1
++fi
++
++ts="$(date +%Y%m%d_%H%M%S)"
++bak="${CFG}.bak.${ts}"
++cp -p "$CFG" "$bak"
++echo "Backup: $bak"
++
++# Load existing values (best-effort) to prefill new vars.
++# shellcheck disable=SC1090
++source "$CFG" || true
++
++volatile="${VOLATILE:-${TOKEN_A:-${TOKEN0:-}}}"
++stable="${STABLE:-${TOKEN_B:-${TOKEN1:-${STABLE_TOKEN:-}}}}"
++stable_decimals="${STABLE_DECIMALS:-6}"
++tick_spacing="${TICK_SPACING:-10}"
++
++tmp="$(mktemp)"
++
++# Remove legacy bindings if present; keep everything else intact.
++grep -vE '^(TOKEN0|TOKEN1|TOKEN_A|TOKEN_B|STABLE|VOLATILE|STABLE_DECIMALS)=' "$CFG" > "$tmp"
++
++cat >> "$tmp" <<EOF
++
++# Pool binding (explicit roles, no guessing)
++VOLATILE=${volatile}
++STABLE=${stable}
++STABLE_DECIMALS=${stable_decimals}
++TICK_SPACING=${tick_spacing}
++
++# Compatibility aliases for existing scripts (do not edit)
++TOKEN_A=\${VOLATILE}
++TOKEN_B=\${STABLE}
++EOF
++
++mv "$tmp" "$CFG"
++echo "Updated: $CFG"
++
++echo
++echo "Next:"
++echo "  ./scripts/check_config.sh $CFG"
++
+diff --git a/scripts/test_fast.sh b/scripts/test_fast.sh
+new file mode 100755
+--- /dev/null
++++ b/scripts/test_fast.sh
+@@
++#!/usr/bin/env bash
++set -euo pipefail
++
++# Fast profile (before deployment): quick confidence + gas visibility.
++forge fmt --check
++forge test --gas-report
++
+diff --git a/scripts/test_nightly.sh b/scripts/test_nightly.sh
+new file mode 100755
+--- /dev/null
++++ b/scripts/test_nightly.sh
+@@
++#!/usr/bin/env bash
++set -euo pipefail
++
++# Nightly profile: deeper fuzz + invariants + gas regression checks.
++FOUNDRY_FUZZ_RUNS=5000 \
++FOUNDRY_INVARIANT_RUNS=256 \
++FOUNDRY_INVARIANT_DEPTH=256 \
++forge test --gas-report
++
++# Optional: if you maintain gas snapshots, enforce them here.
++if ls .gas-snapshot 1>/dev/null 2>&1; then
++  forge snapshot --check
++fi
++
