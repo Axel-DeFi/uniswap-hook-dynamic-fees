@@ -26,9 +26,9 @@ fi
 #
 # Notes:
 # - This script sends real transactions (broadcast only).
-# - Designed for Arbitrum Sepolia setup used in this repository.
+# - Designed for local/sepolia/prod flows in this repository.
 
-CHAIN="arbitrum"
+CHAIN="local"
 RPC_URL=""
 SWAP_TEST_ADDRESS="${SWAP_TEST_ADDRESS:-}"
 STATE_VIEW_ADDRESS="${STATE_VIEW_ADDRESS:-}"
@@ -37,6 +37,12 @@ HOOK_ADDRESS_OVERRIDE=""
 HIGH_SWAP_AMOUNT="${HIGH_SWAP_AMOUNT:-}"
 LOW_SWAP_AMOUNT="${LOW_SWAP_AMOUNT:-}"
 POLL_SECONDS=20
+
+# Compatibility with orchestrator:
+# - Orchestrator may pass --private-key and --broadcast (forge-style). This script uses cast and treats --broadcast as a no-op.
+PRIVATE_KEY_CLI=""
+HAS_BROADCAST=0
+DRY_RUN=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -53,6 +59,9 @@ Options:
   --high-amount <int>          Fixed amountSpecified for U1_HIGH (optional).
   --low-amount <int>           Fixed amountSpecified for LOW steps (optional).
   --poll-seconds <int>         Poll interval while waiting period close (default: 20).
+  --private-key <hex>           Signer key (optional if PRIVATE_KEY is in config).
+  --broadcast                    Required to send transactions (no-op flag for compatibility).
+  --dry-run                      Skip sending transactions.
 EOF
       exit 0
       ;;
@@ -95,6 +104,19 @@ EOF
       POLL_SECONDS="${2:-}"
       if [[ -z "${POLL_SECONDS}" ]]; then echo "ERROR: --poll-seconds requires a value"; exit 1; fi
       shift 2
+      ;;
+    --private-key)
+      PRIVATE_KEY_CLI="${2:-}"
+      if [[ -z "${PRIVATE_KEY_CLI}" ]]; then echo "ERROR: --private-key requires a value"; exit 1; fi
+      shift 2
+      ;;
+    --broadcast)
+      HAS_BROADCAST=1
+      shift
+      ;;
+    --dry-run|dry)
+      DRY_RUN=1
+      shift
       ;;
     *)
       echo "ERROR: unknown argument: $1"
@@ -139,23 +161,28 @@ if [[ -z "${HOOK_ADDRESS:-}" ]]; then
   exit 1
 fi
 
-if [[ -z "${TOKEN0:-}" || -z "${TOKEN1:-}" || -z "${TICK_SPACING:-}" ]]; then
-  echo "ERROR: TOKEN0, TOKEN1 and TICK_SPACING must be set in ${HOOK_CONF}."
+if [[ -z "${VOLATILE:-}" || -z "${STABLE:-}" || -z "${STABLE_DECIMALS:-}" || -z "${TICK_SPACING:-}" ]]; then
+  echo "ERROR: VOLATILE, STABLE, STABLE_DECIMALS and TICK_SPACING must be set in ${HOOK_CONF}."
   exit 1
 fi
 
+if [[ -n "${PRIVATE_KEY_CLI}" ]]; then
+  PRIVATE_KEY="${PRIVATE_KEY_CLI}"
+fi
+
+if [[ "${DRY_RUN}" -eq 1 || "${HAS_BROADCAST}" -eq 0 ]]; then
+  echo "==> simulate_fee_cycle: skipping (dry-run or no --broadcast)."
+  exit 0
+fi
+
 if [[ -z "${PRIVATE_KEY:-}" ]]; then
-  echo "ERROR: PRIVATE_KEY must be set (via ${HOOK_CONF} env interpolation from .env)."
+  echo "ERROR: PRIVATE_KEY must be set (via ${HOOK_CONF} or --private-key)."
   exit 1
 fi
 DEPLOYER="$(cast_rpc wallet address --private-key "${PRIVATE_KEY}" | awk '{print $1}')"
 if [[ -z "${DEPLOYER}" ]]; then
   echo "ERROR: failed to derive deployer address from PRIVATE_KEY."
   exit 1
-fi
-
-if [[ -z "${SWAP_TEST_ADDRESS}" ]]; then
-  SWAP_TEST_ADDRESS="${ARBITRUM_SWAP_TEST_ADDRESS:-}"
 fi
 
 if [[ -z "${SWAP_TEST_ADDRESS}" ]]; then
@@ -181,8 +208,8 @@ PY
 fi
 
 if [[ -z "${SWAP_TEST_ADDRESS}" ]]; then
-  echo "ERROR: missing PoolSwapTest address. Pass --swap-test-address or set SWAP_TEST_ADDRESS."
-  exit 1
+  echo "==> simulate_fee_cycle: SWAP_TEST_ADDRESS not set, skipping."
+  exit 0
 fi
 
 SWAP_TEST_CODE_SIZE="$(cast_rpc code --rpc-url "${RPC_URL}" "${SWAP_TEST_ADDRESS}" | wc -c | xargs)"
@@ -191,17 +218,15 @@ if [[ "${SWAP_TEST_CODE_SIZE}" -le 3 ]]; then
   exit 1
 fi
 
-if [[ -z "${STATE_VIEW_ADDRESS}" && "${CHAIN}" == "arbitrum" ]]; then
-  # Known deployment used by this project on Arbitrum Sepolia.
-  STATE_VIEW_ADDRESS="0x9D467FA9062b6e9B1a46E26007aD82db116c67cB"
-fi
+CURRENCY0="${VOLATILE}"
+CURRENCY1="${STABLE}"
 
-TOKEN0_LC="$(printf '%s' "${TOKEN0}" | tr '[:upper:]' '[:lower:]')"
-TOKEN1_LC="$(printf '%s' "${TOKEN1}" | tr '[:upper:]' '[:lower:]')"
-if [[ "${TOKEN0_LC}" > "${TOKEN1_LC}" ]]; then
-  T_SWAP="${TOKEN0}"
-  TOKEN0="${TOKEN1}"
-  TOKEN1="${T_SWAP}"
+CURRENCY0_LC="$(printf '%s' "${CURRENCY0}" | tr '[:upper:]' '[:lower:]')"
+CURRENCY1_LC="$(printf '%s' "${CURRENCY1}" | tr '[:upper:]' '[:lower:]')"
+if [[ "${CURRENCY0_LC}" > "${CURRENCY1_LC}" ]]; then
+  T_SWAP="${CURRENCY0}"
+  CURRENCY0="${CURRENCY1}"
+  CURRENCY1="${T_SWAP}"
 fi
 
 DYNAMIC_FEE_FLAG=8388608
@@ -210,7 +235,7 @@ SQRT_PRICE_LIMIT_X96=4295128740
 SWAP_ZERO_FOR_ONE=true
 TEST_SETTINGS="(false,false)"
 SWAP_SIG="swap((address,address,uint24,int24,address),(bool,int256,uint160),(bool,bool),bytes)(bytes32)"
-POOL_KEY="(${TOKEN0},${TOKEN1},${DYNAMIC_FEE_FLAG},${TICK_SPACING},${HOOK_ADDRESS})"
+POOL_KEY="(${CURRENCY0},${CURRENCY1},${DYNAMIC_FEE_FLAG},${TICK_SPACING},${HOOK_ADDRESS})"
 
 PERIOD_SECONDS="$(cast_rpc call --rpc-url "${RPC_URL}" "${HOOK_ADDRESS}" "periodSeconds()(uint32)" | awk '{print $1}')"
 if [[ -z "${PERIOD_SECONDS}" || "${PERIOD_SECONDS}" -le 0 ]]; then
@@ -277,7 +302,7 @@ amount_for_target_vol() {
   # Approximation: ~2 USDC per 1 USD of target period volume.
   amount=$(( (target_vol + 1) / 2 ))
   if (( amount < 100 )); then amount=100; fi
-  bal_raw="$(cast_rpc call --rpc-url "${RPC_URL}" "${TOKEN0}" "balanceOf(address)(uint256)" "${DEPLOYER}" | awk '{print $1}')"
+  bal_raw="$(cast_rpc call --rpc-url "${RPC_URL}" "${CURRENCY0}" "balanceOf(address)(uint256)" "${DEPLOYER}" | awk '{print $1}')"
   if [[ -n "${bal_raw}" && "${bal_raw}" =~ ^[0-9]+$ ]]; then
     max_amount=$(( bal_raw * 80 / 100 ))
     if (( max_amount > 0 && amount > max_amount )); then
