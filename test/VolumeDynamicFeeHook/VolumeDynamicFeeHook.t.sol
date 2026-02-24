@@ -15,7 +15,7 @@ import {Hooks} from "@uniswap/v4-core/src/libraries/Hooks.sol";
 import {HookMiner} from "@uniswap/v4-hooks-public/src/utils/HookMiner.sol";
 
 import {VolumeDynamicFeeHook} from "src/VolumeDynamicFeeHook.sol";
-import {MockPoolManager} from "test/mocks/MockPoolManager.sol";
+import {MockPoolManager} from "./mocks/MockPoolManager.sol";
 
 /// @notice Minimal security-hardening tests:
 /// - Deploy hook locally with correct v4 address flags (CREATE2 + mined salt)

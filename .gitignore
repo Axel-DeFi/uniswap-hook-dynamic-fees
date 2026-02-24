@@ -2,11 +2,11 @@
 out/
 cache/
 broadcast/
-scripts/out/cache/
-scripts/out/broadcast/
+scripts/out/
 
 # OS / IDE
 .DS_Store
+__MACOSX/
 .vscode/
 
 # Secrets

@@ -13,7 +13,7 @@ import {Hooks} from "@uniswap/v4-core/src/libraries/Hooks.sol";
 import {LPFeeLibrary} from "@uniswap/v4-core/src/libraries/LPFeeLibrary.sol";
 
 import {VolumeDynamicFeeHook} from "src/VolumeDynamicFeeHook.sol";
-import {MockPoolManager} from "test/mocks/MockPoolManager.sol";
+import {MockPoolManager} from "./mocks/MockPoolManager.sol";
 
 /// @notice Harness that bypasses permission-bit address validation to isolate constructor config checks.
 contract VolumeDynamicFeeHookHarness is VolumeDynamicFeeHook {

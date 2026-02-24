@@ -1,91 +1,88 @@
 # Scripts
 
-This project uses plain-text `.conf` files in `./config/` and a small set of shell scripts in `./scripts/`.
+This repository uses a small set of shell + Foundry scripts to:
+1) deploy the Uniswap v4 hook (CREATE2 mined address with hook flags),
+2) create + initialize a dynamic-fee pool,
+3) run the same test suite across environments.
 
-## Structure
+## Configuration
 
-- `deploy_hook.sh` — deploys the hook (CREATE2-mined address with correct permission bits)
-- `create_pool.sh` — creates + initializes the Uniswap v4 pool (dynamic fee flag) using a deployed hook
-- `deploy.sh` — one-shot convenience wrapper: deploy hook, then create + initialize pool
-- `foundry/` — Foundry Solidity scripts used internally by the shell scripts
-- `tools/` — manual helper scripts for human on-chain interaction (approve/liquidity/swap/wrap)
-- `scripts/out/` — script outputs, cache, and broadcast artifacts
-- `out/` — Foundry build artifacts
+All scripts read dotenv-style config files from `./config/`.
 
-## Usage
+### Pool binding (explicit roles)
 
-All scripts support an optional chain selector:
+We **do not** rely on `TOKEN0/TOKEN1` in configs anymore. Use:
 
-```bash
-./scripts/deploy_hook.sh --chain arbitrum --broadcast
-./scripts/create_pool.sh --chain arbitrum --broadcast
-./scripts/deploy.sh --chain arbitrum --broadcast
-```
+- `VOLATILE` — the risky asset (e.g. WETH)
+- `STABLE` — USD-like token used as the unit for `INIT_PRICE_USD`
+- `STABLE_DECIMALS` — decimals for `STABLE` (usually 6)
+- `TICK_SPACING` — pool tick spacing
 
-### Config files
+### Init price
 
-Scripts load configuration from a single source of truth:
+Use a human price:
 
-- `./config/hook.<chain>.conf` (preferred) or `./config/hook.conf` (fallback)
+- `INIT_PRICE_USD` — interpreted as **STABLE per 1 VOLATILE**
 
-For pool initialization, provide:
-- `INIT_PRICE_USD` — stable per 1 volatile token (used to derive `INIT_SQRT_PRICE_X96` automatically)
+Scripts will automatically:
+- sort currencies by address to derive `currency0/currency1` (PoolKey ordering),
+- convert `INIT_PRICE_USD` into `INIT_SQRT_PRICE_X96` for pool initialization.
 
-You can also pass `--rpc-url <...>` or a positional RPC URL; CLI overrides config.
+### Secrets
 
-### Stable decimals safety check
+Secrets should live in `./.env` (repo root). Typical variables:
 
-`deploy_hook.sh` verifies `STABLE_DECIMALS` matches the token's on-chain `decimals()` call.
-To bypass (not recommended), set:
+- `DEFAULT_PRIVATE_KEY` — deployer key (used by configs via `PRIVATE_KEY=${DEFAULT_PRIVATE_KEY:-}`)
+- `DEFAULT_GUARDIAN` — guardian address (optional)
 
-```bash
-export SKIP_DECIMALS_CHECK=1
-```
+## Unified test runner
 
-### Outputs
+Single entry point:
 
-- Hook deployment output: `./scripts/out/deploy.<chain>.json`
-- Pool creation reads the hook address from the deploy JSON unless `HOOK_ADDRESS` is set in the hook config.
-- Foundry script broadcast logs: `./scripts/out/broadcast/`
-- Foundry script cache: `./scripts/out/cache/`
+- `./test/scripts/test_run.sh <local|sepolia|prod> <fast|full> [chain] [--dry-run] [--anvil-port <port>]`
 
-## Notes
+Examples:
 
-- Foundry build artifacts are written under `./out` (see `foundry.toml`).
-- For verification options (`--verify` etc.), pass flags through to the underlying `forge script` command.
+- Local (Anvil fork of Sepolia):
+  - `./test/scripts/test_run.sh local fast`
+  - `./test/scripts/test_run.sh local full --anvil-port 8546`
 
+- Sepolia (live):
+  - `./test/scripts/test_run.sh sepolia fast --dry-run`
+  - `./test/scripts/test_run.sh sepolia fast`
 
-## Apply pending pause/unpause immediately
+Notes:
+- `fast` is a quick pre-deploy gate.
+- `full` is a deeper run (more coverage / stress).
 
-- `./scripts/apply_pending_pause.sh --chain <chain> [<rpc_url>] [--broadcast]`
-  Applies any still-pending pause/unpause update via PoolManager.unlock.
-  Normally pause/unpause are already immediate for initialized pools; this is mainly a recovery helper.
+## Core scripts
 
-## Dynamic fee cycle simulation (manual run + report)
+### Deploy hook
 
-- `./scripts/simulate_fee_cycle.sh --chain <chain> [--rpc-url <url>] [--swap-test-address <addr>]`
-  Runs a full live sequence on the configured hook/pool with adaptive swap sizing from current EMA:
-  1. force an `UP` move,
-  2. reversal-lock check (fee/index unchanged),
-  3. force a `DOWN` move.
-  Prints the final report directly to console (stdout), including tx hashes and before/after states.
+`./scripts/deploy_hook.sh --chain <chain> --rpc-url <url> --private-key <pk> --broadcast`
 
-Required:
+This runs the Foundry script:
 
-- `HOOK_ADDRESS`, `TOKEN0`, `TOKEN1`, `TICK_SPACING`, `PRIVATE_KEY` from `config/hook.<chain>.conf` (+ `.env` key interpolation).
-- `PoolSwapTest` helper address, passed via `--swap-test-address`, `SWAP_TEST_ADDRESS`, or autodetected from
-  `scripts/out/broadcast/03_PoolSwapTest.s.sol/<chainId>/run-latest.json`.
+- `scripts/foundry/DeployHook.s.sol`
 
-## Manual interaction tools
+Outputs:
+- `./scripts/out/deploy.<chain>.json` (contains the deployed hook address)
 
-- See `./scripts/tools/README.md` for step-by-step manual flows.
-- Quick commands:
-  - `./scripts/tools/wrap_weth.sh --chain ethereum --amount-eth 0.1`
-  - `./scripts/tools/approve_tokens.sh --chain ethereum --spender both`
-  - `./scripts/tools/add_liquidity.sh --chain ethereum --liquidity 1000000000000000`
-  - `./scripts/tools/swap.sh --chain ethereum --amount 1000000 --zero-for-one true`
+### Create + initialize pool
 
-## Script separation
+`./scripts/create_pool.sh --chain <chain> --rpc-url <url> --private-key <pk> --broadcast`
 
-> `/scripts` contains production/ops scripts only.
-> Test-only scripts live under `/test/scripts` and `/test/foundry`.
+This:
+- reads `VOLATILE/STABLE/INIT_PRICE_USD` from config,
+- computes `INIT_SQRT_PRICE_X96`,
+- reads hook address from `./scripts/out/deploy.<chain>.json` if `HOOK_ADDRESS` is not set,
+- runs the Foundry script:
+  - `scripts/foundry/CreatePool.s.sol`
+
+## Outputs
+
+Runtime artifacts are stored under:
+
+- `./scripts/out/` — deploy JSON and Forge broadcast/cache outputs
+
+These are runtime outputs and typically should not be committed.
