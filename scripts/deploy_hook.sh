@@ -1,166 +1,155 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Auto-load local .env (ignored by git) if present.
-if [[ -f "./.env" ]]; then
-  set -a
-  # shellcheck disable=SC1091
-  source "./.env"
-  set +a
-fi
-
-# Deploy the hook (CREATE2 mined for permission bits) using Foundry Solidity script.
+# Deploy hook (CREATE2-mined address with required v4 hook flags).
 #
 # Usage:
-#   ./scripts/deploy_hook.sh --chain <chain> [<rpc_url>] [--broadcast] [--verify]
-#   ./scripts/deploy_hook.sh [<rpc_url>] [--broadcast] [--verify]          # uses config/hook.conf
+#   ./scripts/deploy_hook.sh --chain <chain> [--rpc-url <url>] [--private-key <hex>] [--broadcast] [--verify]
+#
+# If run with no args, prints this help.
 #
 # Config:
-#   - ./config/hook.<chain>.conf (preferred) or ./config/hook.conf (fallback)
-# Output:
-#   - ./scripts/out/deploy.<chain>.json (or ./scripts/out/deploy.json if chain not set)
+#   - local   -> ./config/hook.local.conf
+#   - sepolia -> ./config/hook.sepolia.conf
+#   - other   -> ./config/hook.<chain>.conf
 #
-# Notes:
-# - If RPC_URL is set in the config, you can omit <rpc_url> on the CLI.
-# - This script sets DEPLOY_JSON_PATH for the Solidity script, so the output path is deterministic.
+# Required config keys:
+#   POOL_MANAGER, VOLATILE, STABLE, STABLE_DECIMALS, TICK_SPACING
+#   INITIAL_FEE_IDX, FLOOR_IDX, CAP_IDX
+#   PERIOD_SECONDS, EMA_PERIODS, DEADBAND_BPS, LULL_RESET_SECONDS
+#   PAUSE_FEE_IDX
+#
+# Guardian behavior:
+#   - If GUARDIAN is empty after sourcing config + .env, it defaults to the deployer address.
+
+usage() {
+  cat <<'EOF'
+Usage:
+  ./scripts/deploy_hook.sh --chain <chain> [--rpc-url <url>] [--private-key <hex>] [--broadcast] [--verify]
+
+Examples:
+  ./scripts/deploy_hook.sh --chain local --rpc-url http://127.0.0.1:8545 --private-key <pk> --broadcast
+  ./scripts/deploy_hook.sh --chain sepolia --rpc-url https://ethereum-sepolia-rpc.publicnode.com --private-key <pk> --broadcast
+
+Notes:
+  - Output JSON is written to ./scripts/out/deploy.<chain>.json
+EOF
+}
+
+if [[ $# -eq 0 ]]; then
+  usage
+  exit 0
+fi
+
+lower() { printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]'; }
 
 CHAIN=""
-RPC_URL=""
-PASSTHROUGH=()
+RPC_URL_CLI=""
+PRIVATE_KEY_CLI=""
+BROADCAST=0
+VERIFY=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --chain)
-      CHAIN="${2:-}"
-      if [[ -z "${CHAIN}" ]]; then echo "ERROR: --chain requires a value"; exit 1; fi
-      shift 2
-      ;;
-    --rpc-url)
-      RPC_URL="${2:-}"
-      if [[ -z "${RPC_URL}" ]]; then echo "ERROR: --rpc-url requires a value"; exit 1; fi
-      shift 2
-      ;;
-    -*)
-      PASSTHROUGH+=("$1")
-      shift
-      ;;
-    *)
-      # positional rpc url (optional)
-      if [[ -z "${RPC_URL}" ]]; then
-        RPC_URL="$1"
-        shift
-      else
-        PASSTHROUGH+=("$1")
-        shift
-      fi
-      ;;
+    --chain) CHAIN="${2:-}"; shift 2 ;;
+    --rpc-url) RPC_URL_CLI="${2:-}"; shift 2 ;;
+    --private-key) PRIVATE_KEY_CLI="${2:-}"; shift 2 ;;
+    --broadcast) BROADCAST=1; shift ;;
+    --verify) VERIFY=1; shift ;;
+    -h|--help) usage; exit 0 ;;
+    *) echo "Unknown arg: $1" >&2; usage; exit 1 ;;
   esac
 done
 
-CLI_RPC_URL="${RPC_URL}"
-
-HOOK_CONF="./config/hook.conf"
-if [[ -n "${CHAIN}" ]]; then
-  CHAIN_HOOK_CONF="./config/hook.${CHAIN}.conf"
-  if [[ -f "${CHAIN_HOOK_CONF}" ]]; then
-    HOOK_CONF="${CHAIN_HOOK_CONF}"
-  fi
-fi
-
-if [[ ! -f "${HOOK_CONF}" ]]; then
-  echo "ERROR: missing ${HOOK_CONF}"
+CHAIN="$(lower "${CHAIN:-}")"
+if [[ -z "$CHAIN" ]]; then
+  echo "ERROR: --chain is required" >&2
+  usage
   exit 1
 fi
 
-set -a
+# Auto-load .env (repo root) if present, so configs can reference DEFAULT_PRIVATE_KEY, DEFAULT_GUARDIAN, etc.
+if [[ -f "./.env" ]]; then
+  # shellcheck disable=SC1091
+  source "./.env"
+fi
+
+HOOK_CONF="./config/hook.${CHAIN}.conf"
+if [[ "$CHAIN" == "local" ]]; then
+  HOOK_CONF="./config/hook.local.conf"
+elif [[ "$CHAIN" == "sepolia" ]]; then
+  HOOK_CONF="./config/hook.sepolia.conf"
+fi
+
+if [[ ! -f "$HOOK_CONF" ]]; then
+  echo "ERROR: config not found: $HOOK_CONF" >&2
+  exit 1
+fi
+
 # shellcheck disable=SC1090
-source "${HOOK_CONF}"
+set -a
+source "$HOOK_CONF"
 set +a
 
-# Resolve RPC URL: CLI > config RPC_URL
-CONFIG_RPC_URL="${RPC_URL:-}"
-RPC_URL="${CLI_RPC_URL:-${CONFIG_RPC_URL:-}}"
-if [[ -z "${RPC_URL}" ]]; then
-  echo "ERROR: RPC URL not provided. Set RPC_URL in ${HOOK_CONF} or pass it as an argument."
+RPC_URL="${RPC_URL_CLI:-${RPC_URL:-}}"
+PRIVATE_KEY="${PRIVATE_KEY_CLI:-${PRIVATE_KEY:-}}"
+
+if [[ -z "${RPC_URL:-}" ]]; then
+  echo "ERROR: RPC_URL missing (config or --rpc-url)" >&2
   exit 1
 fi
 
-if [[ -z "${POOL_MANAGER:-}" ]]; then
-  echo "ERROR: POOL_MANAGER must be set in ${HOOK_CONF}"
+if [[ "$BROADCAST" -ne 1 ]]; then
+  echo "==> deploy_hook: skipping (no --broadcast)" >&2
+  exit 0
+fi
+
+if [[ -z "${PRIVATE_KEY:-}" ]]; then
+  echo "ERROR: PRIVATE_KEY missing (config, .env DEFAULT_PRIVATE_KEY, or --private-key)" >&2
   exit 1
 fi
 
-GUARDIAN_LC="$(printf '%s' "${GUARDIAN:-}" | tr '[:upper:]' '[:lower:]')"
-if [[ ( -z "${GUARDIAN:-}" || "${GUARDIAN_LC}" == "0x0000000000000000000000000000000000000000" ) && -n "${PRIVATE_KEY:-}" ]]; then
-  DERIVED_GUARDIAN="$(cast wallet address --private-key "${PRIVATE_KEY}" 2>/dev/null || true)"
-  if [[ -n "${DERIVED_GUARDIAN}" ]]; then
-    GUARDIAN="${DERIVED_GUARDIAN}"
-    export GUARDIAN
-    GUARDIAN_LC="$(printf '%s' "${GUARDIAN}" | tr '[:upper:]' '[:lower:]')"
-    echo "==> GUARDIAN not set; using deployer address ${GUARDIAN}"
-  fi
-fi
-
-if [[ -z "${GUARDIAN:-}" || "${GUARDIAN_LC}" == "0x0000000000000000000000000000000000000000" ]]; then
-  echo "ERROR: GUARDIAN must be a non-zero address (set ARB_SEPOLIA_GUARDIAN in .env or GUARDIAN in ${HOOK_CONF})"
-  exit 1
-fi
-
-HAS_BROADCAST=0
-HAS_WALLET_FLAG=0
-for a in "${PASSTHROUGH[@]}"; do
-  case "$a" in
-    --broadcast) HAS_BROADCAST=1 ;;
-    --private-key|--private-keys|--mnemonics|--mnemonic-passphrases|--mnemonic-derivation-paths|--mnemonic-indexes|--keystore|--account|--ledger|--trezor|--unlocked|--sender)
-      HAS_WALLET_FLAG=1
-      ;;
-  esac
-done
-if [[ "${HAS_BROADCAST}" -eq 1 && "${HAS_WALLET_FLAG}" -eq 0 && -n "${PRIVATE_KEY:-}" ]]; then
-  PASSTHROUGH+=(--private-key "${PRIVATE_KEY}")
-fi
-if [[ "${HAS_BROADCAST}" -eq 1 && "${HAS_WALLET_FLAG}" -eq 0 && -z "${PRIVATE_KEY:-}" ]]; then
-  echo "ERROR: --broadcast requires a signer. Set PRIVATE_KEY/ARB_SEPOLIA_PRIVATE_KEY or pass a wallet flag."
-  exit 1
-fi
-
-# Optional safety: verify STABLE_DECIMALS matches the token's on-chain decimals().
-# Set SKIP_DECIMALS_CHECK=1 to bypass.
-if [[ "${SKIP_DECIMALS_CHECK:-0}" != "1" ]]; then
-  if [[ -z "${STABLE:-}" || -z "${STABLE_DECIMALS:-}" ]]; then
-    echo "ERROR: STABLE and STABLE_DECIMALS must be set in ${HOOK_CONF}"
+# Validate required variables
+required=(POOL_MANAGER VOLATILE STABLE STABLE_DECIMALS TICK_SPACING INITIAL_FEE_IDX FLOOR_IDX CAP_IDX PERIOD_SECONDS EMA_PERIODS DEADBAND_BPS LULL_RESET_SECONDS PAUSE_FEE_IDX)
+for k in "${required[@]}"; do
+  if [[ -z "${!k:-}" ]]; then
+    echo "ERROR: missing $k in $HOOK_CONF" >&2
     exit 1
   fi
+done
 
+# Default guardian to deployer if empty
+if [[ -z "${GUARDIAN:-}" ]]; then
+  GUARDIAN="$(cast wallet address --private-key "${PRIVATE_KEY}" | awk '{print $1}')"
+  export GUARDIAN
+  echo "==> GUARDIAN not set; defaulting to deployer: ${GUARDIAN}"
+fi
+
+# Optional safety: verify STABLE_DECIMALS matches on-chain decimals()
+if [[ -z "${SKIP_DECIMALS_CHECK:-}" ]]; then
   echo "==> Checking stable decimals for ${STABLE} ..."
   ONCHAIN_DECIMALS="$(cast call "${STABLE}" "decimals()(uint8)" --rpc-url "${RPC_URL}" 2>/dev/null || true)"
-  ONCHAIN_DECIMALS="$(echo "${ONCHAIN_DECIMALS}" | tr -d '\r' | tr -d '\n' | xargs)"
   if [[ -z "${ONCHAIN_DECIMALS}" ]]; then
-    echo "ERROR: failed to read decimals() for STABLE=${STABLE}. If this token does not implement decimals(), set SKIP_DECIMALS_CHECK=1."
+    echo "ERROR: failed to read decimals() for STABLE=${STABLE}. If this token does not implement decimals(), set SKIP_DECIMALS_CHECK=1." >&2
     exit 1
   fi
   if [[ "${ONCHAIN_DECIMALS}" != "${STABLE_DECIMALS}" ]]; then
-    echo "ERROR: STABLE_DECIMALS=${STABLE_DECIMALS} does not match on-chain decimals()=${ONCHAIN_DECIMALS} for STABLE=${STABLE}"
+    echo "ERROR: STABLE_DECIMALS=${STABLE_DECIMALS} does not match on-chain decimals()=${ONCHAIN_DECIMALS} for STABLE=${STABLE}" >&2
     exit 1
   fi
 fi
 
-OUT_PATH="./scripts/out/deploy.json"
-if [[ -n "${CHAIN}" ]]; then
-  OUT_PATH="./scripts/out/deploy.${CHAIN}.json"
-fi
-
+OUT_PATH="./scripts/out/deploy.${CHAIN}.json"
 mkdir -p ./scripts/out
 export DEPLOY_JSON_PATH="${OUT_PATH}"
 
-COMMON_ARGS=(--rpc-url "${RPC_URL}" -vvv "${PASSTHROUGH[@]}")
+COMMON_ARGS=(--rpc-url "${RPC_URL}" --private-key "${PRIVATE_KEY}")
+if [[ "$VERIFY" -eq 1 ]]; then
+  COMMON_ARGS+=(--verify)
+fi
+COMMON_ARGS+=(--broadcast)
 
 echo "==> Deploying hook (scripts/foundry/DeployHook.s.sol) using ${HOOK_CONF}"
 forge script scripts/foundry/DeployHook.s.sol "${COMMON_ARGS[@]}"
-
-if [[ ! -f "${OUT_PATH}" ]]; then
-  echo "ERROR: expected ${OUT_PATH} to be created"
-  exit 1
-fi
 
 echo "==> Wrote ${OUT_PATH}"
