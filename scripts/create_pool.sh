@@ -3,6 +3,9 @@ set -euo pipefail
 
 # Create+initialize a dynamic-fee pool using VOLATILE/STABLE + INIT_PRICE_USD.
 #
+# If INIT_PRICE_USD is empty in the config, this script will interactively ask for it
+# (only when --broadcast is provided and stdin is a TTY).
+#
 # Usage:
 #   ./scripts/create_pool.sh --chain <local|sepolia|...> [--rpc-url <url>] [--private-key <hex>] [--broadcast]
 #
@@ -11,7 +14,11 @@ set -euo pipefail
 #   - other  -> ./config/hook.<chain>.conf
 #
 # Requires in config:
-#   POOL_MANAGER, VOLATILE, STABLE, STABLE_DECIMALS, TICK_SPACING, INIT_PRICE_USD
+#   POOL_MANAGER, VOLATILE, STABLE, STABLE_DECIMALS, TICK_SPACING
+#
+# INIT_PRICE_USD:
+#   - interpreted as STABLE per 1 VOLATILE token
+#   - can be set in config OR provided interactively when missing
 #
 # HOOK_ADDRESS:
 #   - can be set in config
@@ -32,6 +39,9 @@ Usage:
 Examples:
   ./scripts/create_pool.sh --chain local --rpc-url http://127.0.0.1:8545 --private-key <pk> --broadcast
   ./scripts/create_pool.sh --chain sepolia --rpc-url https://ethereum-sepolia-rpc.publicnode.com --private-key <pk> --broadcast
+
+Notes:
+  - If INIT_PRICE_USD is empty in the config, the script will prompt you for it (only with --broadcast).
 EOF
 }
 
@@ -42,7 +52,7 @@ while [[ $# -gt 0 ]]; do
     --private-key) PRIVATE_KEY_CLI="${2:-}"; shift 2 ;;
     --broadcast) BROADCAST=1; shift ;;
     -h|--help) usage; exit 0 ;;
-    *) echo "Unknown arg: $1"; usage; exit 1 ;;
+    *) echo "Unknown arg: $1" >&2; usage; exit 1 ;;
   esac
 done
 
@@ -80,13 +90,43 @@ if [[ -z "${PRIVATE_KEY:-}" ]]; then
   exit 1
 fi
 
-required=(POOL_MANAGER VOLATILE STABLE STABLE_DECIMALS TICK_SPACING INIT_PRICE_USD)
+required=(POOL_MANAGER VOLATILE STABLE STABLE_DECIMALS TICK_SPACING)
 for k in "${required[@]}"; do
   if [[ -z "${!k:-}" ]]; then
     echo "ERROR: missing $k in $CFG" >&2
     exit 1
   fi
 done
+
+# Ask for INIT_PRICE_USD if missing.
+if [[ -z "${INIT_PRICE_USD:-}" ]]; then
+  if [[ -t 0 ]]; then
+    echo "==> INIT_PRICE_USD is empty in $CFG"
+    echo "    Enter a human price as STABLE per 1 VOLATILE."
+    echo "    Example for WETH/USDC: 3000"
+    tries=0
+    while true; do
+      tries=$((tries+1))
+      read -r -p "INIT_PRICE_USD = " input
+      input="$(echo "${input}" | tr -d '[:space:]')"
+      # Basic numeric validation (integer or decimal, > 0)
+      if [[ "$input" =~ ^[0-9]+([.][0-9]+)?$ ]] && [[ "$input" != "0" ]] && [[ "$input" != "0.0" ]]; then
+        INIT_PRICE_USD="$input"
+        export INIT_PRICE_USD
+        break
+      fi
+      echo "Invalid price. Please enter a positive number (e.g. 3000 or 0.1234)."
+      if [[ "$tries" -ge 5 ]]; then
+        echo "ERROR: too many invalid attempts." >&2
+        exit 1
+      fi
+    done
+  else
+    echo "ERROR: INIT_PRICE_USD is empty in $CFG and stdin is not interactive." >&2
+    echo "       Set INIT_PRICE_USD in the config or run interactively." >&2
+    exit 1
+  fi
+fi
 
 HOOK_ADDRESS="${HOOK_ADDRESS:-}"
 if [[ -z "$HOOK_ADDRESS" ]]; then
@@ -128,7 +168,6 @@ PY
   echo "==> Loaded HOOK_ADDRESS=$HOOK_ADDRESS from $deploy_json"
 fi
 
-# Compute INIT_SQRT_PRICE_X96 from INIT_PRICE_USD (STABLE per 1 VOLATILE)
 INIT_SQRT_PRICE_X96="$(./scripts/calc_init_sqrt_price.sh --config "$CFG" --rpc-url "$RPC_URL" --from-usd --sqrt-only)"
 if [[ -z "$INIT_SQRT_PRICE_X96" ]]; then
   echo "ERROR: failed to compute INIT_SQRT_PRICE_X96" >&2
