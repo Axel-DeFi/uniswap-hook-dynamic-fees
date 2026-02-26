@@ -54,6 +54,13 @@ Let:
 - `v` = closed period volume (USD6)
 - `ema` = EMA volume (USD6)
 
+EMA update rule (Wilder-style smoothing):
+- `n = emaPeriods`, `alpha = 1 / n`
+- If `ema == 0` and `v == 0`: `emaNext = 0`
+- If `ema == 0` and `v > 0`: `emaNext = v` (bootstrap)
+- Otherwise: `emaNext = (ema * (n - 1) + v) / n` (integer floor)
+- This is intentionally different from the "classic EMA" form `alpha = 2 / (n + 1)`.
+
 Compute ratio-like score implicitly and apply:
 - **Dust close filter**: close volume `v` is treated as `0` when `v <= 2_000_000` (USD6 units in this hook, equivalent to `$1` under current `2 * abs(stableAmount)` accounting).
 - **Deadband**: if `v` is within `± deadbandBps` of `ema`, keep the current fee tier.
@@ -123,6 +130,8 @@ Events are emitted only for meaningful transitions:
 - See `./scripts/README.md` for deployment and pool creation flows.
 - Use the `.conf` files in `./config/` to parameterize deployment per chain.
 - Constructor-enforced bounds include `2 <= emaPeriods <= 64`.
+- Supported integration target is Uniswap v4 `PoolManager` semantics where `updateDynamicLPFee(...)` is callable directly by the hook (not only in `unlock` callback context), with authorization by `msg.sender == key.hooks`.
+- If a custom/forked `PoolManager` changes that behavior, `afterInitialize` and `pause()/unpause()` fee application may revert; run integration tests against the exact manager build before deployment.
 
 ## Accepted risks and runbooks
 
