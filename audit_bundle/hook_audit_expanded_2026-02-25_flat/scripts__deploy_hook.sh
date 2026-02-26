@@ -21,6 +21,7 @@ set -euo pipefail
 #
 # Guardian behavior:
 #   - If GUARDIAN is empty after sourcing config + .env, it defaults to the deployer address.
+#   - If REQUIRE_GUARDIAN_CONTRACT=1, deployment fails when GUARDIAN is an EOA.
 
 usage() {
   cat <<'EOF'
@@ -123,6 +124,20 @@ if [[ -z "${GUARDIAN:-}" ]]; then
   GUARDIAN="$(cast wallet address --private-key "${PRIVATE_KEY}" | awk '{print $1}')"
   export GUARDIAN
   echo "==> GUARDIAN not set; defaulting to deployer: ${GUARDIAN}"
+fi
+
+# Optional safety: enforce contract-based guardian (e.g. multisig) in strict mode.
+GUARDIAN_CODE="$(cast code "${GUARDIAN}" --rpc-url "${RPC_URL}" 2>/dev/null || true)"
+if [[ -z "${GUARDIAN_CODE}" ]]; then
+  echo "ERROR: failed to fetch bytecode for GUARDIAN=${GUARDIAN}" >&2
+  exit 1
+fi
+if [[ "${GUARDIAN_CODE}" == "0x" ]]; then
+  if [[ "${REQUIRE_GUARDIAN_CONTRACT:-0}" == "1" ]]; then
+    echo "ERROR: GUARDIAN=${GUARDIAN} is an EOA; REQUIRE_GUARDIAN_CONTRACT=1 expects a contract address (recommended multisig)." >&2
+    exit 1
+  fi
+  echo "WARN: GUARDIAN=${GUARDIAN} appears to be an EOA. For production, use a multisig contract guardian."
 fi
 
 # Optional safety: verify STABLE_DECIMALS matches on-chain decimals()

@@ -7,6 +7,7 @@ Your task is to perform a deep, adversarial audit of this hook implementation, c
 
 Language requirement:
 - The full audit result must be written in Russian.
+- The final result must be provided as plain text output and additionally as a separate PDF file.
 
 ## Scope (audit only these files)
 - `src/VolumeDynamicFeeHook.sol`
@@ -43,6 +44,14 @@ Treat the following as intentional design choices, not automatic vulnerabilities
    - No multi-pool state mapping.
 
 6. Tick spacing is standardized to 10 in active configs (template reflects deployment intent).
+
+7. `emaPeriods` bounds are intentionally enforced on-chain (`2 <= emaPeriods <= 64`).
+   - Treat this as a hard safety invariant, not a missing-validation issue.
+
+8. Dust/zero-activity behavior is intentional:
+   - Period-close volume is filtered as dust for very small closes (currently <= $1 equivalent in hook units).
+   - If EMA is zero and effective close volume is zero, the fee decays by one step toward `floorIdx`.
+   - This is a deliberate anti-stall policy for inactive markets.
 
 ## What to evaluate
 

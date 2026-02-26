@@ -34,6 +34,7 @@ Secrets should live in `./.env` (repo root). Typical variables:
 
 - `DEFAULT_PRIVATE_KEY` — deployer key (used by configs via `PRIVATE_KEY=${DEFAULT_PRIVATE_KEY:-}`)
 - `DEFAULT_GUARDIAN` — guardian address (optional)
+- `REQUIRE_GUARDIAN_CONTRACT=1` — optional strict mode to require contract guardian (recommended for production)
 
 ## Unified test runner
 

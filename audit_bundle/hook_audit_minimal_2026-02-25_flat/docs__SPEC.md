@@ -55,6 +55,7 @@ Let:
 - `ema` = EMA volume (USD6)
 
 Compute ratio-like score implicitly and apply:
+- **Dust close filter**: close volume `v` is treated as `0` when `v <= 2_000_000` (USD6 units in this hook, equivalent to `$1` under current `2 * abs(stableAmount)` accounting).
 - **Deadband**: if `v` is within `± deadbandBps` of `ema`, keep the current fee tier.
 - Otherwise:
   - If `v` is meaningfully above EMA: **increase fee tier** by 1 step (up to cap).
@@ -62,6 +63,15 @@ Compute ratio-like score implicitly and apply:
 
 Additional constraint:
 - **At most one fee step per period** (hard rule).
+- **Reversal lock**:
+  - If the previous period moved fee **up**, the next immediate **down** move is blocked once.
+  - If the previous period moved fee **down**, the next immediate **up** move is blocked once.
+  - If a period is inside deadband, `lastDir` is cleared (`DIR_NONE`), so the lock window is narrow by design.
+  - If a direction signal appears at a boundary (`capIdx`/`floorIdx`) but fee cannot move, `lastDir` is also cleared.
+- **Zero-EMA fallback**:
+  - If `ema == 0` and closed volume `v == 0`, fee decays by one step toward `floorIdx`.
+  - If `ema == 0` and `v > 0`, fee is unchanged for that close.
+  - This avoids fee stalling above floor during prolonged near-zero activity.
 
 ### "Volume regimes" in practice
 
@@ -112,6 +122,7 @@ Events are emitted only for meaningful transitions:
 
 - See `./scripts/README.md` for deployment and pool creation flows.
 - Use the `.conf` files in `./config/` to parameterize deployment per chain.
+- Constructor-enforced bounds include `2 <= emaPeriods <= 64`.
 
 ## Accepted risks and runbooks
 

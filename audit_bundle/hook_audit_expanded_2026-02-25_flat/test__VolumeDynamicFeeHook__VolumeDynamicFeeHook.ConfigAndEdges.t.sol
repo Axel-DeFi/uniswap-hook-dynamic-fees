@@ -171,6 +171,29 @@ contract VolumeDynamicFeeHookConfigAndEdgesTest is Test {
         _deploy(cfg);
     }
 
+    function test_constructor_reverts_on_zeroPoolManager() public {
+        DeployCfg memory cfg = _defaultCfg();
+
+        vm.expectRevert(VolumeDynamicFeeHook.InvalidConfig.selector);
+        new VolumeDynamicFeeHookHarness(
+            IPoolManager(address(0)),
+            Currency.wrap(cfg.token0),
+            Currency.wrap(cfg.token1),
+            cfg.tickSpacing,
+            Currency.wrap(cfg.stable),
+            cfg.stableDecimals,
+            cfg.initialFeeIdx,
+            cfg.floorIdx,
+            cfg.capIdx,
+            cfg.periodSeconds,
+            cfg.emaPeriods,
+            cfg.deadbandBps,
+            cfg.lullResetSeconds,
+            cfg.guardian,
+            cfg.pauseFeeIdx
+        );
+    }
+
     function test_constructor_reverts_when_stable_not_in_pool() public {
         DeployCfg memory cfg = _defaultCfg();
         cfg.stable = address(0x0000000000000000000000000000000000003333);
@@ -190,6 +213,14 @@ contract VolumeDynamicFeeHookConfigAndEdgesTest is Test {
     function test_constructor_reverts_on_emaPeriods_lt_2() public {
         DeployCfg memory cfg = _defaultCfg();
         cfg.emaPeriods = 1;
+
+        vm.expectRevert(VolumeDynamicFeeHook.InvalidConfig.selector);
+        _deploy(cfg);
+    }
+
+    function test_constructor_reverts_on_emaPeriods_gt_max() public {
+        DeployCfg memory cfg = _defaultCfg();
+        cfg.emaPeriods = 65;
 
         vm.expectRevert(VolumeDynamicFeeHook.InvalidConfig.selector);
         _deploy(cfg);
@@ -448,6 +479,52 @@ contract VolumeDynamicFeeHookConfigAndEdgesTest is Test {
         (,,, uint8 idxAfter,) = hook.unpackedState();
         assertEq(idxAfter, CAP_IDX);
         assertEq(manager.updateCount(), updatesBefore);
+    }
+
+    function test_zero_ema_and_zero_close_steps_fee_down_one_tier() public {
+        manager.callAfterInitialize(hook, key);
+
+        (,,, uint8 idxBefore,) = hook.unpackedState();
+        assertEq(idxBefore, INITIAL_FEE_IDX);
+
+        vm.warp(block.timestamp + PERIOD_SECONDS);
+        manager.callAfterSwap(hook, key, _deltaZero());
+
+        (uint64 pv, uint96 ema,, uint8 idxAfter, uint8 dirAfter) = hook.unpackedState();
+        assertEq(idxAfter, INITIAL_FEE_IDX - 1);
+        assertEq(dirAfter, 0);
+        assertEq(ema, 0);
+        assertEq(pv, 0);
+    }
+
+    function test_dust_close_volume_leq_one_usd_is_treated_as_zero() public {
+        manager.callAfterInitialize(hook, key);
+
+        // 1.000000 stable in 6 decimals -> closeVol = 2_000_000 (dust threshold).
+        manager.callAfterSwap(hook, key, _deltaA0(-1_000_000));
+        vm.warp(block.timestamp + PERIOD_SECONDS);
+        manager.callAfterSwap(hook, key, _deltaZero());
+
+        (uint64 pv, uint96 ema,, uint8 idxAfter, uint8 dirAfter) = hook.unpackedState();
+        assertEq(idxAfter, INITIAL_FEE_IDX - 1);
+        assertEq(dirAfter, 0);
+        assertEq(ema, 0);
+        assertEq(pv, 0);
+    }
+
+    function test_close_volume_above_one_usd_is_not_treated_as_zero() public {
+        manager.callAfterInitialize(hook, key);
+
+        // 1.000001 stable in 6 decimals -> closeVol = 2_000_002 (> dust threshold).
+        manager.callAfterSwap(hook, key, _deltaA0(-1_000_001));
+        vm.warp(block.timestamp + PERIOD_SECONDS);
+        manager.callAfterSwap(hook, key, _deltaZero());
+
+        (uint64 pv, uint96 ema,, uint8 idxAfter, uint8 dirAfter) = hook.unpackedState();
+        assertEq(idxAfter, INITIAL_FEE_IDX);
+        assertEq(dirAfter, 0);
+        assertEq(ema, 2_000_002);
+        assertEq(pv, 0);
     }
 
     function test_fee_reaches_floor_and_does_not_go_lower() public {
