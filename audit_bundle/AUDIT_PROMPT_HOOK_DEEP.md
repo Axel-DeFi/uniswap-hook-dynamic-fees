@@ -53,6 +53,10 @@ Treat the following as intentional design choices, not automatic vulnerabilities
    - If EMA is zero and effective close volume is zero, the fee decays by one step toward `floorIdx`.
    - This is a deliberate anti-stall policy for inactive markets.
 
+9. Timestamp horizon hardening is already in place.
+   - `periodStart` is stored as `uint64`, and elapsed computations are performed in `uint64`.
+   - Do not flag year-2106 `uint32` timestamp overflow for this version.
+
 ## What to evaluate
 
 ### A. Technical/security audit

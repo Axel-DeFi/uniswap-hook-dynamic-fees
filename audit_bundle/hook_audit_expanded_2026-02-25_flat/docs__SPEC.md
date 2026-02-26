@@ -103,7 +103,7 @@ The guardian can pause/unpause the algorithm, but cannot set arbitrary fees.
 All per-pool state is packed into a single `uint256`:
 - `periodVolUSD6` (uint64)
 - `emaVolumeUSD6` (uint96)
-- `periodStart` (uint32)
+- `periodStart` (uint64)
 - `feeIdx` (uint8)
 - `lastDir` (2 bits)
 - `paused` bit

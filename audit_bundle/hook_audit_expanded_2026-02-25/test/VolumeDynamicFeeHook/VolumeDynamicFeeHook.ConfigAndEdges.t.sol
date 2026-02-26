@@ -202,6 +202,22 @@ contract VolumeDynamicFeeHookConfigAndEdgesTest is Test {
         _deploy(cfg);
     }
 
+    function test_constructor_reverts_on_zeroTickSpacing() public {
+        DeployCfg memory cfg = _defaultCfg();
+        cfg.tickSpacing = 0;
+
+        vm.expectRevert(VolumeDynamicFeeHook.InvalidConfig.selector);
+        _deploy(cfg);
+    }
+
+    function test_constructor_reverts_on_negativeTickSpacing() public {
+        DeployCfg memory cfg = _defaultCfg();
+        cfg.tickSpacing = -10;
+
+        vm.expectRevert(VolumeDynamicFeeHook.InvalidConfig.selector);
+        _deploy(cfg);
+    }
+
     function test_constructor_reverts_on_zeroPeriodSeconds() public {
         DeployCfg memory cfg = _defaultCfg();
         cfg.periodSeconds = 0;
@@ -339,6 +355,22 @@ contract VolumeDynamicFeeHookConfigAndEdgesTest is Test {
     function test_currentFeeBips_reverts_before_initialize() public {
         vm.expectRevert(VolumeDynamicFeeHook.NotInitialized.selector);
         hook.currentFeeBips();
+    }
+
+    function test_periodStart_supports_timestamps_beyond_uint32_horizon() public {
+        uint256 startTs = uint256(type(uint32).max) + 12_345;
+        vm.warp(startTs);
+
+        manager.callAfterInitialize(hook, key);
+        (,, uint64 periodStart,,) = hook.unpackedState();
+        assertEq(periodStart, uint64(startTs));
+
+        uint256 nextTs = startTs + PERIOD_SECONDS;
+        vm.warp(nextTs);
+        manager.callAfterSwap(hook, key, _deltaZero());
+
+        (,, uint64 periodStartAfter,,) = hook.unpackedState();
+        assertEq(periodStartAfter, uint64(nextTs));
     }
 
     function test_invalidPoolKey_reverts_on_wrong_currency0() public {

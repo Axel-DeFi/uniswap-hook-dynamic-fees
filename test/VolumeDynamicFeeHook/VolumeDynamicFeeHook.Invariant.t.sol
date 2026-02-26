@@ -180,7 +180,7 @@ abstract contract VolumeDynamicFeeHookInvariantBase is StdInvariant, Test {
     }
 
     function invariant_feeIdxAlwaysWithinBounds() public view {
-        (,, uint32 ps, uint8 feeIdx, uint8 lastDir) = hook.unpackedState();
+        (,, uint64 ps, uint8 feeIdx, uint8 lastDir) = hook.unpackedState();
         assertTrue(ps != 0, "not initialized");
         assertTrue(feeIdx >= FLOOR_IDX && feeIdx <= CAP_IDX, "feeIdx out of bounds");
         assertTrue(lastDir <= 2, "lastDir out of range");
@@ -201,7 +201,7 @@ abstract contract VolumeDynamicFeeHookInvariantBase is StdInvariant, Test {
     function _unpack()
         internal
         view
-        returns (uint64 pv, uint96 ema, uint32 ps, uint8 feeIdx, uint8 lastDir, bool paused)
+        returns (uint64 pv, uint96 ema, uint64 ps, uint8 feeIdx, uint8 lastDir, bool paused)
     {
         (pv, ema, ps, feeIdx, lastDir) = hook.unpackedState();
         paused = hook.isPaused();

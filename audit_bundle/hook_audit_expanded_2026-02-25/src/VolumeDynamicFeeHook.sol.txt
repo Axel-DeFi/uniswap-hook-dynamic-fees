@@ -94,7 +94,7 @@ contract VolumeDynamicFeeHook is BaseHook {
     // 2_000_000 equals $1 of period-close volume in current units.
     uint64 private constant DUST_CLOSE_VOL_USD6 = 2_000_000;
 
-    uint256 private constant PAUSED_BIT = 202;
+    uint256 private constant PAUSED_BIT = 234;
 
     // -----------------------------------------------------------------------
     // Events
@@ -135,6 +135,7 @@ contract VolumeDynamicFeeHook is BaseHook {
 
         // enforce canonical ordering for determinism
         if (Currency.unwrap(_poolCurrency0) >= Currency.unwrap(_poolCurrency1)) revert InvalidConfig();
+        if (_poolTickSpacing <= 0) revert InvalidConfig();
 
         poolCurrency0 = _poolCurrency0;
         poolCurrency1 = _poolCurrency1;
@@ -158,7 +159,7 @@ contract VolumeDynamicFeeHook is BaseHook {
         deadbandBps = _deadbandBps;
 
         if (_lullResetSeconds < _periodSeconds) revert InvalidConfig();
-        if (_lullResetSeconds > uint32(uint256(_periodSeconds) * MAX_LULL_PERIODS)) revert InvalidConfig();
+        if (uint256(_lullResetSeconds) > uint256(_periodSeconds) * MAX_LULL_PERIODS) revert InvalidConfig();
         lullResetSeconds = _lullResetSeconds;
 
         if (_guardian == address(0)) revert InvalidConfig();
@@ -211,11 +212,11 @@ contract VolumeDynamicFeeHook is BaseHook {
     {
         _validateKey(key);
 
-        (,, uint32 periodStart,,,) = _unpackState(_state);
+        (,, uint64 periodStart,,,) = _unpackState(_state);
         if (periodStart != 0) revert AlreadyInitialized();
 
         bool paused_ = isPaused();
-        uint32 nowTs = _now32();
+        uint64 nowTs = _now64();
 
         uint8 feeIdx = paused_ ? pauseFeeIdx : initialFeeIdx;
 
@@ -241,13 +242,13 @@ contract VolumeDynamicFeeHook is BaseHook {
             return (IHooks.afterSwap.selector, 0);
         }
 
-        (uint64 periodVol, uint96 emaVol, uint32 periodStart, uint8 feeIdx, uint8 lastDir, bool paused_) =
+        (uint64 periodVol, uint96 emaVol, uint64 periodStart, uint8 feeIdx, uint8 lastDir, bool paused_) =
             _unpackState(_state);
 
         if (periodStart == 0) revert NotInitialized();
 
-        uint32 nowTs = _now32();
-        uint32 elapsed = nowTs - periodStart;
+        uint64 nowTs = _now64();
+        uint64 elapsed = nowTs - periodStart;
 
         if (elapsed >= lullResetSeconds) {
             uint8 oldFeeIdx = feeIdx;
@@ -271,7 +272,7 @@ contract VolumeDynamicFeeHook is BaseHook {
         }
 
         if (elapsed >= periodSeconds) {
-            uint32 periods = elapsed / periodSeconds;
+            uint64 periods = elapsed / uint64(periodSeconds);
             uint64 closeVol0 = periodVol;
 
             uint8 oldFeeIdx = feeIdx;
@@ -280,7 +281,7 @@ contract VolumeDynamicFeeHook is BaseHook {
             uint8 f = feeIdx;
             uint8 d = lastDir;
 
-            for (uint32 i = 0; i < periods; i++) {
+            for (uint64 i = 0; i < periods; i++) {
                 uint64 vRaw = (i == 0) ? closeVol0 : uint64(0);
                 uint64 vEff = vRaw <= DUST_CLOSE_VOL_USD6 ? uint64(0) : vRaw;
 
@@ -323,7 +324,7 @@ contract VolumeDynamicFeeHook is BaseHook {
     }
 
     function currentFeeBips() external view returns (uint24) {
-        (,, uint32 periodStart, uint8 feeIdx,,) = _unpackState(_state);
+        (,, uint64 periodStart, uint8 feeIdx,,) = _unpackState(_state);
         if (periodStart == 0) revert NotInitialized();
         return _feeTier(feeIdx);
     }
@@ -334,12 +335,12 @@ contract VolumeDynamicFeeHook is BaseHook {
         returns (
             uint64 periodVolumeUsd6,
             uint96 emaVolumeUsd6,
-            uint32 periodStart,
+            uint64 periodStart,
             uint8 feeIdx,
             uint8 lastDir
         )
     {
-        (uint64 pv, uint96 ev, uint32 ps, uint8 fi, uint8 ld,) = _unpackState(_state);
+        (uint64 pv, uint96 ev, uint64 ps, uint8 fi, uint8 ld,) = _unpackState(_state);
         return (pv, ev, ps, fi, ld);
     }
 
@@ -351,14 +352,14 @@ contract VolumeDynamicFeeHook is BaseHook {
         if (msg.sender != guardian) revert NotGuardian();
         if (isPaused()) return;
 
-        (uint64 periodVol, uint96 emaVol, uint32 periodStart, uint8 feeIdx, uint8 lastDir, bool paused_) =
+        (uint64 periodVol, uint96 emaVol, uint64 periodStart, uint8 feeIdx, uint8 lastDir, bool paused_) =
             _unpackState(_state);
         bool initialized = periodStart != 0;
 
         // Reset state and force a conservative fee bucket.
         periodVol = 0;
         emaVol = 0;
-        periodStart = initialized ? _now32() : uint32(0);
+        periodStart = initialized ? _now64() : uint64(0);
         feeIdx = pauseFeeIdx;
         lastDir = DIR_NONE;
         paused_ = true;
@@ -378,14 +379,14 @@ contract VolumeDynamicFeeHook is BaseHook {
         if (msg.sender != guardian) revert NotGuardian();
         if (!isPaused()) return;
 
-        (uint64 periodVol, uint96 emaVol, uint32 periodStart, uint8 feeIdx, uint8 lastDir, bool paused_) =
+        (uint64 periodVol, uint96 emaVol, uint64 periodStart, uint8 feeIdx, uint8 lastDir, bool paused_) =
             _unpackState(_state);
         bool initialized = periodStart != 0;
 
         // Reset state and return to the initial fee bucket.
         periodVol = 0;
         emaVol = 0;
-        periodStart = initialized ? _now32() : uint32(0);
+        periodStart = initialized ? _now64() : uint64(0);
         feeIdx = initialFeeIdx;
         lastDir = DIR_NONE;
         paused_ = false;
@@ -426,8 +427,8 @@ contract VolumeDynamicFeeHook is BaseHook {
         if (address(key.hooks) != address(this)) revert InvalidPoolKey();
     }
 
-    function _now32() internal view returns (uint32) {
-        return uint32(block.timestamp);
+    function _now64() internal view returns (uint64) {
+        return uint64(block.timestamp);
     }
 
     function _addSwapVolumeUsd6(uint64 current, BalanceDelta delta) internal view returns (uint64) {
@@ -519,7 +520,7 @@ contract VolumeDynamicFeeHook is BaseHook {
     function _packState(
         uint64 periodVol,
         uint96 emaVol,
-        uint32 periodStart,
+        uint64 periodStart,
         uint8 feeIdx,
         uint8 lastDir,
         bool paused
@@ -527,8 +528,8 @@ contract VolumeDynamicFeeHook is BaseHook {
         packed = uint256(periodVol);
         packed |= uint256(emaVol) << 64;
         packed |= uint256(periodStart) << 160;
-        packed |= uint256(feeIdx) << 192;
-        packed |= (uint256(lastDir) & 0x3) << 200;
+        packed |= uint256(feeIdx) << 224;
+        packed |= (uint256(lastDir) & 0x3) << 232;
 
         if (paused) packed |= uint256(1) << PAUSED_BIT;
     }
@@ -539,7 +540,7 @@ contract VolumeDynamicFeeHook is BaseHook {
         returns (
             uint64 periodVol,
             uint96 emaVol,
-            uint32 periodStart,
+            uint64 periodStart,
             uint8 feeIdx,
             uint8 lastDir,
             bool paused
@@ -550,10 +551,10 @@ contract VolumeDynamicFeeHook is BaseHook {
         // forge-lint: disable-next-line(unsafe-typecast)
         emaVol = uint96(packed >> 64);
         // forge-lint: disable-next-line(unsafe-typecast)
-        periodStart = uint32(packed >> 160);
+        periodStart = uint64(packed >> 160);
         // forge-lint: disable-next-line(unsafe-typecast)
-        feeIdx = uint8(packed >> 192);
-        lastDir = uint8((packed >> 200) & 0x3);
+        feeIdx = uint8(packed >> 224);
+        lastDir = uint8((packed >> 232) & 0x3);
 
         paused = ((packed >> PAUSED_BIT) & 1) == 1;
     }

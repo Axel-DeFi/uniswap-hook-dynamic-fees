@@ -144,7 +144,7 @@ contract VolumeDynamicFeeHookFuzzTest is Test {
     }
 
     function _assertInvariants(Scenario storage s) internal view {
-        (uint64 pv, uint96 ema, uint32 ps, uint8 feeIdx, uint8 lastDir) = s.hook.unpackedState();
+        (uint64 pv, uint96 ema, uint64 ps, uint8 feeIdx, uint8 lastDir) = s.hook.unpackedState();
 
         assertTrue(ps != 0, "periodStart==0");
         assertTrue(feeIdx >= FLOOR_IDX && feeIdx <= CAP_IDX, "feeIdx out of bounds");
