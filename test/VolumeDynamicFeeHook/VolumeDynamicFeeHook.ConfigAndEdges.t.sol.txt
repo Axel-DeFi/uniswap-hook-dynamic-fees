@@ -54,9 +54,19 @@ contract VolumeDynamicFeeHookHarness is VolumeDynamicFeeHook {
     {}
 
     function validateHookAddress(BaseHook) internal pure override {}
+
+    function exposedComputeNextFeeIdx(uint8 feeIdx, uint8 lastDir, uint64 closeVol, uint96 emaVol)
+        external
+        view
+        returns (uint8 newFeeIdx, uint8 newLastDir, bool changed)
+    {
+        return _computeNextFeeIdx(feeIdx, lastDir, closeVol, emaVol);
+    }
 }
 
 contract VolumeDynamicFeeHookConfigAndEdgesTest is Test {
+    event FeeUpdated(uint24 newFee, uint8 newFeeIdx, uint64 closedVolumeUsd6, uint96 emaVolumeUsd6);
+
     struct DeployCfg {
         address token0;
         address token1;
@@ -513,6 +523,34 @@ contract VolumeDynamicFeeHookConfigAndEdgesTest is Test {
         assertEq(manager.updateCount(), updatesBefore);
     }
 
+    function test_computeNextFeeIdx_at_cap_clears_lastDir_when_no_step() public view {
+        (uint8 nf, uint8 nd, bool changed) = hook.exposedComputeNextFeeIdx(CAP_IDX, 0, 2_000_000, 1_000_000);
+        assertEq(nf, CAP_IDX);
+        assertEq(nd, 0);
+        assertFalse(changed);
+    }
+
+    function test_computeNextFeeIdx_at_floor_clears_lastDir_when_no_step() public view {
+        (uint8 nf, uint8 nd, bool changed) = hook.exposedComputeNextFeeIdx(FLOOR_IDX, 0, 0, 1_000_000);
+        assertEq(nf, FLOOR_IDX);
+        assertEq(nd, 0);
+        assertFalse(changed);
+    }
+
+    function test_period_close_commits_state_before_fee_update_call() public {
+        manager.callAfterInitialize(hook, key);
+
+        uint256 closeTs = block.timestamp + PERIOD_SECONDS;
+        vm.warp(closeTs);
+        manager.callAfterSwap(hook, key, _deltaZero());
+
+        assertEq(manager.observedFeeIdx(), INITIAL_FEE_IDX - 1);
+        assertEq(manager.observedPeriodStart(), uint64(closeTs));
+        assertEq(manager.observedPeriodVolUsd6(), 0);
+        assertEq(manager.observedEmaVolUsd6(), 0);
+        assertEq(manager.observedLastDir(), 0);
+    }
+
     function test_zero_ema_and_zero_close_steps_fee_down_one_tier() public {
         manager.callAfterInitialize(hook, key);
 
@@ -535,6 +573,9 @@ contract VolumeDynamicFeeHookConfigAndEdgesTest is Test {
         // 1.000000 stable in 6 decimals -> closeVol = 2_000_000 (dust threshold).
         manager.callAfterSwap(hook, key, _deltaA0(-1_000_000));
         vm.warp(block.timestamp + PERIOD_SECONDS);
+
+        vm.expectEmit(true, true, true, true, address(hook));
+        emit FeeUpdated(hook.feeTiers(uint256(INITIAL_FEE_IDX - 1)), INITIAL_FEE_IDX - 1, 0, 0);
         manager.callAfterSwap(hook, key, _deltaZero());
 
         (uint64 pv, uint96 ema,, uint8 idxAfter, uint8 dirAfter) = hook.unpackedState();

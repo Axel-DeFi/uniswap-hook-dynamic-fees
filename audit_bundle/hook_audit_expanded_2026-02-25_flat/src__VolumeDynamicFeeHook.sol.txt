@@ -249,6 +249,8 @@ contract VolumeDynamicFeeHook is BaseHook {
 
         uint64 nowTs = _now64();
         uint64 elapsed = nowTs - periodStart;
+        bool feeChanged;
+        uint64 closeVolForEvent;
 
         if (elapsed >= lullResetSeconds) {
             uint8 oldFeeIdx = feeIdx;
@@ -274,6 +276,7 @@ contract VolumeDynamicFeeHook is BaseHook {
         if (elapsed >= periodSeconds) {
             uint64 periods = elapsed / uint64(periodSeconds);
             uint64 closeVol0 = periodVol;
+            closeVolForEvent = closeVol0 <= DUST_CLOSE_VOL_USD6 ? uint64(0) : closeVol0;
 
             uint8 oldFeeIdx = feeIdx;
 
@@ -299,11 +302,7 @@ contract VolumeDynamicFeeHook is BaseHook {
             emaVol = ema;
             feeIdx = f;
             lastDir = d;
-
-            if (feeIdx != oldFeeIdx) {
-                poolManager.updateDynamicLPFee(key, _feeTier(feeIdx));
-                emit FeeUpdated(_feeTier(feeIdx), feeIdx, closeVol0, emaVol);
-            }
+            feeChanged = feeIdx != oldFeeIdx;
 
             periodStart = nowTs;
             periodVol = 0;
@@ -312,6 +311,11 @@ contract VolumeDynamicFeeHook is BaseHook {
         periodVol = _addSwapVolumeUsd6(periodVol, delta);
 
         _state = _packState(periodVol, emaVol, periodStart, feeIdx, lastDir, paused_);
+
+        if (feeChanged) {
+            poolManager.updateDynamicLPFee(key, _feeTier(feeIdx));
+            emit FeeUpdated(_feeTier(feeIdx), feeIdx, closeVolForEvent, emaVol);
+        }
         return (IHooks.afterSwap.selector, 0);
     }
 
@@ -500,14 +504,18 @@ contract VolumeDynamicFeeHook is BaseHook {
             if (newFeeIdx < capIdx) {
                 newFeeIdx = newFeeIdx + 1;
                 changed = true;
+                newLastDir = DIR_UP;
+            } else {
+                newLastDir = DIR_NONE;
             }
-            newLastDir = DIR_UP;
         } else if (dir == DIR_DOWN) {
             if (newFeeIdx > floorIdx) {
                 newFeeIdx = newFeeIdx - 1;
                 changed = true;
+                newLastDir = DIR_DOWN;
+            } else {
+                newLastDir = DIR_NONE;
             }
-            newLastDir = DIR_DOWN;
         } else {
             newLastDir = DIR_NONE;
         }

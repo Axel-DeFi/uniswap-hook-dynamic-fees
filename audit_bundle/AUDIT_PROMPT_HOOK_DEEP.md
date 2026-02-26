@@ -7,15 +7,10 @@ Your task is to perform a deep, adversarial audit of this hook implementation, c
 
 Language requirement:
 - The full audit result must be written in Russian.
-- The final result must be provided as plain text output and additionally as a separate PDF file.
+- The final result must be provided as plain text output and additionally as a separate PDF or markdown file.
 
 ## Scope (audit only these files)
-- `src/VolumeDynamicFeeHook.sol`
-- `docs/SPEC.md`
-- `docs/FAQ.md`
-- `README.md`
-- `scripts/README.md`
-- `config/_hook.template.conf`
+All included files.
 
 ## Context and design intent (critical to reduce false positives)
 Treat the following as intentional design choices, not automatic vulnerabilities:
@@ -36,26 +31,19 @@ Treat the following as intentional design choices, not automatic vulnerabilities
    - One-step-per-period logic is intentional for stability and predictability.
 
 4. Guardian pause/unpause semantics are immediate for initialized pools.
-   - No deferred `apply_pending_pause` mechanism by design.
    - It is known that guardian role should be assigned to a multisig wallet in production.
 
 5. Single-pool deployment model is intentional.
    - One hook instance is bound to one pool key.
    - No multi-pool state mapping.
 
-6. Tick spacing is standardized to 10 in active configs (template reflects deployment intent).
-
-7. `emaPeriods` bounds are intentionally enforced on-chain (`2 <= emaPeriods <= 64`).
+6. `emaPeriods` bounds are intentionally enforced on-chain (`2 <= emaPeriods <= 64`).
    - Treat this as a hard safety invariant, not a missing-validation issue.
 
-8. Dust/zero-activity behavior is intentional:
+7. Dust/zero-activity behavior is intentional:
    - Period-close volume is filtered as dust for very small closes (currently <= $1 equivalent in hook units).
    - If EMA is zero and effective close volume is zero, the fee decays by one step toward `floorIdx`.
    - This is a deliberate anti-stall policy for inactive markets.
-
-9. Timestamp horizon hardening is already in place.
-   - `periodStart` is stored as `uint64`, and elapsed computations are performed in `uint64`.
-   - Do not flag year-2106 `uint32` timestamp overflow for this version.
 
 ## What to evaluate
 
@@ -89,7 +77,7 @@ Treat the following as intentional design choices, not automatic vulnerabilities
 
 ## False-positive control policy
 - Do not report an issue as a vulnerability if it is clearly an intentional trade-off listed above.
-- Instead classify it as `Accepted design trade-off` and explain:
+- Instead classify it as `Accepted design` and explain:
   - why it is acceptable in this design,
   - under which market conditions it may become unacceptable.
 - If you still classify as vulnerability, provide clear exploit assumptions and why accepted rationale fails.
@@ -105,11 +93,11 @@ Return findings in a single concise table with these columns:
 - `Exploit Preconditions`
 - `Evidence / Reproduction idea`
 - `Recommendation`
-- `Classification` (`Vulnerability` / `Accepted design trade-off` / `Observation`)
+- `Classification` (`Vulnerability` / `Accepted design` / `Observation`)
 - `Confidence` (`High/Medium/Low`)
 
 After the table, provide:
-1) `Top 3 priorities` (short bullet list),
+1) `Top priorities` (short bullet list),
 2) `Suggested additional tests` (targeted, implementation-specific),
 3) `Final conclusion` (5-10 lines max): production readiness assessment and key residual risks.
 
@@ -118,5 +106,5 @@ After the table, provide:
 - Every non-trivial claim must reference exact code location(s).
 - Separate clearly:
   - exploitable bugs,
-  - accepted trade-offs,
+  - accepted design,
   - operational recommendations.

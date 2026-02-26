@@ -19,6 +19,11 @@ contract MockPoolManager {
     uint256 public updateCount;
     uint256 public unlockCount;
     bool public skipUnlockCallback;
+    uint64 public observedPeriodVolUsd6;
+    uint96 public observedEmaVolUsd6;
+    uint64 public observedPeriodStart;
+    uint8 public observedFeeIdx;
+    uint8 public observedLastDir;
 
     error NotHook();
 
@@ -27,6 +32,9 @@ contract MockPoolManager {
         if (msg.sender != address(key.hooks)) revert NotHook();
         lastFee = newFee;
         updateCount += 1;
+
+        (observedPeriodVolUsd6, observedEmaVolUsd6, observedPeriodStart, observedFeeIdx, observedLastDir) =
+            VolumeDynamicFeeHook(address(key.hooks)).unpackedState();
     }
 
     /// @notice Mimics PoolManager.unlock by calling back into the caller (msg.sender).
