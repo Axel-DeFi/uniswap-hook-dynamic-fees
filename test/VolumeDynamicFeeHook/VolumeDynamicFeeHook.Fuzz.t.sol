@@ -196,7 +196,7 @@ contract VolumeDynamicFeeHookFuzzTest is Test {
         Scenario storage s = _pick(seed);
 
         // Seed EMA.
-        uint128 vol = uint128(bound(seed, 1_000_000, 5_000_000_000));
+        uint128 vol = uint128(bound(seed, 2_000_000, 5_000_000_000));
         manager.callAfterSwap(s.hook, s.key, _deltaStableAbs(s.stableIsCurrency0, vol));
         vm.warp(block.timestamp + PERIOD_SECONDS);
         manager.callAfterSwap(s.hook, s.key, _deltaZero());
@@ -223,7 +223,7 @@ contract VolumeDynamicFeeHookFuzzTest is Test {
     function testFuzz_deadband_keepsFeeUnchanged(uint256 seed) public {
         Scenario storage s = _pick(seed);
 
-        uint128 base = uint128(bound(seed, 1_000_000, 5_000_000_000));
+        uint128 base = uint128(bound(seed, 2_000_000, 5_000_000_000));
         uint16 bps = uint16(seed % (DEADBAND_BPS + 1));
 
         manager.callAfterSwap(s.hook, s.key, _deltaStableAbs(s.stableIsCurrency0, base));
@@ -244,7 +244,7 @@ contract VolumeDynamicFeeHookFuzzTest is Test {
     function testFuzz_reversalLock_blocksImmediateFlip(uint256 seed) public {
         Scenario storage s = _pick(seed);
 
-        uint128 seedVol = uint128(bound(seed, 1_000_000, 5_000_000_000));
+        uint128 seedVol = uint128(bound(seed, 2_000_000, 5_000_000_000));
         uint128 highVol = uint128(bound(seedVol + 1_000_000, 2_000_000, 10_000_000_000));
 
         // Seed EMA.

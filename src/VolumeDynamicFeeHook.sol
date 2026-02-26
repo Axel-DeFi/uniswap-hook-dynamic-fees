@@ -89,6 +89,10 @@ contract VolumeDynamicFeeHook is BaseHook {
     uint8 private constant DIR_DOWN = 2;
 
     uint16 private constant MAX_LULL_PERIODS = 24;
+    uint8 private constant MAX_EMA_PERIODS = 64;
+    // closeVol is tracked as 2 * abs(stableAmount) in USD6.
+    // 2_000_000 equals $1 of period-close volume in current units.
+    uint64 private constant DUST_CLOSE_VOL_USD6 = 2_000_000;
 
     uint256 private constant PAUSED_BIT = 202;
 
@@ -127,6 +131,8 @@ contract VolumeDynamicFeeHook is BaseHook {
         address _guardian,
         uint8 _pauseFeeIdx
     ) BaseHook(_poolManager) {
+        if (address(_poolManager) == address(0)) revert InvalidConfig();
+
         // enforce canonical ordering for determinism
         if (Currency.unwrap(_poolCurrency0) >= Currency.unwrap(_poolCurrency1)) revert InvalidConfig();
 
@@ -145,6 +151,7 @@ contract VolumeDynamicFeeHook is BaseHook {
         periodSeconds = _periodSeconds;
 
         if (_emaPeriods < 2) revert InvalidConfig();
+        if (_emaPeriods > MAX_EMA_PERIODS) revert InvalidConfig();
         emaPeriods = _emaPeriods;
 
         if (_deadbandBps > 5000) revert InvalidConfig();
@@ -274,11 +281,12 @@ contract VolumeDynamicFeeHook is BaseHook {
             uint8 d = lastDir;
 
             for (uint32 i = 0; i < periods; i++) {
-                uint64 v = (i == 0) ? closeVol0 : uint64(0);
+                uint64 vRaw = (i == 0) ? closeVol0 : uint64(0);
+                uint64 vEff = vRaw <= DUST_CLOSE_VOL_USD6 ? uint64(0) : vRaw;
 
-                ema = _updateEma(ema, v);
+                ema = _updateEma(ema, vEff);
 
-                (uint8 nf, uint8 nd, bool changed) = _computeNextFeeIdx(f, d, v, ema);
+                (uint8 nf, uint8 nd, bool changed) = _computeNextFeeIdx(f, d, vEff, ema);
                 if (changed) {
                     f = nf;
                     d = nd;
@@ -466,6 +474,10 @@ contract VolumeDynamicFeeHook is BaseHook {
         newLastDir = lastDir;
 
         if (emaVol == 0) {
+            // Prevent fee stalling above floor in prolonged near-zero activity.
+            if (closeVol == 0 && newFeeIdx > floorIdx) {
+                return (newFeeIdx - 1, DIR_NONE, true);
+            }
             return (newFeeIdx, DIR_NONE, false);
         }
 
