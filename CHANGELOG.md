@@ -3,7 +3,7 @@
 ## v1.1.0 - 2026-02-17
 
 ### Immediate pause/unpause fee application
-- `pause()` and `unpause()` now apply the target fee immediately for initialized pools via `PoolManager.unlock()`.
+- `pause()` and `unpause()` now apply the target fee immediately for initialized pools via direct `PoolManager.updateDynamicLPFee(...)` calls from the hook.
 - Pre-initialize behavior remains safe: pending application is still supported and resolved on initialize.
 
 ### Tick spacing standardization

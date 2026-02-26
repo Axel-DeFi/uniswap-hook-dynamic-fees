@@ -250,7 +250,7 @@ now_ts() {
 read_state() {
   local fee pv ema ps idx dir out
   fee="$(cast_rpc call --rpc-url "${RPC_URL}" "${HOOK_ADDRESS}" "currentFeeBips()(uint24)" | awk '{print $1}')"
-  out="$(cast_rpc call --rpc-url "${RPC_URL}" "${HOOK_ADDRESS}" "unpackedState()(uint64,uint96,uint32,uint8,uint8)")"
+  out="$(cast_rpc call --rpc-url "${RPC_URL}" "${HOOK_ADDRESS}" "unpackedState()(uint64,uint96,uint64,uint8,uint8)")"
   pv="$(printf '%s\n' "${out}" | sed -n '1p' | awk '{print $1}')"
   ema="$(printf '%s\n' "${out}" | sed -n '2p' | awk '{print $1}')"
   ps="$(printf '%s\n' "${out}" | sed -n '3p' | awk '{print $1}')"
