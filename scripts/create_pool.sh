@@ -29,6 +29,7 @@ lower() { printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]'; }
 CHAIN="local"
 RPC_URL_CLI=""
 PRIVATE_KEY_CLI=""
+INIT_PRICE_USD_ENV="${INIT_PRICE_USD:-}"
 BROADCAST=0
 
 usage() {
@@ -72,6 +73,11 @@ fi
 set -a
 source "$CFG"
 set +a
+
+# Respect pre-exported INIT_PRICE_USD override (e.g. INIT_PRICE_USD=2500 ./scripts/create_pool.sh ...).
+if [[ -n "${INIT_PRICE_USD_ENV:-}" ]]; then
+  INIT_PRICE_USD="${INIT_PRICE_USD_ENV}"
+fi
 
 RPC_URL="${RPC_URL_CLI:-${RPC_URL:-}}"
 PRIVATE_KEY="${PRIVATE_KEY_CLI:-${PRIVATE_KEY:-}}"
