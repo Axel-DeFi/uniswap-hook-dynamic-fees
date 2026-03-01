@@ -10,18 +10,15 @@ if [[ -f "./.env" ]]; then
 fi
 
 # Modes:
-# - cycle  : deterministic fee cycle validation:
-#            1) 400 -> 900 (UP)
-#            2) reversal-lock check (still 900)
-#            3) 900 -> 400 (DOWN)
+# - cases  : deterministic scenario suite for hook behavior coverage.
 # - random : long-running random swaps for live traffic simulation.
 #
 # The script expects an already deployed hook + pool + swap helper.
 #
 # Usage:
+#   ./test/scripts/simulate_fee_cycle.sh --chain sepolia --mode cases --broadcast
 #   ./test/scripts/simulate_fee_cycle.sh --chain sepolia --mode random --broadcast
-#   ./test/scripts/simulate_fee_cycle.sh --chain arbitrum --mode cycle --broadcast
-#   ./test/scripts/simulate_fee_cycle.sh --chain arbitrum --swap-test-address <addr> --broadcast
+#   ./test/scripts/simulate_fee_cycle.sh --chain sepolia --mode cases --cases-runs 3 --broadcast
 #
 # Optional env overrides:
 #   SWAP_TEST_ADDRESS, STATE_VIEW_ADDRESS, HIGH_SWAP_AMOUNT, LOW_SWAP_AMOUNT,
@@ -32,7 +29,7 @@ fi
 # - Designed for local/sepolia/prod flows in this repository.
 
 CHAIN="local"
-MODE="cycle"
+MODE="cases"
 RPC_URL=""
 SWAP_TEST_ADDRESS="${SWAP_TEST_ADDRESS:-}"
 STATE_VIEW_ADDRESS="${STATE_VIEW_ADDRESS:-}"
@@ -40,7 +37,6 @@ HOOK_ADDRESS_OVERRIDE=""
 # Optional fixed amounts; if empty, the script computes adaptive amounts from EMA.
 HIGH_SWAP_AMOUNT="${HIGH_SWAP_AMOUNT:-}"
 LOW_SWAP_AMOUNT="${LOW_SWAP_AMOUNT:-}"
-POLL_SECONDS=20
 # Random/cases mode options.
 MIN_WAIT_SECONDS=0
 MAX_WAIT_SECONDS=0
@@ -49,7 +45,33 @@ RANDOM_MAX_AMOUNT="${RANDOM_MAX_AMOUNT:-}"
 DURATION_SECONDS=0
 STATS_FILE=""
 NO_LIVE=0
-CASE_DRIVEN=0
+CASES_MODE=0
+CASES_RUNS=1
+CASES_COMPLETED_RUNS=0
+CASES_STAGE="up_to_cap"
+CASES_STAGE_STEP=0
+CASES_NEXT_SIDE=""
+CASES_NEXT_REASON="case-step"
+CASES_NEXT_TARGET_VOL=2000000
+CASES_NEXT_AMOUNT=0
+CASES_PRIORITY_EDGE="cap"
+CASES_RUN_CAP_OK=0
+CASES_RUN_FLOOR_OK=0
+CASES_RUN_REV_OK=0
+CASES_RUN_DEADBAND_OK=0
+CASES_RUN_LULL_OK=0
+CASES_RUN_ZERO_EMA_OK=0
+CASES_BASE_CAP_PASS=0
+CASES_BASE_FLOOR_PASS=0
+CASES_BASE_REV_PASS=0
+CASES_BASE_DEADBAND_PASS=0
+CASES_BASE_LULL_PASS=0
+CASES_BASE_ZERO_EMA_PASS=0
+CASES_REQUIRE_ED3=0
+CASES_FORCE_WAIT_SECONDS=0
+CASES_FORCE_WAIT_REASON=""
+RND_WAIT_PICK_SECONDS=0
+RND_WAIT_PICK_REASON="no-wait"
 # Built-in anti-drift defaults for random mode.
 ARB_GUARD_TICK_BAND=120
 ARB_GUARD_CORRECTION_MULTIPLIER=2
@@ -69,6 +91,12 @@ BALANCE_ERROR_FORCE_ATTEMPTS=8
 NATIVE_GAS_SYMBOL="${NATIVE_GAS_SYMBOL:-ETH}"
 RANDOM_SOFT_MIN_AMOUNT=1000000
 RANDOM_SOFT_MAX_AMOUNT=8000000
+# Wallet rebalance: keep wallet close to 50/50 by value using a % of free native gas token.
+AUTO_REBALANCE_ENABLED=1
+AUTO_REBALANCE_ETH_UTIL_PCT=80
+AUTO_REBALANCE_MIN_INTERVAL_ATTEMPTS=40
+AUTO_REBALANCE_TARGET_PCT=50
+AUTO_REBALANCE_TOLERANCE_PCT=8
 
 # Compatibility with orchestrator:
 # - Orchestrator may pass --private-key and --broadcast (forge-style). This script uses cast and treats --broadcast as a no-op.
@@ -84,23 +112,23 @@ Usage:
   ./test/scripts/simulate_fee_cycle.sh --chain <chain> [options]
 
 Options:
-  --mode <cycle|random|cases>  Mode to run (default: cycle).
+  --mode <cases|random>        Mode to run (default: cases).
   --rpc-url <url>              Override RPC URL.
   --swap-test-address <addr>   Swap helper contract address.
   --state-view-address <addr>  Optional StateView address for slot0 checks.
   --hook-address <addr>        Override HOOK_ADDRESS.
-  --high-amount <int>          Fixed amountSpecified for U1_HIGH (optional).
-  --low-amount <int>           Fixed amountSpecified for LOW steps (optional).
-  --poll-seconds <int>         Poll interval while waiting period close (default: 20).
-  --min-wait-seconds <int>     Random/cases mode: minimum pause after swap (default: 0).
-  --max-wait-seconds <int>     Random/cases mode: maximum pause after swap (default: 0).
+  --high-amount <int>          Fixed high amount target helper (optional).
+  --low-amount <int>           Fixed low amount target helper (optional).
+  --min-wait-seconds <int>     Random mode: minimum pause after swap (default: 0).
+  --max-wait-seconds <int>     Random mode: maximum pause after swap (default: 0).
   --min-amount <int>           Random mode: force minimum random amountSpecified.
   --max-amount <int>           Random mode: force maximum random amountSpecified.
-  --duration-seconds <int>     Random mode: stop after N seconds (0 = infinite).
-  --stats-file <path>          Random mode: where to persist stats snapshot.
-  --no-live                    Random mode: disable terminal dashboard redraw.
-  (Random mode auto-enables anti-drift arb guard with built-in defaults.)
-  (Random mode auto-biases traffic/waits toward hook test-case coverage.)
+  --cases-runs <int>           Cases mode: number of full suites to execute (default: 1).
+  --duration-seconds <int>     Stop after N seconds (0 = no time limit).
+  --stats-file <path>          Path to persist live stats snapshot.
+  --no-live                    Disable terminal dashboard redraw.
+  (Cases mode runs deterministic suite: UP/cap, DOWN/floor, reversal, deadband, lull reset.)
+  (Random mode keeps anti-drift and adaptive traffic heuristics.)
   --private-key <hex>           Signer key (optional if PRIVATE_KEY is in config).
   --broadcast                    Required to send transactions (no-op flag for compatibility).
   --dry-run                      Skip sending transactions.
@@ -147,11 +175,6 @@ EOF
       if [[ -z "${LOW_SWAP_AMOUNT}" ]]; then echo "ERROR: --low-amount requires a value"; exit 1; fi
       shift 2
       ;;
-    --poll-seconds)
-      POLL_SECONDS="${2:-}"
-      if [[ -z "${POLL_SECONDS}" ]]; then echo "ERROR: --poll-seconds requires a value"; exit 1; fi
-      shift 2
-      ;;
     --min-wait-seconds)
       MIN_WAIT_SECONDS="${2:-}"
       if [[ -z "${MIN_WAIT_SECONDS}" ]]; then echo "ERROR: --min-wait-seconds requires a value"; exit 1; fi
@@ -175,6 +198,11 @@ EOF
     --duration-seconds)
       DURATION_SECONDS="${2:-}"
       if [[ -z "${DURATION_SECONDS}" ]]; then echo "ERROR: --duration-seconds requires a value"; exit 1; fi
+      shift 2
+      ;;
+    --cases-runs)
+      CASES_RUNS="${2:-}"
+      if [[ -z "${CASES_RUNS}" ]]; then echo "ERROR: --cases-runs requires a value"; exit 1; fi
       shift 2
       ;;
     --stats-file)
@@ -207,20 +235,17 @@ EOF
 done
 
 case "${MODE}" in
-  cycle|random|cases) ;;
+  random|cases) ;;
   *)
-    echo "ERROR: unsupported --mode=${MODE}; expected cycle, random or cases."
+    echo "ERROR: unsupported --mode=${MODE}; expected cases or random."
     exit 1
     ;;
 esac
 
-if [[ "${MODE}" == "random" ]]; then
-  CASE_DRIVEN=1
-fi
 if [[ "${MODE}" == "cases" ]]; then
-  CASE_DRIVEN=1
-  MODE="random"
+  CASES_MODE=1
 fi
+MODE="random"
 
 cast_rpc() {
   cast "$@"
@@ -617,6 +642,24 @@ read_state() {
   echo "${fee}|${pv}|${ema}|${ps}|${idx}|${dir}"
 }
 
+state_fields_valid() {
+  local fee="$1"
+  local pv="$2"
+  local ema="$3"
+  local ps="$4"
+  local idx="$5"
+  local dir="$6"
+  if [[ "${fee}" =~ ^[0-9]+$ \
+     && "${pv}" =~ ^[0-9]+$ \
+     && "${ema}" =~ ^[0-9]+$ \
+     && "${ps}" =~ ^[0-9]+$ \
+     && "${idx}" =~ ^[0-9]+$ \
+     && "${dir}" =~ ^[0-2]$ ]]; then
+    return 0
+  fi
+  return 1
+}
+
 read_pool_slot0() {
   local out sqrt_price tick protocol_fee lp_fee
   if [[ -z "${STATE_VIEW_ADDRESS}" || -z "${POOL_ID}" ]]; then
@@ -691,23 +734,6 @@ read_native_balance_wei() {
   echo "${out}"
 }
 
-wait_for_next_period() {
-  local label="$1"
-  local state="$2"
-  local ps target now rem
-  IFS='|' read -r _ _ _ ps _ _ <<<"${state}"
-  target=$((ps + PERIOD_SECONDS))
-  while true; do
-    now="$(now_ts)"
-    if (( now >= target )); then
-      break
-    fi
-    rem=$((target - now))
-    echo "[wait:${label}] now=${now} target=${target} remaining=${rem}s"
-    sleep "${POLL_SECONDS}"
-  done
-}
-
 run_swap_step() {
   local label="$1"
   local amount="$2"
@@ -722,9 +748,6 @@ run_swap_step() {
     sqrt_price_limit="${SQRT_PRICE_LIMIT_X96_OZF}"
   fi
   params="(${zero_for_one},-${amount},${sqrt_price_limit})"
-  if [[ "${MODE}" != "random" ]]; then
-    echo "==> ${label}: swap amountSpecified=${amount} zeroForOne=${zero_for_one}" >&2
-  fi
   send_attempt=0
   while true; do
     if out="$(cast_rpc send --rpc-url "${RPC_URL}" --private-key "${PRIVATE_KEY}" "${SWAP_TEST_ADDRESS}" "${SWAP_SIG}" "${POOL_KEY}" "${params}" "${TEST_SETTINGS}" 0x 2>&1)"; then
@@ -748,6 +771,377 @@ run_swap_step() {
   echo "${tx}"
 }
 
+run_wrap_step() {
+  local label="$1"
+  local weth_token="$2"
+  local amount_wei="$3"
+  local out tx send_attempt
+  if ! [[ "${amount_wei}" =~ ^[0-9]+$ ]] || (( amount_wei <= 0 )); then
+    echo "ERROR: invalid wrap amount for ${label}" >&2
+    return 1
+  fi
+  send_attempt=0
+  while true; do
+    if out="$(cast_rpc send --rpc-url "${RPC_URL}" --private-key "${PRIVATE_KEY}" --value "${amount_wei}" "${weth_token}" "deposit()" 2>&1)"; then
+      break
+    fi
+    send_attempt=$((send_attempt + 1))
+    if (( send_attempt < 3 )) && [[ "${out}" == *"replacement transaction underpriced"* || "${out}" == *"nonce too low"* ]]; then
+      sleep 1
+      continue
+    fi
+    echo "ERROR: wrap tx failed for step ${label}" >&2
+    echo "${out}" >&2
+    return 1
+  done
+  tx="$(echo "${out}" | awk '/^transactionHash[[:space:]]/{print $2; exit}')"
+  if [[ -z "${tx}" ]]; then
+    echo "ERROR: failed to parse wrap transaction hash for step ${label}" >&2
+    echo "${out}" >&2
+    return 1
+  fi
+  echo "${tx}"
+}
+
+compute_wallet_rebalance_plan() {
+  local native_wei="$1"
+  local stable_raw="$2"
+  local volatile_raw="$3"
+  local price_ratio="$4"
+  local stable_dec="$5"
+  local volatile_dec="$6"
+  local util_pct="$7"
+  local target_pct="$8"
+  local tolerance_pct="$9"
+  local plan
+  if ! plan="$(python3 - "${native_wei}" "${stable_raw}" "${volatile_raw}" "${price_ratio}" "${STABLE_SIDE}" "${stable_dec}" "${volatile_dec}" "${util_pct}" "${target_pct}" "${tolerance_pct}" <<'PY'
+from decimal import Decimal, getcontext, InvalidOperation, ROUND_FLOOR
+import sys
+
+native_wei = int(sys.argv[1])
+stable_raw = int(sys.argv[2])
+volatile_raw = int(sys.argv[3])
+ratio_str = sys.argv[4]
+stable_side = sys.argv[5]
+stable_dec = int(sys.argv[6])
+volatile_dec = int(sys.argv[7])
+util_pct = int(sys.argv[8])
+target_pct = int(sys.argv[9])
+tolerance_pct = int(sys.argv[10])
+
+getcontext().prec = 70
+try:
+  ratio = Decimal(ratio_str)
+except (InvalidOperation, ValueError):
+  ratio = Decimal(0)
+
+if ratio <= 0 or stable_side not in ("token0", "token1") or util_pct <= 0:
+  print("0|none|0")
+  raise SystemExit
+
+# ratio is token1 per token0.
+if stable_side == "token0":
+    price_stable_per_volatile = Decimal(1) / ratio
+else:
+    price_stable_per_volatile = ratio
+
+native_units = Decimal(native_wei) / (Decimal(10) ** 18)
+max_wrap_units = native_units * Decimal(util_pct) / Decimal(100)
+if max_wrap_units < 0:
+    max_wrap_units = Decimal(0)
+stable_units = Decimal(stable_raw) / (Decimal(10) ** stable_dec)
+volatile_units = Decimal(volatile_raw) / (Decimal(10) ** volatile_dec)
+total_value = stable_units + (volatile_units + max_wrap_units) * price_stable_per_volatile
+if total_value <= 0:
+    print("0|none|0")
+    raise SystemExit
+
+if target_pct <= 0:
+    target_pct = 50
+if target_pct >= 100:
+    target_pct = 50
+if tolerance_pct < 0:
+    tolerance_pct = 0
+
+target = total_value * Decimal(target_pct) / Decimal(100)
+tolerance = total_value * Decimal(tolerance_pct) / Decimal(100)
+delta = stable_units - target
+action = "none"
+swap_raw = 0
+wrap_wei = 0
+
+if delta > tolerance:
+    # Need more volatile: buy volatile with stable.
+    spend_stable = delta
+    swap_raw = int((spend_stable * (Decimal(10) ** stable_dec)).to_integral_value(rounding=ROUND_FLOOR))
+    max_buy = int((Decimal(stable_raw) * Decimal("0.80")).to_integral_value(rounding=ROUND_FLOOR))
+    min_buy = max(1, stable_raw // 500)
+    if max_buy < min_buy:
+        max_buy = min_buy
+    if swap_raw > max_buy:
+        swap_raw = max_buy
+    if swap_raw >= min_buy:
+        action = "buy_volatile_with_stable"
+    else:
+        swap_raw = 0
+elif delta < -tolerance:
+    # Need more stable: sell volatile.
+    need_stable = -delta
+    sell_volatile = need_stable / price_stable_per_volatile
+    if sell_volatile < 0:
+        sell_volatile = Decimal(0)
+    wrap_units = sell_volatile - volatile_units
+    if wrap_units < 0:
+        wrap_units = Decimal(0)
+    if wrap_units > max_wrap_units:
+        wrap_units = max_wrap_units
+    sell_cap = volatile_units + wrap_units
+    if sell_volatile > sell_cap:
+        sell_volatile = sell_cap
+    swap_raw = int((sell_volatile * (Decimal(10) ** volatile_dec)).to_integral_value(rounding=ROUND_FLOOR))
+    wrap_wei = int((wrap_units * (Decimal(10) ** 18)).to_integral_value(rounding=ROUND_FLOOR))
+    wrap_raw_equiv = int((wrap_units * (Decimal(10) ** volatile_dec)).to_integral_value(rounding=ROUND_FLOOR))
+    max_sell = int((Decimal(volatile_raw + wrap_raw_equiv) * Decimal("0.80")).to_integral_value(rounding=ROUND_FLOOR))
+    min_sell = max(1, (volatile_raw + wrap_raw_equiv) // 500)
+    if max_sell < min_sell:
+        max_sell = min_sell
+    if swap_raw > max_sell:
+        swap_raw = max_sell
+    if swap_raw >= min_sell:
+        action = "sell_volatile_for_stable"
+    else:
+        swap_raw = 0
+        wrap_wei = 0
+
+print(f"{wrap_wei}|{action}|{swap_raw}")
+PY
+)"; then
+    return 1
+  fi
+  echo "${plan}"
+}
+
+suggest_balance_target_side() {
+  local stable_raw="$1"
+  local volatile_raw="$2"
+  local price_ratio="$3"
+  local stable_dec="$4"
+  local volatile_dec="$5"
+  local target_pct="$6"
+  local tolerance_pct="$7"
+  local tick_now="$8"
+  local tick_anchor="$9"
+  local tick_band="${10}"
+  local out
+  if ! out="$(python3 - "${stable_raw}" "${volatile_raw}" "${price_ratio}" "${STABLE_SIDE}" "${stable_dec}" "${volatile_dec}" "${target_pct}" "${tolerance_pct}" "${tick_now}" "${tick_anchor}" "${tick_band}" <<'PY'
+from decimal import Decimal, getcontext, InvalidOperation
+import sys
+
+stable_raw = int(sys.argv[1])
+volatile_raw = int(sys.argv[2])
+ratio_str = sys.argv[3]
+stable_side = sys.argv[4]
+stable_dec = int(sys.argv[5])
+volatile_dec = int(sys.argv[6])
+target_pct = int(sys.argv[7])
+tolerance_pct = int(sys.argv[8])
+tick_now_str = sys.argv[9]
+tick_anchor_str = sys.argv[10]
+tick_band = int(sys.argv[11])
+
+getcontext().prec = 70
+try:
+    ratio = Decimal(ratio_str)
+except (InvalidOperation, ValueError):
+    ratio = Decimal(0)
+
+wallet_side = "none"
+pool_side = "none"
+reason = "none"
+
+if ratio > 0 and stable_side in ("token0", "token1"):
+    if stable_side == "token0":
+        price_stable_per_volatile = Decimal(1) / ratio
+        to_volatile = "zeroForOne"
+        to_stable = "oneForZero"
+    else:
+        price_stable_per_volatile = ratio
+        to_volatile = "oneForZero"
+        to_stable = "zeroForOne"
+    stable_units = Decimal(stable_raw) / (Decimal(10) ** stable_dec)
+    volatile_units = Decimal(volatile_raw) / (Decimal(10) ** volatile_dec)
+    total_value = stable_units + volatile_units * price_stable_per_volatile
+    if total_value > 0:
+        if target_pct <= 0 or target_pct >= 100:
+            target_pct = 50
+        if tolerance_pct < 0:
+            tolerance_pct = 0
+        stable_pct = (stable_units * Decimal(100)) / total_value
+        lower = Decimal(target_pct - tolerance_pct)
+        upper = Decimal(target_pct + tolerance_pct)
+        if stable_pct > upper:
+            wallet_side = to_volatile
+        elif stable_pct < lower:
+            wallet_side = to_stable
+
+try:
+    tick_now = int(tick_now_str)
+    tick_anchor = int(tick_anchor_str)
+except ValueError:
+    tick_now = None
+    tick_anchor = None
+if tick_now is not None and tick_anchor is not None and tick_band > 0:
+    delta = tick_now - tick_anchor
+    trigger = max(1, tick_band // 2)
+    if delta > trigger:
+        pool_side = "zeroForOne"
+    elif delta < -trigger:
+        pool_side = "oneForZero"
+
+if pool_side != "none" and wallet_side != "none":
+    if pool_side == wallet_side:
+        print(f"{pool_side}|wallet+pool-balance")
+    else:
+        print(f"{pool_side}|pool-balance")
+elif pool_side != "none":
+    print(f"{pool_side}|pool-balance")
+elif wallet_side != "none":
+    print(f"{wallet_side}|wallet-balance")
+else:
+    print("none|none")
+PY
+)"; then
+    return 1
+  fi
+  echo "${out}"
+}
+
+maybe_rebalance_wallet() {
+  local force="${1:-0}"
+  local native_raw stable_raw volatile_raw
+  local stable_token volatile_token
+  local stable_dec volatile_dec
+  local plan wrap_wei action swap_amount
+  local side zero_for_one wrap_tx swap_tx attempt_no ts
+
+  if (( AUTO_REBALANCE_ENABLED == 0 )); then
+    return 1
+  fi
+  if [[ "${STABLE_SIDE}" == "unknown" ]]; then
+    return 1
+  fi
+  if (( force == 0 && RND_ATTEMPTS > 0 && (RND_ATTEMPTS - RND_REBALANCE_LAST_ATTEMPT) < AUTO_REBALANCE_MIN_INTERVAL_ATTEMPTS )); then
+    return 1
+  fi
+
+  if [[ "${STABLE_SIDE}" == "token0" ]]; then
+    stable_token="${CURRENCY0}"
+    volatile_token="${CURRENCY1}"
+    stable_dec="${TOKEN0_DECIMALS}"
+    volatile_dec="${TOKEN1_DECIMALS}"
+  else
+    stable_token="${CURRENCY1}"
+    volatile_token="${CURRENCY0}"
+    stable_dec="${TOKEN1_DECIMALS}"
+    volatile_dec="${TOKEN0_DECIMALS}"
+  fi
+
+  if ! native_raw="$(read_native_balance_wei 2>/dev/null)"; then
+    return 1
+  fi
+  if ! stable_raw="$(read_token_balance "${stable_token}" 2>/dev/null)"; then
+    return 1
+  fi
+  if ! volatile_raw="$(read_token_balance "${volatile_token}" 2>/dev/null)"; then
+    return 1
+  fi
+  if ! [[ "${native_raw}" =~ ^[0-9]+$ && "${stable_raw}" =~ ^[0-9]+$ && "${volatile_raw}" =~ ^[0-9]+$ ]]; then
+    return 1
+  fi
+
+  if [[ -z "${RND_POOL_PRICE_T1_PER_T0}" || "${RND_POOL_PRICE_T1_PER_T0}" == "-" ]]; then
+    read_pool_tick >/dev/null 2>&1 || true
+  fi
+  if [[ -z "${RND_POOL_PRICE_T1_PER_T0}" || "${RND_POOL_PRICE_T1_PER_T0}" == "-" ]]; then
+    return 1
+  fi
+
+  if ! plan="$(compute_wallet_rebalance_plan \
+    "${native_raw}" \
+    "${stable_raw}" \
+    "${volatile_raw}" \
+    "${RND_POOL_PRICE_T1_PER_T0}" \
+    "${stable_dec}" \
+    "${volatile_dec}" \
+    "${AUTO_REBALANCE_ETH_UTIL_PCT}" \
+    "${AUTO_REBALANCE_TARGET_PCT}" \
+    "${AUTO_REBALANCE_TOLERANCE_PCT}")"; then
+    return 1
+  fi
+
+  wrap_wei="${plan%%|*}"
+  plan="${plan#*|}"
+  action="${plan%%|*}"
+  swap_amount="${plan#*|}"
+  if ! [[ "${wrap_wei}" =~ ^[0-9]+$ && "${swap_amount}" =~ ^[0-9]+$ ]]; then
+    return 1
+  fi
+  if (( wrap_wei == 0 && swap_amount == 0 )); then
+    return 1
+  fi
+
+  if (( wrap_wei > 0 )); then
+    wrap_tx="$(run_wrap_step "REBAL_WRAP_$(printf '%06d' "$((RND_ATTEMPTS + 1))")" "${volatile_token}" "${wrap_wei}" 2>&1)" || {
+      RND_LAST_ERROR="rebalance wrap failed: $(sanitize_inline "${wrap_tx}")"
+      return 1
+    }
+  fi
+
+  if (( swap_amount > 0 )) && [[ "${action}" != "none" ]]; then
+    if [[ "${action}" == "sell_volatile_for_stable" ]]; then
+      if [[ "${STABLE_SIDE}" == "token0" ]]; then
+        zero_for_one=false
+        side="oneForZero"
+      else
+        zero_for_one=true
+        side="zeroForOne"
+      fi
+    else
+      if [[ "${STABLE_SIDE}" == "token0" ]]; then
+        zero_for_one=true
+        side="zeroForOne"
+      else
+        zero_for_one=false
+        side="oneForZero"
+      fi
+    fi
+    swap_tx="$(run_swap_step "REBAL_SWAP_$(printf '%06d' "$((RND_ATTEMPTS + 1))")" "${swap_amount}" "${zero_for_one}" 2>&1)" || {
+      RND_LAST_ERROR="rebalance swap failed: $(sanitize_inline "${swap_tx}")"
+      return 1
+    }
+    attempt_no=$((RND_ATTEMPTS + 1))
+    if [[ "${side}" == "zeroForOne" ]]; then
+      RND_ZFO_COUNT=$((RND_ZFO_COUNT + 1))
+    else
+      RND_OZF_COUNT=$((RND_OZF_COUNT + 1))
+    fi
+    RND_LAST_TX_HASH="${swap_tx}"
+    RND_LAST_TX_STATUS="ok"
+    RND_LAST_TX_SIDE="${side}"
+    RND_LAST_TX_AMOUNT="${swap_amount}"
+    RND_LAST_TX_REASON="wallet-rebalance"
+    ts="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+    random_append_tx_log "${ts}" "${attempt_no}" "REBALANCE" "ok" "${side}" "${swap_amount}" "wallet-rebalance" "${swap_tx}" "-" "-" "-" "-" "-" "-" "-"
+  else
+    RND_LAST_TX_REASON="wallet-rebalance-wrap-only"
+  fi
+
+  RND_REBALANCE_LAST_ATTEMPT="${RND_ATTEMPTS}"
+  RND_REBALANCE_COUNT=$((RND_REBALANCE_COUNT + 1))
+  random_refresh_runtime_metrics
+  return 0
+}
+
 amount_for_target_vol() {
   local target_vol="$1"
   local amount
@@ -757,7 +1151,7 @@ amount_for_target_vol() {
   # Approximation: ~2 USDC per 1 USD of target period volume.
   amount=$(( (target_vol + 1) / 2 ))
   # Keep volume meaningful in USD6 units to avoid dust-only closes.
-  if (( amount < 250000 )); then amount=250000; fi
+  if (( amount < 500000 )); then amount=500000; fi
   if bal_raw="$(cast_rpc call --rpc-url "${RPC_URL}" "${CURRENCY0}" "balanceOf(address)(uint256)" "${DEPLOYER}" 2>/dev/null | awk '{print $1}')"; then
     :
   else
@@ -775,6 +1169,27 @@ amount_for_target_vol() {
     fi
   fi
   echo "${amount}"
+}
+
+amount_for_period_target_vol() {
+  local target_vol="$1"
+  local current_vol="$2"
+  local delta cushion
+  if ! [[ "${target_vol}" =~ ^[0-9]+$ ]]; then
+    target_vol=0
+  fi
+  if ! [[ "${current_vol}" =~ ^[0-9]+$ ]]; then
+    current_vol=0
+  fi
+  delta=$((target_vol - current_vol))
+  if (( delta <= 0 )); then
+    delta="${HOOK_DUST_CLOSE_VOL_USD6}"
+  fi
+  cushion=$((delta / 8))
+  if (( cushion < 500000 )); then cushion=500000; fi
+  delta=$((delta + cushion))
+  if (( delta < 1000000 )); then delta=1000000; fi
+  amount_for_target_vol "${delta}"
 }
 
 scale_amount_for_side() {
@@ -855,19 +1270,30 @@ pick_case_amount_bounds() {
   if ! [[ "${bal_raw}" =~ ^[0-9]+$ ]]; then
     return 1
   fi
-  max_case=$(( bal_raw * 15 / 100 ))
+  max_case=$(( bal_raw * 25 / 100 ))
   if (( bal_raw > 0 && max_case <= 0 )); then
     max_case="${bal_raw}"
   fi
-  if (( max_case > RANDOM_SOFT_MAX_AMOUNT )); then
-    max_case="${RANDOM_SOFT_MAX_AMOUNT}"
-  fi
-  if (( max_case < 500000 )); then
-    max_case=500000
-  fi
-  min_case=$((max_case / 20))
-  if (( min_case < RANDOM_SOFT_MIN_AMOUNT )); then
-    min_case="${RANDOM_SOFT_MIN_AMOUNT}"
+  if (( CASES_MODE == 1 )); then
+    # Cases mode needs enough headroom to cross deadband and reach cap/floor transitions.
+    if (( max_case > 80000000 )); then
+      max_case=80000000
+    fi
+    if (( max_case < 2000000 )); then
+      max_case=2000000
+    fi
+    min_case=1000000
+  else
+    if (( max_case > RANDOM_SOFT_MAX_AMOUNT )); then
+      max_case="${RANDOM_SOFT_MAX_AMOUNT}"
+    fi
+    if (( max_case < 500000 )); then
+      max_case=500000
+    fi
+    min_case=$((max_case / 20))
+    if (( min_case < RANDOM_SOFT_MIN_AMOUNT )); then
+      min_case="${RANDOM_SOFT_MIN_AMOUNT}"
+    fi
   fi
   if (( min_case > max_case )); then
     min_case="${max_case}"
@@ -1191,6 +1617,8 @@ RND_ARB_FALLBACK_FORCED=0
 RND_SIDE_STREAK=0
 RND_LAST_SIDE_SEEN="-"
 RND_LAST_WAIT_STRATEGY="short-random"
+RND_REBALANCE_LAST_ATTEMPT=0
+RND_REBALANCE_COUNT=0
 RND_LULL_LAST_PROBE_ATTEMPT=0
 RND_BLOCK_ZFO_UNTIL=0
 RND_BLOCK_OZF_UNTIL=0
@@ -1270,6 +1698,19 @@ tc_status() {
     echo "FAIL"
   elif (( pass > 0 )); then
     echo "PASS"
+  else
+    echo "PENDING"
+  fi
+}
+
+tc_status_ed3() {
+  # ED-3 is advisory in live cases mode and may be marked SKIP after cycle completion.
+  if (( TC_ZERO_EMA_DOWN_FAIL > 0 )); then
+    echo "FAIL"
+  elif (( TC_ZERO_EMA_DOWN_PASS > 0 )); then
+    echo "PASS"
+  elif (( CASES_MODE == 1 && CASES_REQUIRE_ED3 == 0 && CASES_RUNS > 0 && CASES_COMPLETED_RUNS >= CASES_RUNS )); then
+    echo "SKIP"
   else
     echo "PENDING"
   fi
@@ -1511,8 +1952,15 @@ print_hook_case_row() {
   local obs="$3"
   local pass="$4"
   local fail="$5"
+  local status_override="${6:-}"
+  local status_text
+  if [[ -n "${status_override}" ]]; then
+    status_text="${status_override}"
+  else
+    status_text="$(tc_status "${pass}" "${fail}")"
+  fi
   printf "  %-6s %-34s | %-7s | %5s | %5s | %5s\n" \
-    "${case_id}" "${label}" "$(tc_status "${pass}" "${fail}")" "${obs}" "${pass}" "${fail}"
+    "${case_id}" "${label}" "${status_text}" "${obs}" "${pass}" "${fail}"
 }
 
 render_hook_cases_table() {
@@ -1528,7 +1976,7 @@ render_hook_cases_table() {
   print_hook_case_row "FZ-3" "lull reset semantics" "${TC_LULL_RESET_OBS}" "${TC_LULL_RESET_PASS}" "${TC_LULL_RESET_FAIL}"
   print_hook_case_row "ED-1" "cap clamp" "${TC_CAP_CLAMP_OBS}" "${TC_CAP_CLAMP_PASS}" "${TC_CAP_CLAMP_FAIL}"
   print_hook_case_row "ED-2" "floor clamp" "${TC_FLOOR_CLAMP_OBS}" "${TC_FLOOR_CLAMP_PASS}" "${TC_FLOOR_CLAMP_FAIL}"
-  print_hook_case_row "ED-3" "zero-ema zero-close down" "${TC_ZERO_EMA_DOWN_OBS}" "${TC_ZERO_EMA_DOWN_PASS}" "${TC_ZERO_EMA_DOWN_FAIL}"
+  print_hook_case_row "ED-3" "zero-ema zero-close down" "${TC_ZERO_EMA_DOWN_OBS}" "${TC_ZERO_EMA_DOWN_PASS}" "${TC_ZERO_EMA_DOWN_FAIL}" "$(tc_status_ed3)"
   echo "  ------------------------------------------+---------+-------+-------+-------"
 }
 
@@ -1631,6 +2079,439 @@ render_fee_change_table() {
   echo "  -------------------+--------+------+-----------------------------+------------+--------------------------"
 }
 
+cases_all_required_done() {
+  if (( CASES_RUN_CAP_OK != 1 \
+        || CASES_RUN_FLOOR_OK != 1 \
+        || CASES_RUN_REV_OK != 1 \
+        || CASES_RUN_DEADBAND_OK != 1 \
+        || CASES_RUN_LULL_OK != 1 )); then
+    return 1
+  fi
+  if (( CASES_REQUIRE_ED3 == 1 && CASES_RUN_ZERO_EMA_OK != 1 )); then
+    return 1
+  fi
+  return 0
+}
+
+cases_refresh_checklist_from_counters() {
+  if (( TC_CAP_CLAMP_PASS > CASES_BASE_CAP_PASS )); then
+    CASES_RUN_CAP_OK=1
+  fi
+  if (( TC_FLOOR_CLAMP_PASS > CASES_BASE_FLOOR_PASS )); then
+    CASES_RUN_FLOOR_OK=1
+  fi
+  if (( TC_REVERSAL_LOCK_PASS > CASES_BASE_REV_PASS )); then
+    CASES_RUN_REV_OK=1
+  fi
+  if (( TC_DEADBAND_PASS > CASES_BASE_DEADBAND_PASS )); then
+    CASES_RUN_DEADBAND_OK=1
+  fi
+  if (( TC_LULL_RESET_PASS > CASES_BASE_LULL_PASS )); then
+    CASES_RUN_LULL_OK=1
+  fi
+  if (( TC_ZERO_EMA_DOWN_PASS > CASES_BASE_ZERO_EMA_PASS )); then
+    CASES_RUN_ZERO_EMA_OK=1
+  fi
+}
+
+cases_set_stage() {
+  local next_stage="$1"
+  if [[ "${CASES_STAGE}" != "${next_stage}" ]]; then
+    CASES_STAGE="${next_stage}"
+    CASES_STAGE_STEP=0
+  fi
+}
+
+seconds_to_next_period() {
+  local ps="$1"
+  local now target wait
+  if ! [[ "${ps}" =~ ^[0-9]+$ ]]; then
+    echo 0
+    return
+  fi
+  if ! now="$(now_ts 2>/dev/null)"; then
+    echo 0
+    return
+  fi
+  if ! [[ "${now}" =~ ^[0-9]+$ ]]; then
+    echo 0
+    return
+  fi
+  target=$((ps + PERIOD_SECONDS + 2))
+  wait=$((target - now))
+  if (( wait < 0 )); then
+    wait=0
+  fi
+  if (( wait > PERIOD_SECONDS + 3 )); then
+    wait=$((PERIOD_SECONDS + 3))
+  fi
+  echo "${wait}"
+}
+
+cases_select_stage() {
+  local idx="$1"
+  local dir="$2"
+  cases_refresh_checklist_from_counters
+  if ! [[ "${idx}" =~ ^[0-9]+$ ]]; then
+    idx="${HOOK_INITIAL_IDX}"
+  fi
+  if ! [[ "${dir}" =~ ^[0-2]$ ]]; then
+    dir=0
+  fi
+
+  if cases_all_required_done; then
+    cases_set_stage "cycle_done"
+    return
+  fi
+
+  if (( CASES_RUN_LULL_OK == 0 )) && [[ "${CASES_STAGE}" == "lull_wait" || "${CASES_STAGE}" == "post_lull_trigger" || "${CASES_STAGE}" == "await_lull_validation" ]]; then
+    return
+  fi
+
+  if [[ "${CASES_PRIORITY_EDGE}" == "cap" ]]; then
+    if (( CASES_RUN_CAP_OK == 0 )); then
+      if (( idx >= HOOK_CAP_IDX )); then
+        cases_set_stage "cap_probe"
+      else
+        cases_set_stage "up_to_cap"
+      fi
+      return
+    fi
+    if (( CASES_RUN_FLOOR_OK == 0 )); then
+      if (( idx <= HOOK_FLOOR_IDX )); then
+        cases_set_stage "floor_probe"
+      else
+        cases_set_stage "down_to_floor"
+      fi
+      return
+    fi
+  else
+    if (( CASES_RUN_FLOOR_OK == 0 )); then
+      if (( idx <= HOOK_FLOOR_IDX )); then
+        cases_set_stage "floor_probe"
+      else
+        cases_set_stage "down_to_floor"
+      fi
+      return
+    fi
+    if (( CASES_RUN_CAP_OK == 0 )); then
+      if (( idx >= HOOK_CAP_IDX )); then
+        cases_set_stage "cap_probe"
+      else
+        cases_set_stage "up_to_cap"
+      fi
+      return
+    fi
+  fi
+
+  if (( CASES_RUN_REV_OK == 0 )); then
+    if (( dir == 1 || dir == 2 )); then
+      cases_set_stage "reversal_opposite"
+    else
+      cases_set_stage "reversal_seed"
+    fi
+    return
+  fi
+  if (( CASES_RUN_DEADBAND_OK == 0 )); then
+    cases_set_stage "deadband_probe"
+    return
+  fi
+  if (( CASES_RUN_LULL_OK == 0 )); then
+    cases_set_stage "lull_wait"
+    return
+  fi
+
+  cases_set_stage "cycle_done"
+}
+
+cases_reset_cycle_context() {
+  local idx="$1"
+  local dir="$2"
+  local dist_to_cap dist_to_floor
+  if ! [[ "${idx}" =~ ^[0-9]+$ ]]; then
+    idx="${HOOK_INITIAL_IDX}"
+  fi
+  if ! [[ "${dir}" =~ ^[0-2]$ ]]; then
+    dir=0
+  fi
+
+  CASES_RUN_CAP_OK=0
+  CASES_RUN_FLOOR_OK=0
+  CASES_RUN_REV_OK=0
+  CASES_RUN_DEADBAND_OK=0
+  CASES_RUN_LULL_OK=0
+  CASES_RUN_ZERO_EMA_OK=0
+  CASES_STAGE_STEP=0
+  CASES_BASE_CAP_PASS="${TC_CAP_CLAMP_PASS}"
+  CASES_BASE_FLOOR_PASS="${TC_FLOOR_CLAMP_PASS}"
+  CASES_BASE_REV_PASS="${TC_REVERSAL_LOCK_PASS}"
+  CASES_BASE_DEADBAND_PASS="${TC_DEADBAND_PASS}"
+  CASES_BASE_LULL_PASS="${TC_LULL_RESET_PASS}"
+  CASES_BASE_ZERO_EMA_PASS="${TC_ZERO_EMA_DOWN_PASS}"
+
+  if (( idx >= HOOK_CAP_IDX )); then
+    CASES_PRIORITY_EDGE="cap"
+  elif (( idx <= HOOK_FLOOR_IDX )); then
+    CASES_PRIORITY_EDGE="floor"
+  else
+    dist_to_cap=$((HOOK_CAP_IDX - idx))
+    if (( dist_to_cap < 0 )); then dist_to_cap=$(( -dist_to_cap )); fi
+    dist_to_floor=$((idx - HOOK_FLOOR_IDX))
+    if (( dist_to_floor < 0 )); then dist_to_floor=$(( -dist_to_floor )); fi
+    if (( dist_to_floor < dist_to_cap )); then
+      CASES_PRIORITY_EDGE="floor"
+    else
+      CASES_PRIORITY_EDGE="cap"
+    fi
+  fi
+
+  cases_select_stage "${idx}" "${dir}"
+}
+
+cases_target_up_volume() {
+  local ema="$1"
+  local step="$2"
+  local upper margin target
+  if ! [[ "${ema}" =~ ^[0-9]+$ ]]; then
+    ema=0
+  fi
+  if ! [[ "${step}" =~ ^[0-9]+$ ]]; then
+    step=0
+  fi
+  upper=$(( ema * (10000 + HOOK_DEADBAND_BPS) / 10000 ))
+  if (( upper < HOOK_DUST_CLOSE_VOL_USD6 * 2 )); then
+    upper=$((HOOK_DUST_CLOSE_VOL_USD6 * 2))
+  fi
+  margin=$(( upper / 20 ))
+  if (( margin < 1500000 )); then margin=1500000; fi
+  if (( margin > 12000000 )); then margin=12000000; fi
+  target=$(( upper + margin + step * 1000000 ))
+  if (( target < 6000000 )); then target=6000000; fi
+  if (( target > 260000000 )); then target=260000000; fi
+  echo "${target}"
+}
+
+cases_target_down_volume() {
+  local ema="$1"
+  local step="$2"
+  local lower margin ceiling target
+  if ! [[ "${ema}" =~ ^[0-9]+$ ]]; then
+    ema=0
+  fi
+  if ! [[ "${step}" =~ ^[0-9]+$ ]]; then
+    step=0
+  fi
+  lower=$(( ema * (10000 - HOOK_DEADBAND_BPS) / 10000 ))
+  if (( lower <= 0 )); then
+    echo "1000000"
+    return
+  fi
+  margin=$(( lower / 20 ))
+  if (( margin < 1000000 )); then margin=1000000; fi
+  if (( margin > 8000000 )); then margin=8000000; fi
+  ceiling=$(( lower - margin ))
+  if (( ceiling < 1000000 )); then ceiling=1000000; fi
+  target=$(( 1000000 + step * 1000000 ))
+  if (( target > ceiling )); then target="${ceiling}"; fi
+  if (( target < 1000000 )); then target=1000000; fi
+  echo "${target}"
+}
+
+cases_target_deadband_volume() {
+  local ema="$1"
+  local lower upper target
+  if ! [[ "${ema}" =~ ^[0-9]+$ ]]; then
+    ema=0
+  fi
+  if (( ema <= 0 )); then
+    echo "2000000"
+    return
+  fi
+  lower=$(( ema * (10000 - HOOK_DEADBAND_BPS) / 10000 ))
+  upper=$(( ema * (10000 + HOOK_DEADBAND_BPS) / 10000 ))
+  target=$(( lower + (upper - lower) / 2 ))
+  if (( target < lower )); then target="${lower}"; fi
+  if (( target > upper )); then target="${upper}"; fi
+  echo "${target}"
+}
+
+cases_plan_next_action() {
+  local state="$1"
+  local fee pv ema ps idx dir
+  local side reason target_vol amount wait_roll
+
+  IFS='|' read -r fee pv ema ps idx dir <<<"${state}"
+  cases_select_stage "${idx}" "${dir}"
+  CASES_FORCE_WAIT_SECONDS=0
+  CASES_FORCE_WAIT_REASON=""
+  side="zeroForOne"
+  reason="case-step"
+  target_vol=2000000
+
+  while true; do
+    case "${CASES_STAGE}" in
+      up_to_cap)
+        if (( idx >= HOOK_CAP_IDX )); then
+          cases_set_stage "cap_probe"
+          continue
+        fi
+        side="zeroForOne"
+        target_vol="$(cases_target_up_volume "${ema}" "${CASES_STAGE_STEP}")"
+        reason="case-up-ramp"
+        CASES_STAGE_STEP=$((CASES_STAGE_STEP + 1))
+        break
+        ;;
+      cap_probe)
+        side="zeroForOne"
+        target_vol="$(cases_target_up_volume "${ema}" "$((CASES_STAGE_STEP + 2))")"
+        reason="case-cap-clamp-probe"
+        CASES_STAGE_STEP=$((CASES_STAGE_STEP + 1))
+        break
+        ;;
+      down_to_floor)
+        if (( idx <= HOOK_FLOOR_IDX )); then
+          cases_set_stage "floor_probe"
+          continue
+        fi
+        side="oneForZero"
+        target_vol="$(cases_target_down_volume "${ema}" "${CASES_STAGE_STEP}")"
+        reason="case-down-ramp"
+        CASES_STAGE_STEP=$((CASES_STAGE_STEP + 1))
+        break
+        ;;
+      floor_probe)
+        side="oneForZero"
+        target_vol="$(cases_target_down_volume "${ema}" "$((CASES_STAGE_STEP + 2))")"
+        reason="case-floor-clamp-probe"
+        CASES_STAGE_STEP=$((CASES_STAGE_STEP + 1))
+        break
+        ;;
+      reversal_seed)
+        if (( idx >= HOOK_CAP_IDX )); then
+          side="oneForZero"
+          target_vol="$(cases_target_down_volume "${ema}" "3")"
+          reason="case-reversal-seed-down"
+        elif (( idx <= HOOK_FLOOR_IDX )); then
+          side="zeroForOne"
+          target_vol="$(cases_target_up_volume "${ema}" "3")"
+          reason="case-reversal-seed-up"
+        elif [[ "${CASES_PRIORITY_EDGE}" == "floor" ]]; then
+          side="oneForZero"
+          target_vol="$(cases_target_down_volume "${ema}" "2")"
+          reason="case-reversal-seed-down"
+        else
+          side="zeroForOne"
+          target_vol="$(cases_target_up_volume "${ema}" "2")"
+          reason="case-reversal-seed-up"
+        fi
+        if (( CASES_STAGE_STEP == 0 )); then
+          wait_roll="$(seconds_to_next_period "${ps}")"
+          if [[ "${wait_roll}" =~ ^[0-9]+$ ]] && (( wait_roll > 0 )); then
+            CASES_FORCE_WAIT_SECONDS="${wait_roll}"
+            CASES_FORCE_WAIT_REASON="case-reversal-rollover-wait"
+            CASES_STAGE_STEP=1
+          fi
+        else
+          CASES_STAGE_STEP=$((CASES_STAGE_STEP + 1))
+          if (( CASES_STAGE_STEP % 6 == 0 )); then
+            wait_roll="$(seconds_to_next_period "${ps}")"
+            if [[ "${wait_roll}" =~ ^[0-9]+$ ]] && (( wait_roll > 0 )); then
+              CASES_FORCE_WAIT_SECONDS="${wait_roll}"
+              CASES_FORCE_WAIT_REASON="case-reversal-rollover-retry"
+            fi
+          fi
+        fi
+        # Wait until hook sets a directional memory before opposite probe.
+        if [[ "${dir}" == "1" || "${dir}" == "2" ]]; then
+          cases_set_stage "reversal_opposite"
+        fi
+        break
+        ;;
+      reversal_opposite)
+        if [[ "${dir}" == "1" ]]; then
+          side="oneForZero"
+          target_vol="$(cases_target_down_volume "${ema}" "3")"
+          reason="case-reversal-opposite-down"
+          break
+        fi
+        if [[ "${dir}" == "2" ]]; then
+          side="zeroForOne"
+          target_vol="$(cases_target_up_volume "${ema}" "3")"
+          reason="case-reversal-opposite-up"
+          break
+        fi
+        side="zeroForOne"
+        target_vol="$(cases_target_up_volume "${ema}" "1")"
+        reason="case-reversal-wait-dir"
+        CASES_STAGE_STEP=$((CASES_STAGE_STEP + 1))
+        if (( CASES_STAGE_STEP % 6 == 0 )); then
+          wait_roll="$(seconds_to_next_period "${ps}")"
+          if [[ "${wait_roll}" =~ ^[0-9]+$ ]] && (( wait_roll > 0 )); then
+            CASES_FORCE_WAIT_SECONDS="${wait_roll}"
+            CASES_FORCE_WAIT_REASON="case-reversal-rollover-retry"
+          fi
+        fi
+        break
+        ;;
+      deadband_probe)
+        side="zeroForOne"
+        target_vol="$(cases_target_deadband_volume "${ema}")"
+        reason="case-deadband-probe"
+        if (( CASES_STAGE_STEP == 0 )); then
+          wait_roll="$(seconds_to_next_period "${ps}")"
+          if [[ "${wait_roll}" =~ ^[0-9]+$ ]] && (( wait_roll > 0 )); then
+            CASES_FORCE_WAIT_SECONDS="${wait_roll}"
+            CASES_FORCE_WAIT_REASON="case-deadband-rollover-wait"
+            CASES_STAGE_STEP=1
+          fi
+        else
+          CASES_STAGE_STEP=$((CASES_STAGE_STEP + 1))
+        fi
+        break
+        ;;
+      lull_wait)
+        side="zeroForOne"
+        target_vol="$(cases_target_deadband_volume "${ema}")"
+        reason="case-lull-prewait"
+        break
+        ;;
+      post_lull_trigger)
+        side="zeroForOne"
+        target_vol="$(cases_target_deadband_volume "${ema}")"
+        reason="case-lull-post-trigger"
+        cases_set_stage "await_lull_validation"
+        break
+        ;;
+      await_lull_validation)
+        side="zeroForOne"
+        target_vol="$(cases_target_deadband_volume "${ema}")"
+        reason="case-lull-post-retry"
+        break
+        ;;
+      cycle_done)
+        side="zeroForOne"
+        target_vol="$(cases_target_deadband_volume "${ema}")"
+        reason="case-cycle-done-hold"
+        break
+        ;;
+      *)
+        cases_select_stage "${idx}" "${dir}"
+        CASES_STAGE_STEP=0
+        continue
+        ;;
+    esac
+  done
+
+  amount="$(amount_for_period_target_vol "${target_vol}" "${pv}")"
+  if ! [[ "${amount}" =~ ^[0-9]+$ ]]; then
+    amount=0
+  fi
+  CASES_NEXT_SIDE="${side}"
+  CASES_NEXT_REASON="${reason}"
+  CASES_NEXT_TARGET_VOL="${target_vol}"
+  CASES_NEXT_AMOUNT="${amount}"
+}
+
 pick_amount_with_case_bias() {
   local min_amount="$1"
   local max_amount="$2"
@@ -1669,86 +2550,16 @@ pick_amount_with_case_bias() {
   if (( mid_hi > max_amount )); then mid_hi="${max_amount}"; fi
   if (( mid_hi < mid_lo )); then mid_hi="${mid_lo}"; fi
 
-  if (( CASE_DRIVEN == 1 )); then
-    if (( TC_CAP_CLAMP_PASS == 0 )); then
-      side="zeroForOne"
-      if (( idx < HOOK_CAP_IDX )); then
-        amount="$(random_between "${high_lo}" "${max_amount}")"
-        reason="tc-cap-up"
-      else
-        amount="$(random_between "${mid_target}" "${max_amount}")"
-        reason="tc-cap-clamp-probe"
-      fi
-    elif (( TC_FLOOR_CLAMP_PASS == 0 )); then
-      side="oneForZero"
-      if (( idx > HOOK_FLOOR_IDX )); then
-        amount="$(random_between "${min_amount}" "${low_hi}")"
-        reason="tc-floor-down"
-      else
-        amount="$(random_between "${min_amount}" "${mid_lo}")"
-        reason="tc-floor-clamp-probe"
-      fi
-    elif (( TC_REVERSAL_LOCK_PASS == 0 )); then
-      if (( dir == 1 )); then
-        side="oneForZero"
-        amount="$(random_between "${min_amount}" "${low_hi}")"
-        reason="tc-reversal-block-up"
-      elif (( dir == 2 )); then
-        side="zeroForOne"
-        amount="$(random_between "${high_lo}" "${max_amount}")"
-        reason="tc-reversal-block-down"
-      elif (( idx <= HOOK_FLOOR_IDX + 1 )); then
-        side="zeroForOne"
-        amount="$(random_between "${high_lo}" "${max_amount}")"
-        reason="tc-reversal-seed-up"
-      else
-        side="oneForZero"
-        amount="$(random_between "${min_amount}" "${low_hi}")"
-        reason="tc-reversal-seed-down"
-      fi
-    elif (( TC_DEADBAND_PASS == 0 && ema > 0 )); then
-      if (( dir == 2 )); then
-        side="oneForZero"
-      else
-        side="zeroForOne"
-      fi
-      amount="$(random_between "${mid_lo}" "${mid_hi}")"
-      reason="tc-deadband-probe"
-    elif (( TC_ZERO_EMA_DOWN_PASS == 0 && ema == 0 && idx > HOOK_FLOOR_IDX )); then
-      side="zeroForOne"
-      amount="$(random_between "${min_amount}" "${low_hi}")"
-      reason="tc-zero-ema-down"
-    else
-      if (( idx <= HOOK_FLOOR_IDX )); then
-        side="zeroForOne"
-        amount="$(random_between "${high_lo}" "${max_amount}")"
-        reason="tc-cycle-up"
-      elif (( idx >= HOOK_CAP_IDX )); then
-        side="oneForZero"
-        amount="$(random_between "${min_amount}" "${low_hi}")"
-        reason="tc-cycle-down"
-      elif (( dir == 1 )); then
-        side="oneForZero"
-        amount="$(random_between "${min_amount}" "${mid_lo}")"
-        reason="tc-cycle-reverse-down"
-      else
-        side="zeroForOne"
-        amount="$(random_between "${mid_lo}" "${mid_hi}")"
-        reason="tc-cycle-reverse-up"
-      fi
-    fi
+  roll="$(random_between 1 100)"
+  if (( roll <= 20 )); then
+    amount="$(random_between "${min_amount}" "${low_hi}")"
+    reason="biased-low"
+  elif (( roll <= 80 )); then
+    amount="$(random_between "${high_lo}" "${max_amount}")"
+    reason="biased-high"
   else
-    roll="$(random_between 1 100)"
-    if (( roll <= 20 )); then
-      amount="$(random_between "${min_amount}" "${low_hi}")"
-      reason="biased-low"
-    elif (( roll <= 80 )); then
-      amount="$(random_between "${high_lo}" "${max_amount}")"
-      reason="biased-high"
-    else
-      amount="$(random_between "${mid_lo}" "${mid_hi}")"
-      reason="biased-mid"
-    fi
+    amount="$(random_between "${mid_lo}" "${mid_hi}")"
+    reason="biased-mid"
   fi
 
   if (( amount < min_amount )); then amount="${min_amount}"; fi
@@ -1764,6 +2575,34 @@ pick_wait_with_case_bias() {
   IFS='|' read -r _ _ _ ps _ _ <<<"${state}"
   wait=0
   reason="no-wait"
+  RND_WAIT_PICK_SECONDS=0
+  RND_WAIT_PICK_REASON="no-wait"
+
+  if (( CASES_MODE == 1 )); then
+    if (( CASES_FORCE_WAIT_SECONDS > 0 )); then
+      RND_WAIT_PICK_SECONDS="${CASES_FORCE_WAIT_SECONDS}"
+      if [[ -n "${CASES_FORCE_WAIT_REASON}" ]]; then
+        RND_WAIT_PICK_REASON="${CASES_FORCE_WAIT_REASON}"
+      else
+        RND_WAIT_PICK_REASON="case-rollover-wait"
+      fi
+      CASES_FORCE_WAIT_SECONDS=0
+      CASES_FORCE_WAIT_REASON=""
+      return
+    fi
+    if [[ "${CASES_STAGE}" == "lull_wait" ]]; then
+      wait=$((HOOK_LULL_RESET_SECONDS + 3))
+      reason="case-lull-reset-wait"
+      cases_set_stage "post_lull_trigger"
+      RND_LULL_LAST_PROBE_ATTEMPT="${RND_ATTEMPTS}"
+      RND_WAIT_PICK_SECONDS="${wait}"
+      RND_WAIT_PICK_REASON="${reason}"
+      return
+    fi
+    RND_WAIT_PICK_SECONDS=0
+    RND_WAIT_PICK_REASON="case-step"
+    return
+  fi
 
   if now="$(now_ts 2>/dev/null)" && [[ "${now}" =~ ^[0-9]+$ && "${ps}" =~ ^[0-9]+$ ]]; then
     elapsed=$((now - ps))
@@ -1780,7 +2619,8 @@ pick_wait_with_case_bias() {
       wait=$((HOOK_LULL_RESET_SECONDS + 3))
       reason="case-lull-reset-probe"
       RND_LULL_LAST_PROBE_ATTEMPT="${RND_ATTEMPTS}"
-      echo "${wait}|${reason}"
+      RND_WAIT_PICK_SECONDS="${wait}"
+      RND_WAIT_PICK_REASON="${reason}"
       return
     fi
   fi
@@ -1789,7 +2629,8 @@ pick_wait_with_case_bias() {
   if (( wait > PERIOD_SECONDS + 20 )) && [[ "${reason}" != "case-lull-reset-probe" ]]; then
     wait=$((PERIOD_SECONDS + 20))
   fi
-  echo "${wait}|${reason}"
+  RND_WAIT_PICK_SECONDS="${wait}"
+  RND_WAIT_PICK_REASON="${reason}"
 }
 
 random_write_stats_snapshot() {
@@ -1811,7 +2652,7 @@ random_write_stats_snapshot() {
   initial_tier="$(fee_tier_for_idx "${HOOK_INITIAL_IDX}")"
   pause_tier="$(fee_tier_for_idx "${HOOK_PAUSE_IDX}")"
   mode_label="random"
-  if (( CASE_DRIVEN == 1 )); then
+  if (( CASES_MODE == 1 )); then
     mode_label="cases"
   fi
   recent_count="${#RND_FEE_EVENT_TS[@]}"
@@ -1838,6 +2679,17 @@ random_write_stats_snapshot() {
     echo "status=${RND_REASON}"
     echo "phase=${RND_PHASE}"
     echo "wait_strategy=${RND_LAST_WAIT_STRATEGY}"
+    echo "cases_mode=${CASES_MODE}"
+    echo "cases_runs_target=${CASES_RUNS}"
+    echo "cases_runs_completed=${CASES_COMPLETED_RUNS}"
+    echo "cases_stage=${CASES_STAGE}"
+    echo "cases_stage_step=${CASES_STAGE_STEP}"
+    echo "cases_priority_edge=${CASES_PRIORITY_EDGE}"
+    echo "cases_run_cap_ok=${CASES_RUN_CAP_OK}"
+    echo "cases_run_floor_ok=${CASES_RUN_FLOOR_OK}"
+    echo "cases_run_reversal_ok=${CASES_RUN_REV_OK}"
+    echo "cases_run_deadband_ok=${CASES_RUN_DEADBAND_OK}"
+    echo "cases_run_lull_ok=${CASES_RUN_LULL_OK}"
     echo "lull_last_probe_attempt=${RND_LULL_LAST_PROBE_ATTEMPT}"
     echo "attempts=${RND_ATTEMPTS}"
     echo "success=${RND_SUCCESS}"
@@ -1878,6 +2730,8 @@ random_write_stats_snapshot() {
     echo "fail_other=${RND_FAIL_OTHER}"
     echo "skip_balance=${RND_SKIP_BALANCE}"
     echo "balance_unblock_forced=${RND_BALANCE_UNBLOCK_FORCED}"
+    echo "wallet_rebalance_count=${RND_REBALANCE_COUNT}"
+    echo "wallet_rebalance_last_attempt=${RND_REBALANCE_LAST_ATTEMPT}"
     echo "model_mismatch_count=${RND_MODEL_MISMATCH_COUNT}"
     echo "model_mismatch_last=$(sanitize_inline "${RND_MODEL_MISMATCH_LAST}")"
     echo "tc_inv_fee_idx_bounds_status=$(tc_status "${TC_INV_BOUNDS_PASS}" "${TC_INV_BOUNDS_FAIL}")"
@@ -1912,7 +2766,7 @@ random_write_stats_snapshot() {
     echo "tc_edges_floor_clamp_obs=${TC_FLOOR_CLAMP_OBS}"
     echo "tc_edges_floor_clamp_pass=${TC_FLOOR_CLAMP_PASS}"
     echo "tc_edges_floor_clamp_fail=${TC_FLOOR_CLAMP_FAIL}"
-    echo "tc_edges_zero_ema_zero_close_down_status=$(tc_status "${TC_ZERO_EMA_DOWN_PASS}" "${TC_ZERO_EMA_DOWN_FAIL}")"
+    echo "tc_edges_zero_ema_zero_close_down_status=$(tc_status_ed3)"
     echo "tc_edges_zero_ema_zero_close_down_obs=${TC_ZERO_EMA_DOWN_OBS}"
     echo "tc_edges_zero_ema_zero_close_down_pass=${TC_ZERO_EMA_DOWN_PASS}"
     echo "tc_edges_zero_ema_zero_close_down_fail=${TC_ZERO_EMA_DOWN_FAIL}"
@@ -2049,7 +2903,7 @@ random_render_dashboard() {
     last_tx_amount_display="$(format_int_commas "${RND_LAST_TX_AMOUNT}")"
   fi
   mode_label="random"
-  if (( CASE_DRIVEN == 1 )); then
+  if (( CASES_MODE == 1 )); then
     mode_label="cases"
   fi
   if [[ -t 1 && "${NO_LIVE}" -eq 0 ]]; then
@@ -2057,6 +2911,10 @@ random_render_dashboard() {
   fi
   echo "===== Dynamic Fee Traffic Simulator ====="
   echo "Mode: ${mode_label} | Chain: ${CHAIN} | Status: ${RND_REASON} | Runtime: $(fmt_duration "${elapsed}")"
+  if (( CASES_MODE == 1 )); then
+    echo "Cases progress: run ${CASES_COMPLETED_RUNS}/${CASES_RUNS} | stage=${CASES_STAGE}"
+    echo "Cases checklist: cap=${CASES_RUN_CAP_OK} floor=${CASES_RUN_FLOOR_OK} reversal=${CASES_RUN_REV_OK} deadband=${CASES_RUN_DEADBAND_OK} lull=${CASES_RUN_LULL_OK}"
+  fi
   echo
   echo "Hook:"
   echo "  Address: ${HOOK_ADDRESS}"
@@ -2074,11 +2932,12 @@ random_render_dashboard() {
   echo "  Address: ${DEPLOYER}"
   echo "  Balances: ${NATIVE_GAS_SYMBOL}=${RND_BAL_NATIVE_FMT} | ${TOKEN0_SYMBOL}=${RND_BAL_TOKEN0_FMT} | ${TOKEN1_SYMBOL}=${RND_BAL_TOKEN1_FMT}"
   echo
-  echo "Execution: tx=${attempts_fmt} | ok=${success_fmt} fail=${failed_fmt} | rpcErr=${rpc_errors_fmt} | skipped(noBalance)=${skip_balance_fmt} | successRate=${success_pct}%"
+  echo "Execution: tx=${attempts_fmt} | ok=${success_fmt} fail=${failed_fmt} | rpcErr=${rpc_errors_fmt} | skipped(noBalance)=${skip_balance_fmt} | rebalances=${RND_REBALANCE_COUNT} | successRate=${success_pct}%"
   echo "Directions: zeroForOne=${zfo_fmt} | oneForZero=${ozf_fmt}"
   echo
   render_hook_cases_table
   echo "  Note: INV-* are on-chain invariants; RT/FZ/ED are script-model checks vs on-chain state."
+  echo "  Note: ED-3 is advisory in live cases and does not block cycle completion."
   if (( RND_MODEL_MISMATCH_COUNT > 0 )); then
     echo "  Model mismatch: count=${RND_MODEL_MISMATCH_COUNT} last=${RND_MODEL_MISMATCH_LAST}"
   fi
@@ -2131,7 +2990,11 @@ random_finalize() {
     if (( RND_STOP_REQUESTED == 1 )); then
       RND_REASON="stopped-by-signal"
     else
-      RND_REASON="completed"
+      if (( CASES_MODE == 1 && CASES_COMPLETED_RUNS < CASES_RUNS )); then
+        RND_REASON="incomplete-exit"
+      else
+        RND_REASON="completed"
+      fi
     fi
   elif [[ "${RND_REASON}" == "stopping" ]]; then
     RND_REASON="stopped-by-signal"
@@ -2176,11 +3039,12 @@ run_random_mode() {
   local fee_before pv_before ema_before ps_before idx_before dir_before
   local fee_after pv_after ema_after ps_after idx_after dir_after
   local min_amount max_amount amount
-  local amount_pick amount_pick_rest planned_side bounds_pick wait_pick wait_reason
+  local amount_pick amount_pick_rest planned_side bounds_pick wait_reason
   local attempt_no side_roll
   local side zero_for_one tx_hash tx_out tx_reason
+  local side_hint side_hint_reason side_hint_raw allow_hint
   local econ_metrics econ_vol_usd6 econ_vol0 econ_vol1 econ_fee0 econ_fee1 econ_fee_usd6
-  local bal0_raw bal1_raw
+  local bal0_raw bal1_raw zfo_budget ozf_budget
   local tick_now tick_delta tick_abs force_correction correction_min correction_max
   local wait_seconds label ts
 
@@ -2204,6 +3068,10 @@ run_random_mode() {
     echo "ERROR: --max-amount must be >= --min-amount."
     exit 1
   fi
+  if ! [[ "${CASES_RUNS}" =~ ^[0-9]+$ ]] || (( CASES_RUNS <= 0 )); then
+    echo "ERROR: --cases-runs must be a positive integer."
+    exit 1
+  fi
 
   if [[ -z "${STATS_FILE}" ]]; then
     STATS_FILE="./tmp/simulate_fee_cycle_stats_${CHAIN}_$(date -u +%Y%m%d_%H%M%S).txt"
@@ -2224,12 +3092,30 @@ run_random_mode() {
     exit 1
   fi
   IFS='|' read -r RND_CURRENT_FEE RND_CURRENT_PV RND_CURRENT_EMA ps_before RND_CURRENT_IDX RND_CURRENT_DIR <<<"${state_before}"
+  if ! state_fields_valid "${RND_CURRENT_FEE}" "${RND_CURRENT_PV}" "${RND_CURRENT_EMA}" "${ps_before}" "${RND_CURRENT_IDX}" "${RND_CURRENT_DIR}"; then
+    echo "ERROR: malformed initial hook state: ${state_before}"
+    exit 1
+  fi
   evaluate_hook_invariants "${RND_CURRENT_FEE}" "${RND_CURRENT_IDX}"
   random_refresh_runtime_metrics
   RND_START_TS="$(date +%s)"
   RND_START_ISO="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
   RND_LAST_UPDATE_ISO="${RND_START_ISO}"
   RND_LAST_TX_REASON="-"
+  RND_REBALANCE_LAST_ATTEMPT=0
+  RND_REBALANCE_COUNT=0
+  if (( CASES_MODE == 1 )); then
+    CASES_COMPLETED_RUNS=0
+    cases_reset_cycle_context "${RND_CURRENT_IDX}" "${RND_CURRENT_DIR}"
+  fi
+  if maybe_rebalance_wallet 1; then
+    if state_before="$(read_state 2>&1)"; then
+      IFS='|' read -r RND_CURRENT_FEE RND_CURRENT_PV RND_CURRENT_EMA ps_before RND_CURRENT_IDX RND_CURRENT_DIR <<<"${state_before}"
+      if state_fields_valid "${RND_CURRENT_FEE}" "${RND_CURRENT_PV}" "${RND_CURRENT_EMA}" "${ps_before}" "${RND_CURRENT_IDX}" "${RND_CURRENT_DIR}"; then
+        evaluate_hook_invariants "${RND_CURRENT_FEE}" "${RND_CURRENT_IDX}"
+      fi
+    fi
+  fi
 
   if [[ -n "${STATE_VIEW_ADDRESS}" && -n "${POOL_ID}" ]]; then
     if tick_now="$(read_pool_tick 2>/dev/null)"; then
@@ -2259,6 +3145,10 @@ run_random_mode() {
     RND_ARB_ENABLED=0
     RND_LAST_ERROR="StateView not configured; using side-streak fallback."
   fi
+  if (( CASES_MODE == 1 )); then
+    RND_ARB_ENABLED=0
+    RND_ARB_MODE="cases-scripted"
+  fi
 
   trap random_request_stop INT TERM
   trap random_finalize EXIT
@@ -2267,6 +3157,10 @@ run_random_mode() {
   random_render_dashboard
 
   while (( RND_STOP_REQUESTED == 0 )); do
+    if (( CASES_MODE == 1 && CASES_COMPLETED_RUNS >= CASES_RUNS )); then
+      RND_REASON="cases-runs-reached"
+      break
+    fi
     if (( DURATION_SECONDS > 0 )); then
       if (( $(date +%s) - RND_START_TS >= DURATION_SECONDS )); then
         RND_REASON="duration-reached"
@@ -2284,6 +3178,15 @@ run_random_mode() {
       continue
     fi
     IFS='|' read -r fee_before pv_before ema_before ps_before idx_before dir_before <<<"${state_before}"
+    if ! state_fields_valid "${fee_before}" "${pv_before}" "${ema_before}" "${ps_before}" "${idx_before}" "${dir_before}"; then
+      RND_RPC_ERRORS=$((RND_RPC_ERRORS + 1))
+      RND_LAST_ERROR="read_state malformed: $(sanitize_inline "${state_before}")"
+      RND_PHASE="read-state-retry"
+      random_write_stats_snapshot
+      random_render_dashboard
+      random_sleep_with_dashboard 2
+      continue
+    fi
     RND_CURRENT_FEE="${fee_before}"
     RND_CURRENT_PV="${pv_before}"
     RND_CURRENT_EMA="${ema_before}"
@@ -2291,15 +3194,23 @@ run_random_mode() {
     RND_CURRENT_DIR="${dir_before}"
     evaluate_hook_invariants "${fee_before}" "${idx_before}"
     random_refresh_runtime_metrics
+    if maybe_rebalance_wallet 0; then
+      RND_PHASE="wait"
+      RND_LAST_WAIT_STRATEGY="wallet-rebalance"
+      random_write_stats_snapshot
+      random_render_dashboard
+      random_sleep_with_dashboard 2
+      continue
+    fi
 
     bounds_pick=""
     if [[ -n "${RANDOM_MIN_AMOUNT}" ]]; then
       min_amount="${RANDOM_MIN_AMOUNT}"
-    elif (( CASE_DRIVEN == 1 )); then
+    elif (( CASES_MODE == 1 )); then
       if bounds_pick="$(pick_case_amount_bounds 2>/dev/null)"; then
         min_amount="${bounds_pick%%|*}"
       else
-        min_amount=100000
+        min_amount=500000
       fi
     else
       if ! min_amount="$(pick_low_amount "${state_before}" 2>/dev/null)"; then
@@ -2310,7 +3221,7 @@ run_random_mode() {
     fi
     if [[ -n "${RANDOM_MAX_AMOUNT}" ]]; then
       max_amount="${RANDOM_MAX_AMOUNT}"
-    elif (( CASE_DRIVEN == 1 )); then
+    elif (( CASES_MODE == 1 )); then
       if [[ -n "${bounds_pick:-}" ]]; then
         max_amount="${bounds_pick#*|}"
       elif bounds_pick="$(pick_case_amount_bounds 2>/dev/null)"; then
@@ -2325,7 +3236,13 @@ run_random_mode() {
         max_amount="${min_amount}"
       fi
     fi
-    if (( min_amount <= 0 )); then min_amount=100; fi
+    if (( min_amount <= 0 )); then
+      if (( CASES_MODE == 1 )); then
+        min_amount=500000
+      else
+        min_amount=100
+      fi
+    fi
     if [[ -z "${RANDOM_MIN_AMOUNT}" ]] && (( max_amount >= RANDOM_SOFT_MIN_AMOUNT && min_amount < RANDOM_SOFT_MIN_AMOUNT )); then
       min_amount="${RANDOM_SOFT_MIN_AMOUNT}"
     fi
@@ -2333,13 +3250,42 @@ run_random_mode() {
       max_amount="${RANDOM_SOFT_MAX_AMOUNT}"
     fi
     if (( max_amount < min_amount )); then max_amount="${min_amount}"; fi
-    amount_pick="$(pick_amount_with_case_bias "${min_amount}" "${max_amount}" "${state_before}")"
-    amount="${amount_pick%%|*}"
-    amount_pick_rest="${amount_pick#*|}"
-    tx_reason="${amount_pick_rest%%|*}"
-    planned_side="${amount_pick_rest#*|}"
-    if [[ "${planned_side}" == "${amount_pick_rest}" ]]; then
-      planned_side=""
+    if (( CASES_MODE == 1 )); then
+      cases_plan_next_action "${state_before}"
+      amount="${CASES_NEXT_AMOUNT}"
+      tx_reason="${CASES_NEXT_REASON}"
+      planned_side="${CASES_NEXT_SIDE}"
+      if ! [[ "${amount}" =~ ^[0-9]+$ ]]; then
+        amount="${min_amount}"
+      fi
+      if (( amount < min_amount )); then amount="${min_amount}"; fi
+      if (( amount > max_amount )); then amount="${max_amount}"; fi
+    else
+      amount_pick="$(pick_amount_with_case_bias "${min_amount}" "${max_amount}" "${state_before}")"
+      amount="${amount_pick%%|*}"
+      amount_pick_rest="${amount_pick#*|}"
+      tx_reason="${amount_pick_rest%%|*}"
+      planned_side="${amount_pick_rest#*|}"
+      if [[ "${planned_side}" == "${amount_pick_rest}" ]]; then
+        planned_side=""
+      fi
+    fi
+    if (( CASES_MODE == 1 && CASES_FORCE_WAIT_SECONDS > 0 )); then
+      RND_PHASE="wait"
+      wait_seconds="${CASES_FORCE_WAIT_SECONDS}"
+      if [[ -n "${CASES_FORCE_WAIT_REASON}" ]]; then
+        wait_reason="${CASES_FORCE_WAIT_REASON}"
+      else
+        wait_reason="case-rollover-wait"
+      fi
+      CASES_FORCE_WAIT_SECONDS=0
+      CASES_FORCE_WAIT_REASON=""
+      RND_LAST_WAIT_STRATEGY="${wait_reason}"
+      random_refresh_runtime_metrics
+      random_write_stats_snapshot
+      random_render_dashboard
+      random_sleep_with_dashboard "${wait_seconds}"
+      continue
     fi
     force_correction=0
     attempt_no=$((RND_ATTEMPTS + 1))
@@ -2426,7 +3372,7 @@ run_random_mode() {
           zero_for_one=false
           side="oneForZero"
         fi
-      elif (( RND_ARB_ENABLED == 0 && RND_SIDE_STREAK >= ARB_GUARD_STREAK_LIMIT )) && [[ "${RND_LAST_SIDE_SEEN}" != "-" ]]; then
+      elif (( CASES_MODE == 0 && RND_ARB_ENABLED == 0 && RND_SIDE_STREAK >= ARB_GUARD_STREAK_LIMIT )) && [[ "${RND_LAST_SIDE_SEEN}" != "-" ]]; then
         tx_reason="fallback-reverse-streak"
         RND_ARB_FALLBACK_FORCED=$((RND_ARB_FALLBACK_FORCED + 1))
         if [[ "${RND_LAST_SIDE_SEEN}" == "zeroForOne" ]]; then
@@ -2472,6 +3418,66 @@ run_random_mode() {
           zero_for_one=false
           side="oneForZero"
         fi
+      fi
+    fi
+
+    side_hint="none"
+    side_hint_reason="none"
+    bal0_raw=""
+    bal1_raw=""
+    if [[ "${STABLE_SIDE}" != "unknown" ]]; then
+      if bal0_raw="$(read_token_balance "${CURRENCY0}" 2>/dev/null)" && bal1_raw="$(read_token_balance "${CURRENCY1}" 2>/dev/null)"; then
+        if [[ "${bal0_raw}" =~ ^[0-9]+$ && "${bal1_raw}" =~ ^[0-9]+$ ]]; then
+          if [[ "${STABLE_SIDE}" == "token0" ]]; then
+            side_hint_raw="$(suggest_balance_target_side \
+              "${bal0_raw}" \
+              "${bal1_raw}" \
+              "${RND_POOL_PRICE_T1_PER_T0}" \
+              "${TOKEN0_DECIMALS}" \
+              "${TOKEN1_DECIMALS}" \
+              "${AUTO_REBALANCE_TARGET_PCT}" \
+              "${AUTO_REBALANCE_TOLERANCE_PCT}" \
+              "${RND_ARB_CURRENT_TICK}" \
+              "${RND_ARB_ANCHOR_TICK}" \
+              "${ARB_GUARD_TICK_BAND}" 2>/dev/null || true)"
+          else
+            side_hint_raw="$(suggest_balance_target_side \
+              "${bal1_raw}" \
+              "${bal0_raw}" \
+              "${RND_POOL_PRICE_T1_PER_T0}" \
+              "${TOKEN1_DECIMALS}" \
+              "${TOKEN0_DECIMALS}" \
+              "${AUTO_REBALANCE_TARGET_PCT}" \
+              "${AUTO_REBALANCE_TOLERANCE_PCT}" \
+              "${RND_ARB_CURRENT_TICK}" \
+              "${RND_ARB_ANCHOR_TICK}" \
+              "${ARB_GUARD_TICK_BAND}" 2>/dev/null || true)"
+          fi
+          side_hint="${side_hint_raw%%|*}"
+          side_hint_reason="${side_hint_raw#*|}"
+          if [[ "${side_hint_reason}" == "${side_hint_raw}" ]]; then
+            side_hint_reason="balance-guidance"
+          fi
+        fi
+      fi
+    fi
+    if [[ "${side_hint}" == "zeroForOne" || "${side_hint}" == "oneForZero" ]]; then
+      allow_hint=1
+      if (( CASES_MODE == 1 )); then
+        case "${CASES_STAGE}" in
+          up_to_cap|cap_probe|down_to_floor|floor_probe|reversal_seed|reversal_opposite)
+            allow_hint=0
+            ;;
+        esac
+      fi
+      if (( force_correction == 0 && allow_hint == 1 )) && [[ "${side}" != "${side_hint}" ]]; then
+        side="${side_hint}"
+        if [[ "${side}" == "zeroForOne" ]]; then
+          zero_for_one=true
+        else
+          zero_for_one=false
+        fi
+        tx_reason="${tx_reason}+${side_hint_reason}"
       fi
     fi
 
@@ -2521,24 +3527,28 @@ run_random_mode() {
       fi
     fi
 
-    if bal0_raw="$(read_token_balance "${CURRENCY0}" 2>/dev/null)" && bal1_raw="$(read_token_balance "${CURRENCY1}" 2>/dev/null)"; then
-      # If one input side is nearly depleted, force a reseed swap from the opposite side.
-      if [[ "${side}" == "zeroForOne" && "${bal0_raw}" =~ ^[0-9]+$ && "${bal0_raw}" -lt 1000000 ]]; then
+    if [[ "${bal0_raw}" =~ ^[0-9]+$ && "${bal1_raw}" =~ ^[0-9]+$ ]]; then
+      zfo_budget=$(( bal0_raw * MAX_BALANCE_SPEND_PCT / 100 ))
+      ozf_budget=$(( bal1_raw * MAX_BALANCE_SPEND_PCT / 100 ))
+      if (( bal0_raw > 0 && zfo_budget <= 0 )); then zfo_budget="${bal0_raw}"; fi
+      if (( bal1_raw > 0 && ozf_budget <= 0 )); then ozf_budget="${bal1_raw}"; fi
+      # If one input side is depleted, force the opposite direction to restore spendable balance.
+      if [[ "${side}" == "zeroForOne" && ${zfo_budget} -le 0 ]]; then
         if (( attempt_no < RND_BLOCK_OZF_UNTIL )); then
           RND_BLOCK_OZF_UNTIL=0
           RND_BALANCE_UNBLOCK_FORCED=$((RND_BALANCE_UNBLOCK_FORCED + 1))
         fi
         side="oneForZero"
         zero_for_one=false
-        tx_reason="${tx_reason}+balance-reseed-usdc"
-      elif [[ "${side}" == "oneForZero" && "${bal1_raw}" =~ ^[0-9]+$ && "${bal1_raw}" -lt 1000000000000000 ]]; then
+        tx_reason="${tx_reason}+balance-reseed"
+      elif [[ "${side}" == "oneForZero" && ${ozf_budget} -le 0 ]]; then
         if (( attempt_no < RND_BLOCK_ZFO_UNTIL )); then
           RND_BLOCK_ZFO_UNTIL=0
           RND_BALANCE_UNBLOCK_FORCED=$((RND_BALANCE_UNBLOCK_FORCED + 1))
         fi
         side="zeroForOne"
         zero_for_one=true
-        tx_reason="${tx_reason}+balance-reseed-weth"
+        tx_reason="${tx_reason}+balance-reseed"
       fi
     fi
 
@@ -2570,6 +3580,14 @@ run_random_mode() {
           RND_BALANCE_UNBLOCK_FORCED=$((RND_BALANCE_UNBLOCK_FORCED + 1))
         fi
       else
+        if maybe_rebalance_wallet 1; then
+          RND_PHASE="wait"
+          RND_LAST_WAIT_STRATEGY="wallet-rebalance"
+          random_write_stats_snapshot
+          random_render_dashboard
+          random_sleep_with_dashboard 2
+          continue
+        fi
         RND_SKIP_BALANCE=$((RND_SKIP_BALANCE + 1))
         RND_LAST_ERROR="insufficient token-in balance for both directions; skipping attempt"
         RND_LAST_TX_STATUS="skipped"
@@ -2644,34 +3662,63 @@ run_random_mode() {
       fi
       if state_after="$(read_state 2>&1)"; then
         IFS='|' read -r fee_after pv_after ema_after ps_after idx_after dir_after <<<"${state_after}"
-        RND_CURRENT_FEE="${fee_after}"
-        RND_CURRENT_PV="${pv_after}"
-        RND_CURRENT_EMA="${ema_after}"
-        RND_CURRENT_IDX="${idx_after}"
-        RND_CURRENT_DIR="${dir_after}"
-        evaluate_hook_invariants "${fee_after}" "${idx_after}"
-        evaluate_hook_transition_cases "${state_before}" "${state_after}"
-        if [[ "${fee_after}" == "${fee_before}" && "${pv_after}" == "${pv_before}" && "${ema_after}" == "${ema_before}" && "${idx_after}" == "${idx_before}" && "${dir_after}" == "${dir_before}" ]]; then
-          RND_NO_STATE_CHANGE_STREAK=$((RND_NO_STATE_CHANGE_STREAK + 1))
-          RND_NO_STATE_CHANGE_TOTAL=$((RND_NO_STATE_CHANGE_TOTAL + 1))
-          if (( RND_NO_STATE_CHANGE_STREAK >= 12 && RND_NO_STATE_CHANGE_WARNED == 0 )); then
-            RND_NO_STATE_CHANGE_WARNED=1
-            RND_LAST_ERROR="warning: ${RND_NO_STATE_CHANGE_STREAK} successful swaps without hook state changes; likely zero active liquidity or wrong pool key."
+        if state_fields_valid "${fee_after}" "${pv_after}" "${ema_after}" "${ps_after}" "${idx_after}" "${dir_after}"; then
+          RND_CURRENT_FEE="${fee_after}"
+          RND_CURRENT_PV="${pv_after}"
+          RND_CURRENT_EMA="${ema_after}"
+          RND_CURRENT_IDX="${idx_after}"
+          RND_CURRENT_DIR="${dir_after}"
+          evaluate_hook_invariants "${fee_after}" "${idx_after}"
+          evaluate_hook_transition_cases "${state_before}" "${state_after}"
+          if (( CASES_MODE == 1 )); then
+            cases_refresh_checklist_from_counters
+            if (( CASES_RUN_LULL_OK == 0 )) && [[ "${CASES_STAGE}" == "await_lull_validation" ]]; then
+              cases_set_stage "post_lull_trigger"
+            fi
+            cases_select_stage "${idx_after}" "${dir_after}"
+            if cases_all_required_done; then
+              CASES_COMPLETED_RUNS=$((CASES_COMPLETED_RUNS + 1))
+              cases_reset_cycle_context "${idx_after}" "${dir_after}"
+            fi
+          fi
+          if [[ "${fee_after}" == "${fee_before}" && "${pv_after}" == "${pv_before}" && "${ema_after}" == "${ema_before}" && "${idx_after}" == "${idx_before}" && "${dir_after}" == "${dir_before}" ]]; then
+            RND_NO_STATE_CHANGE_STREAK=$((RND_NO_STATE_CHANGE_STREAK + 1))
+            RND_NO_STATE_CHANGE_TOTAL=$((RND_NO_STATE_CHANGE_TOTAL + 1))
+            if (( RND_NO_STATE_CHANGE_STREAK >= 12 && RND_NO_STATE_CHANGE_WARNED == 0 )); then
+              RND_NO_STATE_CHANGE_WARNED=1
+              RND_LAST_ERROR="warning: ${RND_NO_STATE_CHANGE_STREAK} successful swaps without hook state changes; likely zero active liquidity or wrong pool key."
+            fi
+          else
+            RND_NO_STATE_CHANGE_STREAK=0
           fi
         else
-          RND_NO_STATE_CHANGE_STREAK=0
+          RND_RPC_ERRORS=$((RND_RPC_ERRORS + 1))
+          RND_LAST_ERROR="post-send read_state malformed: $(sanitize_inline "${state_after}")"
+          fee_after="${fee_before}"
+          pv_after="${pv_before}"
+          ema_after="${ema_before}"
+          ps_after="${ps_before}"
+          idx_after="${idx_before}"
+          dir_after="${dir_before}"
         fi
       else
         RND_RPC_ERRORS=$((RND_RPC_ERRORS + 1))
         RND_LAST_ERROR="post-send read_state failed: $(sanitize_inline "${state_after}")"
         fee_after="${fee_before}"
+        pv_after="${pv_before}"
+        ema_after="${ema_before}"
+        ps_after="${ps_before}"
         idx_after="${idx_before}"
         dir_after="${dir_before}"
       fi
-      if (( fee_after > fee_before )); then
-        RND_FEE_UP=$((RND_FEE_UP + 1))
-      elif (( fee_after < fee_before )); then
-        RND_FEE_DOWN=$((RND_FEE_DOWN + 1))
+      if [[ "${fee_after}" =~ ^[0-9]+$ && "${fee_before}" =~ ^[0-9]+$ ]]; then
+        if (( fee_after > fee_before )); then
+          RND_FEE_UP=$((RND_FEE_UP + 1))
+        elif (( fee_after < fee_before )); then
+          RND_FEE_DOWN=$((RND_FEE_DOWN + 1))
+        else
+          RND_FEE_FLAT=$((RND_FEE_FLAT + 1))
+        fi
       else
         RND_FEE_FLAT=$((RND_FEE_FLAT + 1))
       fi
@@ -2735,6 +3782,7 @@ run_random_mode() {
         RND_FORCE_SIDE_UNTIL=$((RND_ATTEMPTS + BALANCE_ERROR_FORCE_ATTEMPTS + 8))
         RND_NEXT_WAIT_OVERRIDE=1
         RND_PRICE_LIMIT_STREAK=0
+        maybe_rebalance_wallet 1 || true
       elif [[ "${tx_out}" == *"execution reverted"* ]]; then
         RND_FAIL_HOOKLIKE_REVERT=$((RND_FAIL_HOOKLIKE_REVERT + 1))
         RND_PRICE_LIMIT_STREAK=0
@@ -2752,9 +3800,9 @@ run_random_mode() {
       wait_reason="price-limit-retry"
       RND_NEXT_WAIT_OVERRIDE=0
     else
-      wait_pick="$(pick_wait_with_case_bias "${state_before}")"
-      wait_seconds="${wait_pick%%|*}"
-      wait_reason="${wait_pick#*|}"
+      pick_wait_with_case_bias "${state_before}"
+      wait_seconds="${RND_WAIT_PICK_SECONDS}"
+      wait_reason="${RND_WAIT_PICK_REASON}"
     fi
     RND_LAST_WAIT_STRATEGY="${wait_reason}"
     random_refresh_runtime_metrics
@@ -2764,139 +3812,5 @@ run_random_mode() {
   done
 }
 
-if [[ "${MODE}" == "random" ]]; then
-  run_random_mode
-  exit 0
-fi
-
-START_STATE="$(read_state)"
-IFS='|' read -r START_FEE START_PV START_EMA START_PS START_IDX START_DIR <<<"${START_STATE}"
-START_NOW="$(now_ts)"
-
-# Ensure deterministic close behavior for U1.
-if (( START_NOW < START_PS + PERIOD_SECONDS )); then
-  echo "==> Waiting for initial period close before U1..."
-  wait_for_next_period "U1-pre" "${START_STATE}"
-fi
-
-declare -a STEP_LINES=()
-
-append_step_line() {
-  local label="$1"
-  local amount="$2"
-  local tx="$3"
-  local before="$4"
-  local after="$5"
-
-  local b_fee b_pv b_ema b_ps b_idx b_dir
-  local a_fee a_pv a_ema a_ps a_idx a_dir
-  IFS='|' read -r b_fee b_pv b_ema b_ps b_idx b_dir <<<"${before}"
-  IFS='|' read -r a_fee a_pv a_ema a_ps a_idx a_dir <<<"${after}"
-  STEP_LINES+=("${label}|${amount}|${tx}|${b_fee}|${a_fee}|${b_idx}|${a_idx}|${b_dir}|${a_dir}|${a_pv}|${a_ema}|${a_ps}")
-}
-
-S_BEFORE="$(read_state)"
-AMT_U1="$(pick_high_amount "${S_BEFORE}")"
-TX_U1="$(run_swap_step "U1_HIGH" "${AMT_U1}" "true")"
-S_AFTER_U1="$(read_state)"
-append_step_line "U1_HIGH" "${AMT_U1}" "${TX_U1}" "${S_BEFORE}" "${S_AFTER_U1}"
-
-wait_for_next_period "U2" "${S_AFTER_U1}"
-S_BEFORE="$(read_state)"
-AMT_U2="$(pick_low_amount "${S_BEFORE}")"
-TX_U2="$(run_swap_step "U2_LOW" "${AMT_U2}" "true")"
-S_AFTER_U2="$(read_state)"
-append_step_line "U2_LOW" "${AMT_U2}" "${TX_U2}" "${S_BEFORE}" "${S_AFTER_U2}"
-IFS='|' read -r FEE_B_U2 _ _ _ IDX_B_U2 _ <<<"${S_BEFORE}"
-IFS='|' read -r FEE_U2 _ _ _ IDX_U2 DIR_U2 <<<"${S_AFTER_U2}"
-if (( FEE_U2 <= FEE_B_U2 )) || (( IDX_U2 <= IDX_B_U2 )) || [[ "${DIR_U2}" != "1" ]]; then
-  echo "ERROR: U2 expectation failed. expected UP move; got fee ${FEE_B_U2}->${FEE_U2}, idx ${IDX_B_U2}->${IDX_U2}, lastDir=${DIR_U2}"
-  exit 1
-fi
-
-wait_for_next_period "D1" "${S_AFTER_U2}"
-S_BEFORE="$(read_state)"
-AMT_D1="$(pick_low_amount "${S_BEFORE}")"
-TX_D1="$(run_swap_step "D1_LOW_LOCK" "${AMT_D1}" "true")"
-S_AFTER_D1="$(read_state)"
-append_step_line "D1_LOW_LOCK" "${AMT_D1}" "${TX_D1}" "${S_BEFORE}" "${S_AFTER_D1}"
-IFS='|' read -r FEE_B_D1 _ _ _ IDX_B_D1 _ <<<"${S_BEFORE}"
-IFS='|' read -r FEE_D1 _ _ _ IDX_D1 DIR_D1 <<<"${S_AFTER_D1}"
-if (( FEE_D1 != FEE_B_D1 )) || (( IDX_D1 != IDX_B_D1 )) || [[ "${DIR_D1}" != "0" ]]; then
-  echo "ERROR: D1 expectation failed. expected reversal lock; got fee ${FEE_B_D1}->${FEE_D1}, idx ${IDX_B_D1}->${IDX_D1}, lastDir=${DIR_D1}"
-  exit 1
-fi
-
-wait_for_next_period "D2" "${S_AFTER_D1}"
-S_BEFORE="$(read_state)"
-AMT_D2="$(pick_low_amount "${S_BEFORE}")"
-TX_D2="$(run_swap_step "D2_LOW_DOWN" "${AMT_D2}" "true")"
-S_AFTER_D2="$(read_state)"
-append_step_line "D2_LOW_DOWN" "${AMT_D2}" "${TX_D2}" "${S_BEFORE}" "${S_AFTER_D2}"
-IFS='|' read -r FINAL_FEE FINAL_PV FINAL_EMA FINAL_PS FINAL_IDX FINAL_DIR <<<"${S_AFTER_D2}"
-IFS='|' read -r FEE_B_D2 _ _ _ IDX_B_D2 _ <<<"${S_BEFORE}"
-if (( FINAL_FEE >= FEE_B_D2 )) || (( FINAL_IDX >= IDX_B_D2 )) || [[ "${FINAL_DIR}" != "2" ]]; then
-  echo "ERROR: D2 expectation failed. expected DOWN move; got fee ${FEE_B_D2}->${FINAL_FEE}, idx ${IDX_B_D2}->${FINAL_IDX}, lastDir=${FINAL_DIR}"
-  exit 1
-fi
-
-POOL_ID=""
-SLOT0_LP_FEE=""
-SLOT0_TICK=""
-if [[ -n "${STATE_VIEW_ADDRESS}" ]]; then
-  set -f
-  POOL_KEY_ENC="$(cast abi-encode 'f((address,address,uint24,int24,address))' "${POOL_KEY}")"
-  set +f
-  POOL_ID="$(cast keccak "${POOL_KEY_ENC}")"
-  SLOT_OUT="$(cast_rpc call --rpc-url "${RPC_URL}" "${STATE_VIEW_ADDRESS}" "getSlot0(bytes32)(uint160,int24,uint24,uint24)" "${POOL_ID}")"
-  SLOT0_TICK="$(printf '%s\n' "${SLOT_OUT}" | sed -n '2p' | awk '{print $1}')"
-  SLOT0_LP_FEE="$(printf '%s\n' "${SLOT_OUT}" | sed -n '4p' | awk '{print $1}')"
-fi
-
-echo
-echo "===== Dynamic Fee Simulation Report ====="
-echo "Chain: ${CHAIN}"
-echo "RPC: ${RPC_URL}"
-echo "Hook: ${HOOK_ADDRESS}"
-echo "Pool: ${POOL_ID:-n/a}"
-echo "Swap helper: ${SWAP_TEST_ADDRESS}"
-if [[ -n "${STATE_VIEW_ADDRESS}" ]]; then
-  echo "StateView: ${STATE_VIEW_ADDRESS}"
-  echo "PoolId: ${POOL_ID}"
-fi
-if [[ -n "${HIGH_SWAP_AMOUNT}" ]]; then
-  echo "Fixed high amountSpecified: ${HIGH_SWAP_AMOUNT}"
-else
-  echo "High amountSpecified: adaptive"
-fi
-if [[ -n "${LOW_SWAP_AMOUNT}" ]]; then
-  echo "Fixed low amountSpecified: ${LOW_SWAP_AMOUNT}"
-else
-  echo "Low amountSpecified: adaptive"
-fi
-echo "Period seconds: ${PERIOD_SECONDS}"
-echo
-echo "Initial state:"
-echo "  feeBips=${START_FEE} periodVolUsd6=${START_PV} emaUsd6=${START_EMA} periodStart=${START_PS} feeIdx=${START_IDX} lastDir=${START_DIR}"
-echo
-printf "%-14s %-16s %-66s %-12s %-10s %-10s %-18s %-14s %-12s\n" \
-  "Step" "Amount" "TxHash" "feeBips" "feeIdx" "lastDir" "periodVolUsd6" "emaUsd6" "periodStart"
-printf "%-14s %-16s %-66s %-12s %-10s %-10s %-18s %-14s %-12s\n" \
-  "----" "------" "------" "-------" "------" "-------" "------------" "------" "----------"
-for line in "${STEP_LINES[@]}"; do
-  IFS='|' read -r label amount tx bf af bidx aidx bdir adir apv aema aps <<<"${line}"
-  printf "%-14s %-16s %-66s %-12s %-10s %-10s %-18s %-14s %-12s\n" \
-    "${label}" "${amount}" "${tx}" "${bf}->${af}" "${bidx}->${aidx}" "${bdir}->${adir}" "${apv}" "${aema}" "${aps}"
-done
-echo
-echo "Final state:"
-echo "  feeBips=${FINAL_FEE} periodVolUsd6=${FINAL_PV} emaUsd6=${FINAL_EMA} periodStart=${FINAL_PS} feeIdx=${FINAL_IDX} lastDir=${FINAL_DIR}"
-if [[ -n "${SLOT0_LP_FEE}" ]]; then
-  echo "  slot0.tick=${SLOT0_TICK} slot0.lpFee=${SLOT0_LP_FEE}"
-fi
-echo
-echo "Assertions:"
-echo "  [OK] U2 produced UP move (fee/idx increased, lastDir=UP)"
-echo "  [OK] D1 kept fee/idx unchanged and reset lastDir to NONE (reversal-lock)"
-echo "  [OK] D2 produced DOWN move (fee/idx decreased, lastDir=DOWN)"
-echo "===== Simulation successful ====="
+run_random_mode
+exit 0

@@ -80,6 +80,23 @@ This:
 - runs the Foundry script:
   - `scripts/foundry/CreatePool.s.sol`
 
+### Hook + pool status
+
+`./scripts/hook_status.sh --chain <chain> [--watch-seconds <int>]`
+
+This script prints:
+- hook immutable params and current runtime state,
+- computed `pool_id` for the bound pool key,
+- pool slot0 + liquidity (if `StateView` is available),
+- basic health checks (`initialized`, `fee_sync`, `fee_idx_bounds`, `liquidity`).
+
+Examples:
+
+```bash
+./scripts/hook_status.sh --chain optimism
+./scripts/hook_status.sh --chain optimism --watch-seconds 15
+```
+
 ## Outputs
 
 Runtime artifacts are stored under:

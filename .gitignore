@@ -14,6 +14,9 @@ __MACOSX/
 .env
 docs/PROMPT_FOR_AI.md
 
+# Local-only helper scripts
+scripts/private_lp_deposits.sh
+
 # Audit bundle: ignore everything except two final PDF reports
 audit_bundle/**
 !audit_bundle/

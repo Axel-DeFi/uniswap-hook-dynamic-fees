@@ -23,6 +23,33 @@ EOF
 
 lower() { printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]'; }
 
+is_zero_address() {
+  local a
+  a="$(lower "${1:-}")"
+  [[ "$a" == "0x0000000000000000000000000000000000000000" ]]
+}
+
+read_decimals() {
+  local token="$1"
+  local rpc="$2"
+  if is_zero_address "$token"; then
+    # Native currency (CurrencyLibrary.ADDRESS_ZERO) is treated as 18 decimals.
+    echo "18"
+    return 0
+  fi
+
+  local out
+  if ! out="$(cast call "$token" "decimals()(uint8)" --rpc-url "$rpc" 2>/dev/null | tr -d '\r')"; then
+    echo "ERROR: failed to read decimals() for token=$token" >&2
+    return 1
+  fi
+  if [[ -z "$out" || ! "$out" =~ ^[0-9]+$ ]]; then
+    echo "ERROR: invalid decimals() response for token=$token: $out" >&2
+    return 1
+  fi
+  echo "$out"
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --config) CONFIG_PATH="${2:-}"; shift 2 ;;
@@ -65,8 +92,8 @@ if [[ "$v_lc" > "$s_lc" ]]; then
   CURRENCY1="$VOLATILE"
 fi
 
-DEC0="$(cast call "$CURRENCY0" "decimals()(uint8)" --rpc-url "$RPC_URL" | tr -d '\r')"
-DEC1="$(cast call "$CURRENCY1" "decimals()(uint8)" --rpc-url "$RPC_URL" | tr -d '\r')"
+DEC0="$(read_decimals "$CURRENCY0" "$RPC_URL")"
+DEC1="$(read_decimals "$CURRENCY1" "$RPC_URL")"
 
 # Invert if STABLE ended up as currency0 after sorting.
 stable_lc="$(lower "$STABLE")"
