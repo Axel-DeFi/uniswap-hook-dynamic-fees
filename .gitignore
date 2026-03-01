@@ -13,3 +13,9 @@ __MACOSX/
 # Secrets
 .env
 docs/PROMPT_FOR_AI.md
+
+# Audit bundle: ignore everything except two final PDF reports
+audit_bundle/**
+!audit_bundle/
+!audit_bundle/audit_VolumeDynamicFeeHook_RU.pdf
+!audit_bundle/concept_VolumeDynamicFeeHook_LP.pdf
