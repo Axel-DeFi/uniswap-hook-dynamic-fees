@@ -78,6 +78,8 @@ contract VolumeDynamicFeeHook is BaseHook {
     address public immutable guardian;
     // forge-lint: disable-next-line(screaming-snake-case-immutable)
     uint8 public immutable pauseFeeIdx;
+    // forge-lint: disable-next-line(screaming-snake-case-immutable)
+    uint16 public immutable creatorFeeBps;
 
     // -----------------------------------------------------------------------
     // Packed state (ONE storage slot)
@@ -129,7 +131,8 @@ contract VolumeDynamicFeeHook is BaseHook {
         uint16 _deadbandBps,
         uint32 _lullResetSeconds,
         address _guardian,
-        uint8 _pauseFeeIdx
+        uint8 _pauseFeeIdx,
+        uint16 _creatorFeeBps
     ) BaseHook(_poolManager) {
         if (address(_poolManager) == address(0)) revert InvalidConfig();
 
@@ -167,6 +170,8 @@ contract VolumeDynamicFeeHook is BaseHook {
 
         if (_pauseFeeIdx >= FEE_TIER_COUNT) revert InvalidFeeIndex();
         pauseFeeIdx = _pauseFeeIdx;
+        if (_creatorFeeBps > 10_000) revert InvalidConfig();
+        creatorFeeBps = _creatorFeeBps;
 
         if (_floorIdx >= FEE_TIER_COUNT || _capIdx >= FEE_TIER_COUNT || _initialFeeIdx >= FEE_TIER_COUNT) {
             revert InvalidFeeIndex();

@@ -17,7 +17,7 @@ set -euo pipefail
 #   POOL_MANAGER, VOLATILE, STABLE, STABLE_DECIMALS, TICK_SPACING
 #   INITIAL_FEE_IDX, FLOOR_IDX, CAP_IDX
 #   PERIOD_SECONDS, EMA_PERIODS, DEADBAND_BPS, LULL_RESET_SECONDS
-#   PAUSE_FEE_IDX
+#   PAUSE_FEE_IDX, CREATOR_FEE_PERCENT
 #
 # Guardian behavior:
 #   - If GUARDIAN is empty after sourcing config + .env, it defaults to the deployer address.
@@ -111,13 +111,25 @@ if [[ -z "${PRIVATE_KEY:-}" ]]; then
 fi
 
 # Validate required variables
-required=(POOL_MANAGER VOLATILE STABLE STABLE_DECIMALS TICK_SPACING INITIAL_FEE_IDX FLOOR_IDX CAP_IDX PERIOD_SECONDS EMA_PERIODS DEADBAND_BPS LULL_RESET_SECONDS PAUSE_FEE_IDX)
+required=(POOL_MANAGER VOLATILE STABLE STABLE_DECIMALS TICK_SPACING INITIAL_FEE_IDX FLOOR_IDX CAP_IDX PERIOD_SECONDS EMA_PERIODS DEADBAND_BPS LULL_RESET_SECONDS PAUSE_FEE_IDX CREATOR_FEE_PERCENT)
 for k in "${required[@]}"; do
   if [[ -z "${!k:-}" ]]; then
     echo "ERROR: missing $k in $HOOK_CONF" >&2
     exit 1
   fi
 done
+
+# Human-friendly percent input in config (10 means 10%).
+if ! [[ "${CREATOR_FEE_PERCENT}" =~ ^[0-9]+$ ]]; then
+  echo "ERROR: CREATOR_FEE_PERCENT must be an integer in [0..100]" >&2
+  exit 1
+fi
+if (( CREATOR_FEE_PERCENT > 100 )); then
+  echo "ERROR: CREATOR_FEE_PERCENT=${CREATOR_FEE_PERCENT} out of range [0..100]" >&2
+  exit 1
+fi
+CREATOR_FEE_BPS=$((CREATOR_FEE_PERCENT * 100))
+export CREATOR_FEE_BPS
 
 # Default guardian to deployer if empty
 if [[ -z "${GUARDIAN:-}" ]]; then

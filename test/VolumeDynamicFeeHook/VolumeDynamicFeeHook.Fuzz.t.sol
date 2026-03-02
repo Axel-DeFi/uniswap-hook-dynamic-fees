@@ -33,6 +33,7 @@ contract VolumeDynamicFeeHookFuzzTest is Test {
     uint8 internal constant FLOOR_IDX = 0;
     uint8 internal constant CAP_IDX = 6;
     uint8 internal constant PAUSE_FEE_IDX = 3;
+    uint16 internal constant CREATOR_FEE_BPS = 1000;
 
     uint32 internal constant PERIOD_SECONDS = 300; // fixed by requirement
     uint8 internal constant EMA_PERIODS = 8;
@@ -78,7 +79,8 @@ contract VolumeDynamicFeeHookFuzzTest is Test {
             DEADBAND_BPS,
             LULL_RESET_SECONDS,
             address(this),
-            PAUSE_FEE_IDX
+            PAUSE_FEE_IDX,
+            CREATOR_FEE_BPS
         );
 
         (address mined, bytes32 salt) =
@@ -99,7 +101,8 @@ contract VolumeDynamicFeeHookFuzzTest is Test {
             DEADBAND_BPS,
             LULL_RESET_SECONDS,
             address(this),
-            PAUSE_FEE_IDX
+            PAUSE_FEE_IDX,
+            CREATOR_FEE_BPS
         );
 
         assertEq(address(hook), mined, "hook address mismatch");

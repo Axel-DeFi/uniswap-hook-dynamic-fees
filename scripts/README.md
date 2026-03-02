@@ -36,6 +36,12 @@ Secrets should live in `./.env` (repo root). Typical variables:
 - `DEFAULT_GUARDIAN` — guardian address (optional)
 - `REQUIRE_GUARDIAN_CONTRACT=1` — optional strict mode to require contract guardian (recommended for production)
 
+### Strategy / monetization params
+
+- `INITIAL_FEE_IDX`, `FLOOR_IDX`, `CAP_IDX` — dynamic LP fee tier bounds
+- `PAUSE_FEE_IDX` — fee tier used while paused
+- `CREATOR_FEE_PERCENT` — creator fee share in percent (for example `10` = 10%)
+
 ## Unified test runner
 
 Single entry point:
@@ -88,7 +94,20 @@ This script prints:
 - hook immutable params and current runtime state,
 - computed `pool_id` for the bound pool key,
 - pool slot0 + liquidity (if `StateView` is available),
-- basic health checks (`initialized`, `fee_sync`, `fee_idx_bounds`, `liquidity`).
+- live TVL estimate in USD (mark-to-market at current pool price),
+- pool activity from on-chain logs: lifetime + rolling windows (`24h/7d/30d/90d/180d/365d`).
+- fee-level activity split (swaps/volume/fees by fee tier).
+
+Notes:
+- `lpProviders` is counted by unique transaction senders (`tx.from`) in `ModifyLiquidity` calls for this pool over lifetime.
+
+Optional env tuning:
+- `HOOK_STATUS_START_BLOCK` — optional manual start block for lifetime activity (if unset, script tries CreatePool artifact and falls back to `0`).
+- `HOOK_STATUS_CHUNK_BLOCKS` — max block span per `eth_getLogs` chunk for lifetime backfill (default: `50000`).
+
+Output mode:
+- interactive terminal (TTY): dashboard view with screen redraw (no scrolling in watch mode),
+- piped/non-interactive: raw `key=value` lines (stable format for script integrations).
 
 Examples:
 
