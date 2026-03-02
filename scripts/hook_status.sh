@@ -361,11 +361,12 @@ pool_topic = "0x" + pool_id[2:].rjust(64, "0")
 
 def default_state():
     return {
-        "schema_version": 4,
+        "schema_version": 5,
         "pool_id": pool_id,
         "from_block": from_block,
         "last_scanned_block": from_block - 1,
         "latest_block_ts": 0,
+        "last_swap_sqrt_x96": 0,
         "swap_count": 0,
         "volume_usd6": 0,
         "fees_usd6": 0,
@@ -374,6 +375,7 @@ def default_state():
         "block_ts_by_number": {},
         "hourly_buckets": {},
         "fee_buckets": {},
+        "range_buckets": {},
         "lp_provider_wallets": [],
         "lp_senders": [],
     }
@@ -386,7 +388,7 @@ def load_state():
             state = json.load(f)
         if not isinstance(state, dict):
             return default_state()
-        if int(state.get("schema_version", 0)) != 4:
+        if int(state.get("schema_version", 0)) != 5:
             return default_state()
         if str(state.get("pool_id", "")).lower() != pool_id:
             return default_state()
@@ -432,6 +434,25 @@ def load_state():
                 "fees_usd6": int(v.get("fees_usd6", 0)),
             }
         st["fee_buckets"] = cleaned_fee_buckets
+        if not isinstance(st.get("range_buckets"), dict):
+            st["range_buckets"] = {}
+        cleaned_range_buckets = {}
+        for k, v in st["range_buckets"].items():
+            parts = str(k).split(":", 1)
+            if len(parts) != 2:
+                continue
+            try:
+                lower_tick = int(parts[0])
+                upper_tick = int(parts[1])
+                liq = int(v)
+            except Exception:
+                continue
+            cleaned_range_buckets[f"{lower_tick}:{upper_tick}"] = liq
+        st["range_buckets"] = cleaned_range_buckets
+        try:
+            st["last_swap_sqrt_x96"] = int(st.get("last_swap_sqrt_x96", 0))
+        except Exception:
+            st["last_swap_sqrt_x96"] = 0
         if not isinstance(st.get("lp_provider_wallets"), list):
             st["lp_provider_wallets"] = []
         st["lp_provider_wallets"] = [str(x).lower() for x in st["lp_provider_wallets"]]
@@ -619,12 +640,16 @@ tx_from_by_hash = {str(k).lower(): str(v).lower() for k, v in state.get("tx_from
 block_ts_by_number = {str(k): int(v) for k, v in state.get("block_ts_by_number", {}).items()}
 hourly_buckets = state.get("hourly_buckets", {})
 fee_buckets = state.get("fee_buckets", {})
+range_buckets = {str(k): int(v) for k, v in (state.get("range_buckets", {}) or {}).items()}
+last_swap_sqrt_x96 = int(state.get("last_swap_sqrt_x96", 0))
 state["lp_senders"] = list(sender_set)
 state["lp_provider_wallets"] = list(provider_set)
 state["tx_from_by_hash"] = tx_from_by_hash
 state["block_ts_by_number"] = block_ts_by_number
 state["hourly_buckets"] = hourly_buckets
 state["fee_buckets"] = fee_buckets
+state["range_buckets"] = range_buckets
+state["last_swap_sqrt_x96"] = last_swap_sqrt_x96
 
 if int(state.get("last_scanned_block", -1)) >= to_block:
     for ln in format_lines(state, "OK", "-"):
@@ -670,6 +695,7 @@ try:
             words = [payload[i:i + 64] for i in range(0, 64 * 6, 64)]
             amount0 = s256(words[0])
             amount1 = s256(words[1])
+            last_swap_sqrt_x96 = int(words[2], 16)
             fee_pips = int(words[5], 16)
             stable_raw = amount1 if stable_is_token1 else amount0
             stable_abs = abs(stable_raw)
@@ -704,6 +730,20 @@ try:
             topics = lg.get("topics") or []
             if len(topics) < 3:
                 continue
+            data_hex = str(lg.get("data") or "")
+            if data_hex.startswith("0x"):
+                payload = data_hex[2:]
+                if len(payload) >= 64 * 3:
+                    words = [payload[i:i + 64] for i in range(0, 64 * 3, 64)]
+                    tick_lower = s256(words[0])
+                    tick_upper = s256(words[1])
+                    liquidity_delta = s256(words[2])
+                    bucket_key = f"{tick_lower}:{tick_upper}"
+                    next_liq = int(range_buckets.get(bucket_key, 0)) + int(liquidity_delta)
+                    if next_liq == 0:
+                        range_buckets.pop(bucket_key, None)
+                    else:
+                        range_buckets[bucket_key] = next_liq
             topic2 = str(topics[2]).lower()
             if topic2.startswith("0x") and len(topic2) == 66:
                 sender_set.add("0x" + topic2[-40:])
@@ -731,6 +771,8 @@ try:
         state["block_ts_by_number"] = block_ts_by_number
         state["hourly_buckets"] = hourly_buckets
         state["fee_buckets"] = fee_buckets
+        state["range_buckets"] = range_buckets
+        state["last_swap_sqrt_x96"] = last_swap_sqrt_x96
         state["last_scanned_block"] = end
         save_state(state)
         block = end + 1
@@ -876,6 +918,130 @@ except Exception:
         f"status=ERROR error={reason}_cache_read_failed cache_file={cache_file}"
     )
     print_unknown_windows()
+PY
+}
+
+compute_pool_tvl_from_cache() {
+  local cache_file="$1"
+  local sqrt_price_x96="$2"
+  local token0_decimals="$3"
+  local token1_decimals="$4"
+  local stable_is_token1="$5"
+  python3 - "${cache_file}" "${sqrt_price_x96}" "${token0_decimals}" "${token1_decimals}" "${stable_is_token1}" <<'PY'
+import json
+import os
+import sys
+from decimal import Decimal, ROUND_HALF_UP, getcontext
+
+getcontext().prec = 90
+
+cache_file = sys.argv[1]
+sqrt_price_x96_s = sys.argv[2]
+token0_decimals_s = sys.argv[3]
+token1_decimals_s = sys.argv[4]
+stable_is_token1 = (sys.argv[5] == "1")
+
+def as_int(v):
+    try:
+        return int(v)
+    except Exception:
+        return 0
+
+if not os.path.exists(cache_file):
+    print("?")
+    raise SystemExit(0)
+
+try:
+    with open(cache_file, "r", encoding="utf-8") as f:
+        state = json.load(f)
+except Exception:
+    print("?")
+    raise SystemExit(0)
+
+range_buckets = state.get("range_buckets")
+if not isinstance(range_buckets, dict):
+    print("?")
+    raise SystemExit(0)
+if not range_buckets:
+    print("0")
+    raise SystemExit(0)
+
+sqrt_price_x96 = as_int(sqrt_price_x96_s)
+if sqrt_price_x96 <= 0:
+    sqrt_price_x96 = as_int(state.get("last_swap_sqrt_x96", 0))
+if sqrt_price_x96 <= 0:
+    print("?")
+    raise SystemExit(0)
+
+token0_decimals = as_int(token0_decimals_s)
+token1_decimals = as_int(token1_decimals_s)
+Q96 = Decimal(2) ** 96
+sp = Decimal(sqrt_price_x96)
+ratio = (sp / Q96) ** 2
+if ratio <= 0:
+    print("?")
+    raise SystemExit(0)
+
+if stable_is_token1:
+    stable_per_volatile = ratio * (Decimal(10) ** (token0_decimals - token1_decimals))
+else:
+    stable_per_volatile = (Decimal(1) / ratio) * (Decimal(10) ** (token1_decimals - token0_decimals))
+
+sqrt_cache = {}
+
+def sqrt_ratio_at_tick(tick):
+    v = sqrt_cache.get(tick)
+    if v is not None:
+        return v
+    v = (Decimal("1.0001") ** (Decimal(tick) / Decimal(2))) * Q96
+    sqrt_cache[tick] = v
+    return v
+
+total_usd = Decimal(0)
+for key, liq_raw in range_buckets.items():
+    parts = str(key).split(":", 1)
+    if len(parts) != 2:
+        continue
+    try:
+        tick_lower = int(parts[0])
+        tick_upper = int(parts[1])
+        liquidity = Decimal(int(liq_raw))
+    except Exception:
+        continue
+    if liquidity <= 0:
+        continue
+
+    sa = sqrt_ratio_at_tick(tick_lower)
+    sb = sqrt_ratio_at_tick(tick_upper)
+    if sb <= sa:
+        continue
+
+    if sp <= sa:
+        amount0_raw = liquidity * (sb - sa) * Q96 / (sa * sb)
+        amount1_raw = Decimal(0)
+    elif sp < sb:
+        amount0_raw = liquidity * (sb - sp) * Q96 / (sp * sb)
+        amount1_raw = liquidity * (sp - sa) / Q96
+    else:
+        amount0_raw = Decimal(0)
+        amount1_raw = liquidity * (sb - sa) / Q96
+
+    amount0 = amount0_raw / (Decimal(10) ** token0_decimals)
+    amount1 = amount1_raw / (Decimal(10) ** token1_decimals)
+    if stable_is_token1:
+        stable_amount = amount1
+        volatile_amount = amount0
+    else:
+        stable_amount = amount0
+        volatile_amount = amount1
+
+    total_usd += stable_amount + volatile_amount * stable_per_volatile
+
+if total_usd < 0:
+    total_usd = Decimal(0)
+
+usd6 = int((total_usd * Decimal(1_000_000)).to_integral_value(rounding=ROUND_HALF_UP))
+print(usd6)
 PY
 }
 
@@ -1076,7 +1242,7 @@ render_raw_once() {
     tiers+=("${i}:${tier_val:-?}")
   done
 
-  local slot0_raw sqrt_price tick protocol_fee lp_fee liquidity price token0_decimals token1_decimals stable_is_token1
+  local slot0_raw sqrt_price tick protocol_fee lp_fee liquidity price token0_decimals token1_decimals stable_is_token1 pool_tvl_usd6
   local latest_block activity_line activity_cache_dir activity_cache_file
   sqrt_price=""
   tick=""
@@ -1084,6 +1250,7 @@ render_raw_once() {
   lp_fee=""
   liquidity=""
   price=""
+  pool_tvl_usd6="?"
   token0_decimals=18
   token1_decimals=18
   stable_is_token1=0
@@ -1118,6 +1285,10 @@ render_raw_once() {
       fi
     fi
     liquidity="$(first_token "$(try_cast_call "${STATE_VIEW_ADDRESS}" "getLiquidity(bytes32)(uint128)" "${POOL_ID}" || true)")"
+  fi
+  pool_tvl_usd6="$(compute_pool_tvl_from_cache "${activity_cache_file}" "${sqrt_price}" "${token0_decimals}" "${token1_decimals}" "${stable_is_token1}" || true)"
+  if [[ -z "${pool_tvl_usd6}" ]]; then
+    pool_tvl_usd6="?"
   fi
 
   local fee_sync="n/a"
@@ -1167,6 +1338,7 @@ render_raw_once() {
   if [[ -n "${STATE_VIEW_ADDRESS}" ]]; then
     echo "pool_state: sqrt_price_x96=${sqrt_price:-?} tick=${tick:-?} protocol_fee=${protocol_fee:-?} lp_fee=${lp_fee:-?} liquidity=${liquidity:-?} price_stable_per_volatile=${price:-?}"
   fi
+  echo "pool_tvl_usd6=${pool_tvl_usd6}"
   echo "${activity_line}"
   echo "checks: initialized=${init_status} fee_sync=${fee_sync} fee_idx_bounds=${fee_bounds} liquidity=${liq_status}"
 }
@@ -1277,12 +1449,12 @@ render_dashboard_once() {
   local ts chain chain_id hook_addr pool_manager pool_id state_view
   local tick_spacing initial_idx floor_idx cap_idx pause_idx period_seconds
   local fee_tiers paused current_fee pv ema_vol fee_idx last_dir
-  local tick protocol_fee lp_fee liquidity price has_slot0
+  local tick protocol_fee lp_fee liquidity price pool_tvl_usd6 has_slot0
   local activity_swaps activity_volume activity_fees activity_lp activity_status
   local a24_swaps a24_volume a24_fees a7_swaps a7_volume a7_fees a30_swaps a30_volume a30_fees
   local a90_swaps a90_volume a90_fees a180_swaps a180_volume a180_fees a365_swaps a365_volume a365_fees
   local fee_level_bips fee_level_pct
-  local pv_usd ema_usd tick_fmt liquidity_fmt activity_volume_usd activity_fees_usd
+  local pv_usd ema_usd pool_tvl_usd tick_fmt liquidity_fmt activity_volume_usd activity_fees_usd
   local a24_volume_usd a24_fees_usd a7_volume_usd a7_fees_usd a30_volume_usd a30_fees_usd
   local a90_volume_usd a90_fees_usd a180_volume_usd a180_fees_usd a365_volume_usd a365_fees_usd
   local activity_swaps_fmt a24_swaps_fmt a7_swaps_fmt a30_swaps_fmt a90_swaps_fmt a180_swaps_fmt a365_swaps_fmt
@@ -1321,6 +1493,7 @@ render_dashboard_once() {
   lp_fee="$(inline_value "${raw}" "lp_fee")"
   liquidity="$(inline_value "${raw}" "liquidity")"
   price="$(inline_value "${raw}" "price_stable_per_volatile")"
+  pool_tvl_usd6="$(line_value "${raw}" "pool_tvl_usd6")"
 
   activity_line="$(printf '%s\n' "${raw}" | sed -n 's/^pool_activity: //p' | head -n 1)"
   activity_swaps="$(inline_value "${activity_line}" "swaps")"
@@ -1361,6 +1534,7 @@ render_dashboard_once() {
   fee_level_pct="$(bips_to_percent "${fee_level_bips}")"
   pv_usd="$(usd6_to_dollar "${pv}")"
   ema_usd="$(usd6_to_dollar "${ema_vol}")"
+  pool_tvl_usd="$(usd6_to_dollar "${pool_tvl_usd6}")"
   tick_fmt="$(format_int_commas "${tick}")"
   liquidity_fmt="$(format_int_commas "${liquidity}")"
   activity_volume_usd="$(usd6_to_dollar "${activity_volume}")"
@@ -1418,7 +1592,7 @@ render_dashboard_once() {
     echo "  Hook: ${hook_addr}"
   fi
   echo "  Deploy: floor=${deploy_floor} | initial=${deploy_initial} | pause=${deploy_pause} | cap=${deploy_cap}"
-  echo "  Live: fee=${fee_level_pct} (${fee_level_bips}, i${fee_idx}) | periodVol(${period_label}s)=${pv_usd} | ema=${ema_usd} | lastDir=$(dir_label "${last_dir}")"
+  echo "  Live: fee=${fee_level_pct} (${fee_level_bips}, i${fee_idx}) | TVL=${pool_tvl_usd} | periodVol(${period_label}s)=${pv_usd} | ema=${ema_usd} | lastDir=$(dir_label "${last_dir}")"
   if [[ -n "${state_view}" && "${state_view}" != "not-set" ]]; then
     echo "  StateView: ${state_view}"
   fi
