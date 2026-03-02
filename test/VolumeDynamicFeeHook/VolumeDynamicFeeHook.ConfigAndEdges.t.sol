@@ -32,7 +32,8 @@ contract VolumeDynamicFeeHookHarness is VolumeDynamicFeeHook {
         uint16 _deadbandBps,
         uint32 _lullResetSeconds,
         address _guardian,
-        uint8 _pauseFeeIdx
+        uint8 _pauseFeeIdx,
+        uint16 _creatorFeeBps
     )
         VolumeDynamicFeeHook(
             _poolManager,
@@ -49,7 +50,8 @@ contract VolumeDynamicFeeHookHarness is VolumeDynamicFeeHook {
             _deadbandBps,
             _lullResetSeconds,
             _guardian,
-            _pauseFeeIdx
+            _pauseFeeIdx,
+            _creatorFeeBps
         )
     {}
 
@@ -82,6 +84,7 @@ contract VolumeDynamicFeeHookConfigAndEdgesTest is Test {
         uint32 lullResetSeconds;
         address guardian;
         uint8 pauseFeeIdx;
+        uint16 creatorFeeBps;
     }
 
     MockPoolManager internal manager;
@@ -118,7 +121,8 @@ contract VolumeDynamicFeeHookConfigAndEdgesTest is Test {
             deadbandBps: 500,
             lullResetSeconds: LULL_RESET_SECONDS,
             guardian: address(this),
-            pauseFeeIdx: PAUSE_FEE_IDX
+            pauseFeeIdx: PAUSE_FEE_IDX,
+            creatorFeeBps: 1000
         });
     }
 
@@ -138,7 +142,8 @@ contract VolumeDynamicFeeHookConfigAndEdgesTest is Test {
             cfg.deadbandBps,
             cfg.lullResetSeconds,
             cfg.guardian,
-            cfg.pauseFeeIdx
+            cfg.pauseFeeIdx,
+            cfg.creatorFeeBps
         );
     }
 
@@ -200,7 +205,8 @@ contract VolumeDynamicFeeHookConfigAndEdgesTest is Test {
             cfg.deadbandBps,
             cfg.lullResetSeconds,
             cfg.guardian,
-            cfg.pauseFeeIdx
+            cfg.pauseFeeIdx,
+            cfg.creatorFeeBps
         );
     }
 
@@ -289,6 +295,14 @@ contract VolumeDynamicFeeHookConfigAndEdgesTest is Test {
         cfg.pauseFeeIdx = 7;
 
         vm.expectRevert(VolumeDynamicFeeHook.InvalidFeeIndex.selector);
+        _deploy(cfg);
+    }
+
+    function test_constructor_reverts_on_creatorFeeBps_gt_10000() public {
+        DeployCfg memory cfg = _defaultCfg();
+        cfg.creatorFeeBps = 10_001;
+
+        vm.expectRevert(VolumeDynamicFeeHook.InvalidConfig.selector);
         _deploy(cfg);
     }
 

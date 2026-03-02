@@ -18,6 +18,7 @@ import {VolumeDynamicFeeHook} from "src/VolumeDynamicFeeHook.sol";
 ///        - INITIAL_FEE_IDX, FLOOR_IDX, CAP_IDX
 ///        - PERIOD_SECONDS, EMA_PERIODS, DEADBAND_BPS, LULL_RESET_SECONDS
 ///        - GUARDIAN, PAUSE_FEE_IDX
+///        - CREATOR_FEE_BPS (or CREATOR_FEE_PERCENT as fallback)
 contract DeployHook is Script {
     // Foundry deterministic CREATE2 deployer proxy used by forge scripts.
     address internal constant CREATE2_DEPLOYER = 0x4e59b44847b379578588920cA78FbF26c0B4956C;
@@ -41,6 +42,7 @@ contract DeployHook is Script {
         uint32 lullResetSeconds = uint32(vm.envUint("LULL_RESET_SECONDS"));
         address guardian = vm.envAddress("GUARDIAN");
         uint8 pauseFeeIdx = uint8(vm.envUint("PAUSE_FEE_IDX"));
+        uint16 creatorFeeBps = uint16(vm.envOr("CREATOR_FEE_BPS", vm.envUint("CREATOR_FEE_PERCENT") * 100));
 
         // Canonical PoolKey ordering (currency0 < currency1) is enforced by address sort.
         (address token0, address token1) = _sort(volatileToken, stableToken);
@@ -67,7 +69,8 @@ contract DeployHook is Script {
             deadbandBps,
             lullResetSeconds,
             guardian,
-            pauseFeeIdx
+            pauseFeeIdx,
+            creatorFeeBps
         );
 
         (address minedHookAddress, bytes32 salt) =
@@ -89,7 +92,8 @@ contract DeployHook is Script {
             deadbandBps,
             lullResetSeconds,
             guardian,
-            pauseFeeIdx
+            pauseFeeIdx,
+            creatorFeeBps
         );
         vm.stopBroadcast();
 
