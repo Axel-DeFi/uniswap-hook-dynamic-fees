@@ -92,9 +92,9 @@ contract VolumeDynamicFeeHook is BaseHook {
 
     uint16 private constant MAX_LULL_PERIODS = 24;
     uint8 private constant MAX_EMA_PERIODS = 64;
-    // closeVol is tracked as 2 * abs(stableAmount) in USD6.
-    // 2_000_000 equals $1 of period-close volume in current units.
-    uint64 private constant DUST_CLOSE_VOL_USD6 = 2_000_000;
+    // closeVol is tracked as abs(stableAmount) in USD6.
+    // 1_000_000 equals $1 of period-close volume.
+    uint64 private constant DUST_CLOSE_VOL_USD6 = 1_000_000;
 
     uint256 private constant PAUSED_BIT = 234;
 
@@ -447,8 +447,8 @@ contract VolumeDynamicFeeHook is BaseHook {
 
         uint256 usd6 = _toUsd6(absStable);
 
-        // treat swap volume as 2 * stable-side abs delta (in + out)
-        uint256 add = usd6 << 1;
+        // treat swap volume as one-sided stable notional
+        uint256 add = usd6;
 
         uint256 sum = uint256(current) + add;
         if (sum > type(uint64).max) return type(uint64).max;

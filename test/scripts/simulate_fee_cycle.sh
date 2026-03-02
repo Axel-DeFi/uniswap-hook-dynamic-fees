@@ -52,7 +52,7 @@ CASES_STAGE="up_to_cap"
 CASES_STAGE_STEP=0
 CASES_NEXT_SIDE=""
 CASES_NEXT_REASON="case-step"
-CASES_NEXT_TARGET_VOL=2000000
+CASES_NEXT_TARGET_VOL=1000000
 CASES_NEXT_AMOUNT=0
 CASES_PRIORITY_EDGE="cap"
 CASES_RUN_CAP_OK=0
@@ -85,7 +85,7 @@ PRICE_LIMIT_FORCE_ATTEMPTS=14
 TICK_MIN=-887272
 TICK_MAX=887272
 TICK_EDGE_GUARD=2
-HOOK_DUST_CLOSE_VOL_USD6=2000000
+HOOK_DUST_CLOSE_VOL_USD6=1000000
 MAX_BALANCE_SPEND_PCT=20
 BALANCE_ERROR_FORCE_ATTEMPTS=8
 NATIVE_GAS_SYMBOL="${NATIVE_GAS_SYMBOL:-ETH}"
@@ -1279,8 +1279,8 @@ pick_case_amount_bounds() {
     if (( max_case > 80000000 )); then
       max_case=80000000
     fi
-    if (( max_case < 2000000 )); then
-      max_case=2000000
+    if (( max_case < 1000000 )); then
+      max_case=1000000
     fi
     min_case=1000000
   else
@@ -2279,8 +2279,8 @@ cases_target_up_volume() {
     step=0
   fi
   upper=$(( ema * (10000 + HOOK_DEADBAND_BPS) / 10000 ))
-  if (( upper < HOOK_DUST_CLOSE_VOL_USD6 * 2 )); then
-    upper=$((HOOK_DUST_CLOSE_VOL_USD6 * 2))
+  if (( upper < HOOK_DUST_CLOSE_VOL_USD6 )); then
+    upper="${HOOK_DUST_CLOSE_VOL_USD6}"
   fi
   margin=$(( upper / 20 ))
   if (( margin < 1500000 )); then margin=1500000; fi
@@ -2324,7 +2324,7 @@ cases_target_deadband_volume() {
     ema=0
   fi
   if (( ema <= 0 )); then
-    echo "2000000"
+    echo "1000000"
     return
   fi
   lower=$(( ema * (10000 - HOOK_DEADBAND_BPS) / 10000 ))
@@ -2346,7 +2346,7 @@ cases_plan_next_action() {
   CASES_FORCE_WAIT_REASON=""
   side="zeroForOne"
   reason="case-step"
-  target_vol=2000000
+  target_vol=1000000
 
   while true; do
     case "${CASES_STAGE}" in

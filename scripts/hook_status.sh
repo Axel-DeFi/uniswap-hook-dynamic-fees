@@ -1117,19 +1117,47 @@ PY
 
 compute_last_hour_fee_change_lines() {
   local latest_block="$1"
+  local period_seconds="${2:-0}"
+  local current_fee_bips="${3:-?}"
+  local ema_periods="${4:-12}"
+  local current_ema_usd6="${5:-?}"
+  local floor_idx="${6:-?}"
+  local cap_idx="${7:-?}"
+  local current_fee_idx="${8:-?}"
   local lookback_blocks="${HOOK_STATUS_LAST_HOUR_LOOKBACK_BLOCKS:-20000}"
   if ! [[ "${latest_block}" =~ ^[0-9]+$ ]]; then
-    echo "last_hour_status: status=ERROR error=latest_block_unavailable from_block=? to_block=? changes=0"
+    echo "last_hour_status: status=ERROR error=latest_block_unavailable from_block=? to_block=? changes=0 periods=0"
     return
   fi
   if ! [[ "${lookback_blocks}" =~ ^[0-9]+$ ]] || (( lookback_blocks <= 0 )); then
     lookback_blocks=20000
   fi
+  if ! [[ "${period_seconds}" =~ ^[0-9]+$ ]] || (( period_seconds < 0 )); then
+    period_seconds=0
+  fi
+  if ! [[ "${current_fee_bips}" =~ ^[0-9]+$ ]]; then
+    current_fee_bips="?"
+  fi
+  if ! [[ "${ema_periods}" =~ ^[0-9]+$ ]] || (( ema_periods < 2 )); then
+    ema_periods=12
+  fi
+  if ! [[ "${current_ema_usd6}" =~ ^[0-9]+$ ]]; then
+    current_ema_usd6="?"
+  fi
+  if ! [[ "${floor_idx}" =~ ^[0-9]+$ ]]; then
+    floor_idx="?"
+  fi
+  if ! [[ "${cap_idx}" =~ ^[0-9]+$ ]]; then
+    cap_idx="?"
+  fi
+  if ! [[ "${current_fee_idx}" =~ ^[0-9]+$ ]]; then
+    current_fee_idx="?"
+  fi
   local from_block=0
   if (( latest_block > lookback_blocks )); then
     from_block=$((latest_block - lookback_blocks))
   fi
-  python3 - "${RPC_URL}" "${HOOK_ADDRESS}" "${from_block}" "${latest_block}" <<'PY'
+  python3 - "${RPC_URL}" "${HOOK_ADDRESS}" "${from_block}" "${latest_block}" "${period_seconds}" "${current_fee_bips}" "${ema_periods}" "${current_ema_usd6}" "${floor_idx}" "${cap_idx}" "${current_fee_idx}" <<'PY'
 import json
 import subprocess
 import sys
@@ -1140,7 +1168,17 @@ rpc_url = sys.argv[1]
 hook_address = sys.argv[2]
 from_block = int(sys.argv[3])
 to_block = int(sys.argv[4])
+period_seconds = int(sys.argv[5])
+current_fee_bips = sys.argv[6]
+ema_periods = int(sys.argv[7])
+current_ema_usd6_raw = sys.argv[8]
+floor_idx_raw = sys.argv[9]
+cap_idx_raw = sys.argv[10]
+current_fee_idx_raw = sys.argv[11]
 fee_updated_topic = "0x7a7cee7d3375d08c4510b71462006ecbba16bc2e5f4fecc9fc41c22e43714924"
+lull_reset_topic = "0x011265122800c4d227d5dc12c8704d982a13007a939d4286dbfca182d8bf66ee"
+paused_topic = "0xeae0ae451529dfc5ca6c740fc8de37805f6010327053db71dea1fe719c8e0585"
+unpaused_topic = "0xa45f47fdea8a1efdd9029a5691c7f759c32b7c698632b563573e155625d16933"
 
 def rpc_post(payload):
     cmd = [
@@ -1162,7 +1200,7 @@ def rpc_post(payload):
             time.sleep(0.5)
     raise RuntimeError(last_err or "rpc_failed")
 
-def rpc_get_logs(fb, tb):
+def rpc_get_logs(topic0, fb, tb):
     payload = json.dumps({
         "jsonrpc": "2.0",
         "id": 1,
@@ -1171,7 +1209,7 @@ def rpc_get_logs(fb, tb):
             "address": hook_address,
             "fromBlock": hex(fb),
             "toBlock": hex(tb),
-            "topics": [fee_updated_topic],
+            "topics": [topic0],
         }],
     }, separators=(",", ":"))
     data = rpc_post(payload)
@@ -1228,14 +1266,107 @@ def decode_words(data_hex, words=4):
         out.append(int(payload[i * 64:(i + 1) * 64], 16))
     return out
 
+def parse_int_or_none(v):
+    try:
+        return int(v)
+    except Exception:
+        return None
+
+def normalize_tx_hash(tx_hash):
+    tx = str(tx_hash or "").lower()
+    if tx.startswith("0x") and len(tx) == 66:
+        return tx
+    return ""
+
+def decay_ema(ema_value):
+    if ema_value is None or ema_value < 0:
+        return None
+    if ema_value == 0:
+        return 0
+    return (ema_value * (ema_periods - 1)) // ema_periods
+
+def backfill_ema(ema_value):
+    if ema_value is None or ema_value < 0:
+        return None
+    if ema_value == 0:
+        return 0
+    # Approximate inverse of floor(prev*(n-1)/n): ceil(curr*n/(n-1))
+    return (ema_value * ema_periods + (ema_periods - 2)) // (ema_periods - 1)
+
+def reason_for_no_event(fee_idx):
+    if fee_idx is not None and cap_idx is not None and fee_idx >= cap_idx:
+        return "CAP"
+    if fee_idx is not None and floor_idx is not None and fee_idx <= floor_idx:
+        return "FLOOR"
+    return "NO_SWAPS"
+
+def reason_for_fee_row(row, control_reason):
+    if control_reason:
+        return control_reason
+    if row["direction"] in ("UP", "DOWN") and row["to_fee_bips"] != row["from_fee_bips"]:
+        return "-"
+    if row["to_idx"] is not None and cap_idx is not None and row["to_idx"] >= cap_idx:
+        return "CAP"
+    if row["to_idx"] is not None and floor_idx is not None and row["to_idx"] <= floor_idx:
+        return "FLOOR"
+    return "DEADBAND"
+
 try:
+    floor_idx = parse_int_or_none(floor_idx_raw)
+    cap_idx = parse_int_or_none(cap_idx_raw)
+    current_fee_idx = parse_int_or_none(current_fee_idx_raw)
+    current_fee_bips_int = parse_int_or_none(current_fee_bips)
     latest_ts = rpc_get_block_ts(to_block)
     if latest_ts <= 0:
         raise RuntimeError("latest_ts_unavailable")
     cutoff_ts = latest_ts - 3600
-    logs = rpc_get_logs(from_block, to_block)
+
+    fee_logs = rpc_get_logs(fee_updated_topic, from_block, to_block)
+    control_logs = []
+    for topic0, reason in (
+        (lull_reset_topic, "LULL_RESET"),
+        (paused_topic, "PAUSED"),
+        (unpaused_topic, "UNPAUSED"),
+    ):
+        logs = rpc_get_logs(topic0, from_block, to_block)
+        for lg in logs:
+            block_number = to_int(lg.get("blockNumber"))
+            log_index = to_int(lg.get("logIndex"))
+            if block_number < 0:
+                continue
+            ts = rpc_get_block_ts(block_number)
+            if ts <= 0:
+                continue
+            tx_hash = normalize_tx_hash(lg.get("transactionHash"))
+            new_fee = None
+            new_idx = None
+            if reason in ("LULL_RESET", "PAUSED"):
+                words = decode_words(lg.get("data"), 2)
+                if words is not None:
+                    new_fee = int(words[0])
+                    new_idx = int(words[1])
+            control_logs.append({
+                "id": f"{block_number}:{log_index}:{reason}",
+                "block_number": block_number,
+                "log_index": log_index,
+                "time": ts,
+                "tx_hash": tx_hash,
+                "reason": reason,
+                "new_fee": new_fee,
+                "new_idx": new_idx,
+            })
+
+    control_logs.sort(key=lambda e: (e["block_number"], e["log_index"]))
+    controls_by_tx = {}
+    for c in control_logs:
+        if not c["tx_hash"]:
+            continue
+        controls_by_tx.setdefault(c["tx_hash"], []).append(c)
+    for tx_hash in list(controls_by_tx.keys()):
+        controls_by_tx[tx_hash].sort(key=lambda e: e["log_index"])
+
     events = []
-    for lg in logs:
+    for lg in fee_logs:
         words = decode_words(lg.get("data"), 4)
         if words is None:
             continue
@@ -1250,6 +1381,7 @@ try:
             "block_number": block_number,
             "log_index": log_index,
             "time": ts,
+            "tx_hash": normalize_tx_hash(lg.get("transactionHash")),
             "new_fee": int(words[0]),
             "new_idx": int(words[1]),
             "closed_volume_usd6": int(words[2]),
@@ -1259,6 +1391,8 @@ try:
 
     prev_idx = None
     prev_fee = None
+    fee_updates = []
+    used_control_ids = set()
     changes = []
     for e in events:
         if prev_idx is None:
@@ -1274,8 +1408,13 @@ try:
                 direction = "DOWN"
             else:
                 direction = "FLAT"
-        if e["time"] >= cutoff_ts and e["new_fee"] != from_fee:
-            changes.append({
+        if e["time"] >= cutoff_ts:
+            control_reason = None
+            tx_controls = controls_by_tx.get(e["tx_hash"], [])
+            if tx_controls:
+                control_reason = tx_controls[0]["reason"]
+                used_control_ids.add(tx_controls[0]["id"])
+            row = {
                 "time": e["time"],
                 "direction": direction,
                 "from_idx": from_idx,
@@ -1284,15 +1423,119 @@ try:
                 "to_fee_bips": e["new_fee"],
                 "ema_usd6": e["ema_usd6"],
                 "volume_usd6": e["closed_volume_usd6"],
-            })
+                "reason": reason_for_fee_row({
+                    "direction": direction,
+                    "to_idx": e["new_idx"],
+                    "from_fee_bips": from_fee,
+                    "to_fee_bips": e["new_fee"],
+                }, control_reason),
+            }
+            fee_updates.append(row)
+            if e["new_fee"] != from_fee:
+                changes.append(row)
         prev_idx = e["new_idx"]
         prev_fee = e["new_fee"]
+
+    period_rows = []
+
+    def add_no_event_row(ts_value, fee_value, ema_value, fee_idx):
+        ema_out = "?"
+        if ema_value is not None and ema_value >= 0:
+            ema_out = int(ema_value)
+        period_rows.append({
+            "time": ts_value,
+            "direction": "FLAT",
+            "from_idx": fee_idx,
+            "to_idx": fee_idx,
+            "from_fee_bips": fee_value,
+            "to_fee_bips": fee_value,
+            "ema_usd6": ema_out,
+            "volume_usd6": 0,
+            "reason": reason_for_no_event(fee_idx),
+        })
+
+    if fee_updates:
+        prev_row = None
+        for row in fee_updates:
+            if prev_row is not None and period_seconds > 0:
+                gap_seconds = row["time"] - prev_row["time"]
+                missing_periods = (gap_seconds // period_seconds) - 1
+                if missing_periods > 0:
+                    ema_cursor = parse_int_or_none(prev_row.get("ema_usd6"))
+                    for i in range(1, missing_periods + 1):
+                        ts_value = prev_row["time"] + i * period_seconds
+                        if ts_value < cutoff_ts or ts_value > latest_ts:
+                            continue
+                        ema_cursor = decay_ema(ema_cursor)
+                        add_no_event_row(ts_value, prev_row["to_fee_bips"], ema_cursor, prev_row["to_idx"])
+            period_rows.append(row)
+            prev_row = row
+        if period_seconds > 0:
+            last_row = fee_updates[-1]
+            tail_periods = (latest_ts - last_row["time"]) // period_seconds
+            if tail_periods > 0:
+                ema_cursor = parse_int_or_none(last_row.get("ema_usd6"))
+                for i in range(1, tail_periods + 1):
+                    ts_value = last_row["time"] + i * period_seconds
+                    if ts_value < cutoff_ts or ts_value > latest_ts:
+                        continue
+                    ema_cursor = decay_ema(ema_cursor)
+                    add_no_event_row(ts_value, last_row["to_fee_bips"], ema_cursor, last_row["to_idx"])
+    elif period_seconds > 0:
+        current_ema = parse_int_or_none(current_ema_usd6_raw)
+        ema_cursor = current_ema
+        boundary = latest_ts - (latest_ts % period_seconds)
+        generated = 0
+        base_fee_bips = current_fee_bips_int if current_fee_bips_int is not None else current_fee_bips
+        while boundary >= cutoff_ts and generated < 360:
+            add_no_event_row(boundary, base_fee_bips, ema_cursor, current_fee_idx)
+            ema_cursor = backfill_ema(ema_cursor)
+            boundary -= period_seconds
+            generated += 1
+
+    for c in control_logs:
+        if c["time"] < cutoff_ts:
+            continue
+        if c["id"] in used_control_ids:
+            continue
+        fee_bips = c["new_fee"]
+        fee_idx = c["new_idx"]
+        if fee_bips is None:
+            fee_bips = current_fee_bips_int if current_fee_bips_int is not None else current_fee_bips
+        if fee_idx is None:
+            fee_idx = current_fee_idx
+        period_rows.append({
+            "time": c["time"],
+            "direction": "FLAT",
+            "from_idx": fee_idx,
+            "to_idx": fee_idx,
+            "from_fee_bips": fee_bips,
+            "to_fee_bips": fee_bips,
+            "ema_usd6": 0,
+            "volume_usd6": 0,
+            "reason": c["reason"],
+        })
+
+    period_rows.sort(key=lambda r: r["time"])
+    if len(period_rows) > 500:
+        period_rows = period_rows[-500:]
 
     print(
         "last_hour_status: "
         f"status=OK from_block={from_block} to_block={to_block} "
-        f"latest_ts={latest_ts} cutoff_ts={cutoff_ts} changes={len(changes)}"
+        f"latest_ts={latest_ts} cutoff_ts={cutoff_ts} changes={len(changes)} periods={len(period_rows)}"
     )
+    for p in reversed(period_rows):
+        print(
+            "last_hour_period: "
+            f"time={ts_to_utc_time(p['time'])} "
+            f"direction={p['direction']} "
+            f"from_fee_bips={p['from_fee_bips']} "
+            f"to_fee_bips={p['to_fee_bips']} "
+            f"ema_usd6={p['ema_usd6']} "
+            f"volume_usd6={p['volume_usd6']} "
+            f"reason={p['reason']}"
+        )
     for c in reversed(changes):
         print(
             "last_hour_change: "
@@ -1307,7 +1550,7 @@ except Exception as exc:
     err = str(exc).replace(" ", "_")
     print(
         "last_hour_status: "
-        f"status=ERROR error={err} from_block={from_block} to_block={to_block} changes=0"
+        f"status=ERROR error={err} from_block={from_block} to_block={to_block} changes=0 periods=0"
     )
 PY
 }
@@ -1558,10 +1801,10 @@ render_raw_once() {
   latest_block="$(rpc_block_number || true)"
   if [[ "${latest_block}" =~ ^[0-9]+$ ]]; then
     activity_line="$(compute_pool_activity_lifetime_line "${POOL_ACTIVITY_START_BLOCK}" "${latest_block}" "${stable_is_token1}" "${STABLE_DECIMALS}" "${activity_cache_file}" "${POOL_ACTIVITY_CHUNK_BLOCKS}")"
-    last_hour_lines="$(compute_last_hour_fee_change_lines "${latest_block}")"
+    last_hour_lines="$(compute_last_hour_fee_change_lines "${latest_block}" "${period_seconds}" "${current_fee}" "${ema_periods}" "${ema_vol}" "${floor_idx}" "${cap_idx}" "${fee_idx}")"
   else
     activity_line="$(pool_activity_line_from_cache "${activity_cache_file}" "${POOL_ACTIVITY_START_BLOCK}" "block_number_unavailable")"
-    last_hour_lines="last_hour_status: status=ERROR error=block_number_unavailable from_block=? to_block=? changes=0"
+    last_hour_lines="last_hour_status: status=ERROR error=block_number_unavailable from_block=? to_block=? changes=0 periods=0"
   fi
   if [[ -n "${STATE_VIEW_ADDRESS}" ]]; then
     if slot0_raw="$(try_cast_call "${STATE_VIEW_ADDRESS}" "getSlot0(bytes32)(uint160,int24,uint24,uint24)" "${POOL_ID}" 2>/dev/null)"; then
@@ -1938,7 +2181,7 @@ render_dashboard_once() {
   local raw
   local activity_line
   local activity_fee_lines
-  local last_hour_status_line last_hour_change_lines
+  local last_hour_status_line last_hour_period_lines last_hour_change_lines
   local window_24h_line window_7d_line window_30d_line window_90d_line window_180d_line window_365d_line
   local ts chain chain_id hook_addr pool_manager pool_id state_view
   local tick_spacing initial_idx floor_idx cap_idx pause_idx period_seconds ema_periods deadband_bps lull_reset_seconds
@@ -1960,8 +2203,11 @@ render_dashboard_once() {
   local params_period params_ema params_lull_reset params_tick_spacing params_ema_window params_ema_full
   local levels_summary level_idx level_bips level_pct
   local live_period_vol live_last_dir
-  local lh_status lh_change_count lh_time lh_direction lh_from_bips lh_to_bips lh_from_pct lh_to_pct lh_change lh_ema lh_volume
-  local activity_rows_target
+  local lh_status lh_change_count lh_time lh_direction lh_from_bips lh_to_bips lh_from_pct lh_to_pct lh_change lh_ema lh_volume lh_reason
+  local lh_ema_raw lh_volume_raw period_estimate
+  local lh_time_cell lh_change_cell lh_ema_cell lh_volume_cell lh_reason_cell
+  local lh_reason_dir lh_reason_display
+  local activity_rows_target activity_stream_lines
   local price_usd
 
   raw="$(render_raw_once)"
@@ -2011,6 +2257,7 @@ render_dashboard_once() {
   activity_status="$(inline_value "${activity_line}" "status")"
   activity_fee_lines="$(printf '%s\n' "${raw}" | sed -n 's/^pool_activity_fee: //p')"
   last_hour_status_line="$(printf '%s\n' "${raw}" | sed -n 's/^last_hour_status: //p' | head -n 1)"
+  last_hour_period_lines="$(printf '%s\n' "${raw}" | sed -n 's/^last_hour_period: //p')"
   last_hour_change_lines="$(printf '%s\n' "${raw}" | sed -n 's/^last_hour_change: //p')"
   window_24h_line="$(printf '%s\n' "${raw}" | sed -n 's/^pool_activity_window: label=24h //p' | head -n 1)"
   window_7d_line="$(printf '%s\n' "${raw}" | sed -n 's/^pool_activity_window: label=7d //p' | head -n 1)"
@@ -2159,19 +2406,19 @@ render_dashboard_once() {
   echo "  Levels: ${levels_summary}"
   echo "  Params: period=${params_period} | emaPeriods=${params_ema_full} | deadband=${deploy_deadband_pct} | lullReset=${params_lull_reset} | tickSpacing=${params_tick_spacing}"
   echo
-  live_period_vol="${pv_usd}"
+  live_period_vol="$(usd6_to_dollar "${pv}")"
   live_last_dir="$(dir_label "${last_dir}")"
   echo "Live:"
-  echo "  +------------+--------------+----------------+--------------+--------------+"
-  printf "  | %s | %s | %s | %s | %s |\n" "$(center_text "Level" 10)" "$(center_text "TVL" 12)" "$(center_text "PeriodVol" 14)" "$(center_text "EMA" 12)" "$(center_text "Direction" 12)"
-  echo "  +------------+--------------+----------------+--------------+--------------+"
+  echo "  +------------+------------------+--------------+--------------+--------------------+"
+  printf "  | %s | %s | %s | %s | %s |\n" "$(center_text "Level" 10)" "$(center_text "TVL" 16)" "$(center_text "PeriodVol" 12)" "$(center_text "EMA" 12)" "$(center_text "Direction" 18)"
+  echo "  +------------+------------------+--------------+--------------+--------------------+"
   printf "  | %s | %s | %s | %s | %s |\n" \
     "$(center_text "${fee_level_pct}" 10)" \
-    "$(center_text "${pool_tvl_usd}" 12)" \
-    "$(center_text "${live_period_vol}" 14)" \
+    "$(center_text "${pool_tvl_usd}" 16)" \
+    "$(center_text "${live_period_vol}" 12)" \
     "$(center_text "${ema_usd}" 12)" \
-    "$(center_text "${live_last_dir}" 12)"
-  echo "  +------------+--------------+----------------+--------------+--------------+"
+    "$(center_text "${live_last_dir}" 18)"
+  echo "  +------------+------------------+--------------+--------------+--------------------+"
   if [[ -n "${state_view}" && "${state_view}" != "not-set" ]]; then
     echo "  StateView: ${state_view}"
   fi
@@ -2180,31 +2427,31 @@ render_dashboard_once() {
   fi
   echo
   echo "Historical Data:"
-  echo "  +------------+--------------+----------------+--------------+--------------+"
+  echo "  +------------+------------------+--------------+--------------+--------------------+"
   printf "  | %s | %s | %s | %s | %s |\n" \
     "$(center_text "Period" 10)" \
-    "$(center_text "Swaps" 12)" \
-    "$(center_text "Volume USD" 14)" \
+    "$(center_text "Swaps" 16)" \
+    "$(center_text "Volume USD" 12)" \
     "$(center_text "Fees USD" 12)" \
-    "$(center_text "Avg Vol/Day" 12)"
-  echo "  +------------+--------------+----------------+--------------+--------------+"
-  printf "  | %s | %12s | %14s | %12s | %12s |\n" "$(center_text "1d" 10)" "${a24_swaps_fmt}" "${a24_volume_usd}" "${a24_fees_usd}" "${a24_avg_day_usd}"
-  printf "  | %s | %12s | %14s | %12s | %12s |\n" "$(center_text "7d" 10)" "${a7_swaps_fmt}" "${a7_volume_usd}" "${a7_fees_usd}" "${a7_avg_day_usd}"
-  printf "  | %s | %12s | %14s | %12s | %12s |\n" "$(center_text "30d" 10)" "${a30_swaps_fmt}" "${a30_volume_usd}" "${a30_fees_usd}" "${a30_avg_day_usd}"
-  printf "  | %s | %12s | %14s | %12s | %12s |\n" "$(center_text "90d" 10)" "${a90_swaps_fmt}" "${a90_volume_usd}" "${a90_fees_usd}" "${a90_avg_day_usd}"
-  printf "  | %s | %12s | %14s | %12s | %12s |\n" "$(center_text "180d" 10)" "${a180_swaps_fmt}" "${a180_volume_usd}" "${a180_fees_usd}" "${a180_avg_day_usd}"
-  printf "  | %s | %12s | %14s | %12s | %12s |\n" "$(center_text "365d" 10)" "${a365_swaps_fmt}" "${a365_volume_usd}" "${a365_fees_usd}" "${a365_avg_day_usd}"
-  echo "  +------------+--------------+----------------+--------------+--------------+"
-  printf "  | %s | %12s | %14s | %12s | %12s |\n" "$(center_text "Lifetime" 10)" "${activity_swaps_fmt}" "${activity_volume_usd}" "${activity_fees_usd}" "${activity_avg_day_usd}"
-  echo "  +------------+--------------+----------------+--------------+--------------+"
+    "$(center_text "Avg Vol/Day" 18)"
+  echo "  +------------+------------------+--------------+--------------+--------------------+"
+  printf "  | %s | %16s | %12s | %12s | %18s |\n" "$(center_text "1d" 10)" "${a24_swaps_fmt}" "${a24_volume_usd}" "${a24_fees_usd}" "${a24_avg_day_usd}"
+  printf "  | %s | %16s | %12s | %12s | %18s |\n" "$(center_text "7d" 10)" "${a7_swaps_fmt}" "${a7_volume_usd}" "${a7_fees_usd}" "${a7_avg_day_usd}"
+  printf "  | %s | %16s | %12s | %12s | %18s |\n" "$(center_text "30d" 10)" "${a30_swaps_fmt}" "${a30_volume_usd}" "${a30_fees_usd}" "${a30_avg_day_usd}"
+  printf "  | %s | %16s | %12s | %12s | %18s |\n" "$(center_text "90d" 10)" "${a90_swaps_fmt}" "${a90_volume_usd}" "${a90_fees_usd}" "${a90_avg_day_usd}"
+  printf "  | %s | %16s | %12s | %12s | %18s |\n" "$(center_text "180d" 10)" "${a180_swaps_fmt}" "${a180_volume_usd}" "${a180_fees_usd}" "${a180_avg_day_usd}"
+  printf "  | %s | %16s | %12s | %12s | %18s |\n" "$(center_text "365d" 10)" "${a365_swaps_fmt}" "${a365_volume_usd}" "${a365_fees_usd}" "${a365_avg_day_usd}"
+  echo "  +------------+------------------+--------------+--------------+--------------------+"
+  printf "  | %s | %16s | %12s | %12s | %18s |\n" "$(center_text "Lifetime" 10)" "${activity_swaps_fmt}" "${activity_volume_usd}" "${activity_fees_usd}" "${activity_avg_day_usd}"
+  echo "  +------------+------------------+--------------+--------------+--------------------+"
   if [[ "${activity_status}" != "OK" ]]; then
     echo "  status: ${activity_status}"
   fi
   echo
   echo "Fee Levels:"
-  echo "  +------------+--------------+----------------+--------------+--------------+"
-  printf "  | %s | %s | %s | %s | %s |\n" "$(center_text "Level" 10)" "$(center_text "Swaps" 12)" "$(center_text "Volume USD" 14)" "$(center_text "Fees USD" 12)" "$(center_text "Fees/Swap" 12)"
-  echo "  +------------+--------------+----------------+--------------+--------------+"
+  echo "  +------------+------------------+--------------+--------------+--------------------+"
+  printf "  | %s | %s | %s | %s | %s |\n" "$(center_text "Level" 10)" "$(center_text "Swaps" 16)" "$(center_text "Volume USD" 12)" "$(center_text "Fees USD" 12)" "$(center_text "Fees/Swap" 18)"
+  echo "  +------------+------------------+--------------+--------------+--------------------+"
   fee_printed_count=0
   can_filter_levels=0
   if [[ "${floor_idx}" =~ ^[0-9]+$ && "${cap_idx}" =~ ^[0-9]+$ ]]; then
@@ -2235,7 +2482,7 @@ render_dashboard_once() {
     tier_fees_usd="$(usd6_to_dollar_2dp "${tier_fees}")"
     tier_fee_per_swap_usd="$(fees_usd6_per_swap_2dp "${tier_fees}" "${tier_swaps}")"
     tier_fee_label="${tier_pct}"
-    printf "  | %s | %12s | %14s | %12s | %12s |\n" "$(center_text "${tier_fee_label}" 10)" "${tier_swaps_fmt}" "${tier_volume_usd}" "${tier_fees_usd}" "${tier_fee_per_swap_usd}"
+    printf "  | %s | %16s | %12s | %12s | %18s |\n" "$(center_text "${tier_fee_label}" 10)" "${tier_swaps_fmt}" "${tier_volume_usd}" "${tier_fees_usd}" "${tier_fee_per_swap_usd}"
     fee_printed_count=$((fee_printed_count + 1))
   done
   if (( fee_printed_count == 0 )); then
@@ -2269,32 +2516,47 @@ render_dashboard_once() {
       tier_fees_usd="$(usd6_to_dollar_2dp "${tier_fees}")"
       tier_fee_per_swap_usd="$(fees_usd6_per_swap_2dp "${tier_fees}" "${tier_swaps}")"
       tier_fee_label="${tier_pct}"
-      printf "  | %s | %12s | %14s | %12s | %12s |\n" "$(center_text "${tier_fee_label}" 10)" "${tier_swaps_fmt}" "${tier_volume_usd}" "${tier_fees_usd}" "${tier_fee_per_swap_usd}"
+      printf "  | %s | %16s | %12s | %12s | %18s |\n" "$(center_text "${tier_fee_label}" 10)" "${tier_swaps_fmt}" "${tier_volume_usd}" "${tier_fees_usd}" "${tier_fee_per_swap_usd}"
       fee_printed_count=$((fee_printed_count + 1))
     done < <(printf '%s\n' "${activity_fee_lines}")
   fi
   if (( fee_printed_count == 0 )); then
-    printf "  | %s | %12s | %14s | %12s | %12s |\n" "$(center_text "-" 10)" "-" "-" "-" "-"
+    printf "  | %s | %16s | %12s | %12s | %18s |\n" "$(center_text "-" 10)" "-" "-" "-" "-"
     if (( can_filter_levels == 0 )); then
       echo "  (waiting hook params: floor/cap unavailable)"
     else
       echo "  (no configured levels found)"
     fi
   fi
-  echo "  +------------+--------------+----------------+--------------+--------------+"
+  echo "  +------------+------------------+--------------+--------------+--------------------+"
   echo
-  echo "Activity (Last Hour, Fee Changes):"
-  echo "  +------------+--------------+----------------+--------------+--------------+"
+  echo "Activity (Last Hour):"
+  echo "  +------------+------------------+--------------+--------------+--------------------+"
   printf "  | %s | %s | %s | %s | %s |\n" \
     "$(center_text "Time (UTC)" 10)" \
-    "$(center_text "Direction" 12)" \
-    "$(center_text "Level Change" 14)" \
+    "$(center_text "Level Change" 16)" \
     "$(center_text "EMA" 12)" \
-    "$(center_text "Volume" 12)"
-  echo "  +------------+--------------+----------------+--------------+--------------+"
+    "$(center_text "Volume" 12)" \
+    "$(center_text "Reason" 18)"
+  echo "  +------------+------------------+--------------+--------------+--------------------+"
   activity_rows_target=12
+  if [[ "${period_seconds}" =~ ^[0-9]+$ ]] && (( period_seconds > 0 )); then
+    period_estimate=$((3600 / period_seconds + 4))
+    if (( period_estimate > activity_rows_target )); then
+      activity_rows_target="${period_estimate}"
+    fi
+  fi
   if [[ "${ema_periods}" =~ ^[0-9]+$ ]] && (( ema_periods > 0 )); then
-    activity_rows_target="${ema_periods}"
+    if (( ema_periods > activity_rows_target )); then
+      activity_rows_target="${ema_periods}"
+    fi
+  fi
+  if (( activity_rows_target > 60 )); then
+    activity_rows_target=60
+  fi
+  activity_stream_lines="${last_hour_period_lines}"
+  if [[ -z "${activity_stream_lines// /}" ]]; then
+    activity_stream_lines="${last_hour_change_lines}"
   fi
   lh_change_count=0
   while IFS= read -r fee_line; do
@@ -2308,28 +2570,68 @@ render_dashboard_once() {
     lh_from_pct="$(bips_to_percent_2dp "${lh_from_bips}")"
     lh_to_pct="$(bips_to_percent_2dp "${lh_to_bips}")"
     lh_change="${lh_from_pct} -> ${lh_to_pct}"
-    lh_ema="$(usd6_to_dollar "$(inline_value "${fee_line}" "ema_usd6")")"
-    lh_volume="$(usd6_to_dollar "$(inline_value "${fee_line}" "volume_usd6")")"
-    printf "  | %s | %s | %s | %12s | %12s |\n" \
-      "$(center_text "${lh_time}" 10)" \
-      "$(center_text "${lh_direction}" 12)" \
-      "$(center_text "${lh_change}" 14)" \
-      "${lh_ema}" \
-      "${lh_volume}"
+    lh_ema_raw="$(inline_value "${fee_line}" "ema_usd6")"
+    lh_volume_raw="$(inline_value "${fee_line}" "volume_usd6")"
+    if [[ "${lh_ema_raw}" =~ ^[0-9]+$ ]]; then
+      lh_ema="$(usd6_to_dollar "${lh_ema_raw}")"
+    else
+      lh_ema="-"
+    fi
+    if [[ "${lh_volume_raw}" =~ ^[0-9]+$ ]]; then
+      lh_volume="$(usd6_to_dollar "${lh_volume_raw}")"
+    else
+      lh_volume="-"
+    fi
+    lh_reason="$(inline_value "${fee_line}" "reason")"
+    if [[ -z "${lh_reason}" ]]; then
+      if [[ "${lh_direction}" == "FLAT" ]]; then
+        lh_reason="NO_SWAPS"
+      else
+        lh_reason="-"
+      fi
+    fi
+    lh_reason_dir="FLAT"
+    if [[ "${lh_direction}" == "UP" ]]; then
+      lh_reason_dir="FEE_UP"
+    elif [[ "${lh_direction}" == "DOWN" ]]; then
+      lh_reason_dir="FEE_DOWN"
+    fi
+    if [[ "${lh_reason_dir}" == "FLAT" ]]; then
+      if [[ -z "${lh_reason}" || "${lh_reason}" == "-" ]]; then
+        lh_reason="NO_SWAPS"
+      fi
+      lh_reason_display="${lh_reason_dir}:${lh_reason}"
+    else
+      lh_reason_display="${lh_reason_dir}"
+      if [[ -n "${lh_reason}" && "${lh_reason}" != "-" ]]; then
+        lh_reason_display="${lh_reason_dir}:${lh_reason}"
+      fi
+    fi
+    lh_time_cell="$(center_text "${lh_time}" 10)"
+    lh_change_cell="$(center_text "${lh_change}" 16)"
+    lh_ema_cell="$(printf '%12s' "${lh_ema}")"
+    lh_volume_cell="$(printf '%12s' "${lh_volume}")"
+    lh_reason_cell="$(printf '%18s' "${lh_reason_display}")"
+    printf "  | %s | %s | %s | %s | %s |\n" \
+      "${lh_time_cell}" \
+      "${lh_change_cell}" \
+      "${lh_ema_cell}" \
+      "${lh_volume_cell}" \
+      "${lh_reason_cell}"
     lh_change_count=$((lh_change_count + 1))
     if (( lh_change_count >= activity_rows_target )); then
       break
     fi
-  done < <(printf '%s\n' "${last_hour_change_lines}")
+  done < <(printf '%s\n' "${activity_stream_lines}")
   if (( lh_change_count == 0 )); then
-    printf "  | %s | %s | %s | %12s | %12s |\n" \
+    printf "  | %s | %s | %12s | %12s | %18s |\n" \
       "$(center_text "-" 10)" \
-      "$(center_text "-" 12)" \
-      "$(center_text "-" 14)" \
+      "$(center_text "-" 16)" \
+      "-" \
       "-" \
       "-"
   fi
-  echo "  +------------+--------------+----------------+--------------+--------------+"
+  echo "  +------------+------------------+--------------+--------------+--------------------+"
   lh_status="$(inline_value "${last_hour_status_line}" "status")"
   if [[ -n "${lh_status}" && "${lh_status}" != "OK" ]]; then
     echo "  status: ${lh_status}"
