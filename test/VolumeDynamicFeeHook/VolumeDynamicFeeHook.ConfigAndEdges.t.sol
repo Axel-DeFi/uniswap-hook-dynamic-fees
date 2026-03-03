@@ -24,15 +24,15 @@ contract VolumeDynamicFeeHookHarness is VolumeDynamicFeeHook {
         int24 _poolTickSpacing,
         Currency _stableCurrency,
         uint8 stableDecimals,
-        uint8 _initialFeeIdx,
         uint8 _floorIdx,
         uint8 _capIdx,
+        uint24[] memory _feeTiers,
         uint32 _periodSeconds,
         uint8 _emaPeriods,
         uint16 _deadbandBps,
         uint32 _lullResetSeconds,
         address _guardian,
-        uint8 _pauseFeeIdx,
+        address _creator,
         uint16 _creatorFeeBps
     )
         VolumeDynamicFeeHook(
@@ -42,15 +42,15 @@ contract VolumeDynamicFeeHookHarness is VolumeDynamicFeeHook {
             _poolTickSpacing,
             _stableCurrency,
             stableDecimals,
-            _initialFeeIdx,
             _floorIdx,
             _capIdx,
+            _feeTiers,
             _periodSeconds,
             _emaPeriods,
             _deadbandBps,
             _lullResetSeconds,
             _guardian,
-            _pauseFeeIdx,
+            _creator,
             _creatorFeeBps
         )
     {}
@@ -85,15 +85,15 @@ contract VolumeDynamicFeeHookConfigAndEdgesTest is Test {
         int24 tickSpacing;
         address stable;
         uint8 stableDecimals;
-        uint8 initialFeeIdx;
         uint8 floorIdx;
         uint8 capIdx;
+        uint24[] feeTiers;
         uint32 periodSeconds;
         uint8 emaPeriods;
         uint16 deadbandBps;
         uint32 lullResetSeconds;
         address guardian;
-        uint8 pauseFeeIdx;
+        address creator;
         uint16 creatorFeeBps;
     }
 
@@ -103,10 +103,8 @@ contract VolumeDynamicFeeHookConfigAndEdgesTest is Test {
 
     uint32 internal constant PERIOD_SECONDS = 3600;
     uint32 internal constant LULL_RESET_SECONDS = 86400;
-    uint8 internal constant INITIAL_FEE_IDX = 3;
     uint8 internal constant FLOOR_IDX = 0;
-    uint8 internal constant CAP_IDX = 6;
-    uint8 internal constant PAUSE_FEE_IDX = 3;
+    uint8 internal constant CAP_IDX = 5;
 
     function setUp() public {
         manager = new MockPoolManager();
@@ -123,17 +121,27 @@ contract VolumeDynamicFeeHookConfigAndEdgesTest is Test {
             tickSpacing: 10,
             stable: address(0x0000000000000000000000000000000000001111),
             stableDecimals: 6,
-            initialFeeIdx: INITIAL_FEE_IDX,
             floorIdx: FLOOR_IDX,
             capIdx: CAP_IDX,
+            feeTiers: _defaultFeeTiers(),
             periodSeconds: PERIOD_SECONDS,
             emaPeriods: 8,
             deadbandBps: 500,
             lullResetSeconds: LULL_RESET_SECONDS,
             guardian: address(this),
-            pauseFeeIdx: PAUSE_FEE_IDX,
+            creator: address(this),
             creatorFeeBps: 1000
         });
+    }
+
+    function _defaultFeeTiers() internal pure returns (uint24[] memory tiers) {
+        tiers = new uint24[](6);
+        tiers[0] = 90;
+        tiers[1] = 400;
+        tiers[2] = 900;
+        tiers[3] = 2500;
+        tiers[4] = 4500;
+        tiers[5] = 9000;
     }
 
     function _deploy(DeployCfg memory cfg) internal returns (VolumeDynamicFeeHookHarness h) {
@@ -144,15 +152,15 @@ contract VolumeDynamicFeeHookConfigAndEdgesTest is Test {
             cfg.tickSpacing,
             Currency.wrap(cfg.stable),
             cfg.stableDecimals,
-            cfg.initialFeeIdx,
             cfg.floorIdx,
             cfg.capIdx,
+            cfg.feeTiers,
             cfg.periodSeconds,
             cfg.emaPeriods,
             cfg.deadbandBps,
             cfg.lullResetSeconds,
             cfg.guardian,
-            cfg.pauseFeeIdx,
+            cfg.creator,
             cfg.creatorFeeBps
         );
     }
@@ -207,15 +215,15 @@ contract VolumeDynamicFeeHookConfigAndEdgesTest is Test {
             cfg.tickSpacing,
             Currency.wrap(cfg.stable),
             cfg.stableDecimals,
-            cfg.initialFeeIdx,
             cfg.floorIdx,
             cfg.capIdx,
+            cfg.feeTiers,
             cfg.periodSeconds,
             cfg.emaPeriods,
             cfg.deadbandBps,
             cfg.lullResetSeconds,
             cfg.guardian,
-            cfg.pauseFeeIdx,
+            cfg.creator,
             cfg.creatorFeeBps
         );
     }
@@ -300,14 +308,6 @@ contract VolumeDynamicFeeHookConfigAndEdgesTest is Test {
         _deploy(cfg);
     }
 
-    function test_constructor_reverts_on_pauseFeeIdx_out_of_range() public {
-        DeployCfg memory cfg = _defaultCfg();
-        cfg.pauseFeeIdx = 7;
-
-        vm.expectRevert(VolumeDynamicFeeHook.InvalidFeeIndex.selector);
-        _deploy(cfg);
-    }
-
     function test_constructor_reverts_on_creatorFeeBps_gt_10000() public {
         DeployCfg memory cfg = _defaultCfg();
         cfg.creatorFeeBps = 10_001;
@@ -318,27 +318,16 @@ contract VolumeDynamicFeeHookConfigAndEdgesTest is Test {
 
     function test_constructor_reverts_on_fee_idx_out_of_range() public {
         DeployCfg memory cfg = _defaultCfg();
-        cfg.capIdx = 7;
+        cfg.capIdx = 6;
 
         vm.expectRevert(VolumeDynamicFeeHook.InvalidFeeIndex.selector);
         _deploy(cfg);
     }
 
-    function test_constructor_reverts_on_floor_initial_cap_relation() public {
+    function test_constructor_reverts_on_floor_gt_cap_relation() public {
         DeployCfg memory cfg = _defaultCfg();
-        cfg.floorIdx = 4;
-        cfg.initialFeeIdx = 3;
-        cfg.capIdx = 6;
-
-        vm.expectRevert(VolumeDynamicFeeHook.InvalidConfig.selector);
-        _deploy(cfg);
-    }
-
-    function test_constructor_reverts_on_pause_outside_floor_cap() public {
-        DeployCfg memory cfg = _defaultCfg();
-        cfg.floorIdx = 2;
+        cfg.floorIdx = 5;
         cfg.capIdx = 4;
-        cfg.pauseFeeIdx = 1;
 
         vm.expectRevert(VolumeDynamicFeeHook.InvalidConfig.selector);
         _deploy(cfg);
@@ -352,22 +341,52 @@ contract VolumeDynamicFeeHookConfigAndEdgesTest is Test {
         _deploy(cfg);
     }
 
+    function test_constructor_accepts_dynamic_fee_tier_count() public {
+        DeployCfg memory cfg = _defaultCfg();
+        cfg.feeTiers = new uint24[](3);
+        cfg.feeTiers[0] = 90;
+        cfg.feeTiers[1] = 400;
+        cfg.feeTiers[2] = 900;
+        cfg.floorIdx = 0;
+        cfg.capIdx = 2;
+
+        VolumeDynamicFeeHookHarness h = _deploy(cfg);
+        assertEq(h.feeTierCount(), 3);
+        assertEq(h.feeTiers(0), 90);
+        assertEq(h.feeTiers(1), 400);
+        assertEq(h.feeTiers(2), 900);
+        vm.expectRevert(VolumeDynamicFeeHook.InvalidFeeIndex.selector);
+        h.feeTiers(3);
+    }
+
+    function test_constructor_reverts_on_non_increasing_fee_tiers() public {
+        DeployCfg memory cfg = _defaultCfg();
+        cfg.feeTiers = new uint24[](3);
+        cfg.feeTiers[0] = 90;
+        cfg.feeTiers[1] = 90;
+        cfg.feeTiers[2] = 900;
+        cfg.floorIdx = 0;
+        cfg.capIdx = 2;
+
+        vm.expectRevert(VolumeDynamicFeeHook.InvalidConfig.selector);
+        _deploy(cfg);
+    }
+
     function test_feeTiers_values_and_out_of_bounds() public view {
-        assertEq(hook.feeTiers(0), 95);
+        assertEq(hook.feeTiers(0), 90);
         assertEq(hook.feeTiers(1), 400);
         assertEq(hook.feeTiers(2), 900);
         assertEq(hook.feeTiers(3), 2500);
-        assertEq(hook.feeTiers(4), 3000);
-        assertEq(hook.feeTiers(5), 6000);
-        assertEq(hook.feeTiers(6), 9000);
+        assertEq(hook.feeTiers(4), 4500);
+        assertEq(hook.feeTiers(5), 9000);
     }
 
     function test_feeTiers_reverts_on_index_ge_count() public {
         vm.expectRevert(VolumeDynamicFeeHook.InvalidFeeIndex.selector);
-        hook.feeTiers(7);
+        hook.feeTiers(6);
     }
 
-    function test_permissions_are_exactly_afterInitialize_and_afterSwap() public view {
+    function test_permissions_include_beforeSwap_and_afterSwap() public view {
         Hooks.Permissions memory p = hook.getHookPermissions();
 
         assertFalse(p.beforeInitialize);
@@ -376,11 +395,11 @@ contract VolumeDynamicFeeHookConfigAndEdgesTest is Test {
         assertFalse(p.afterAddLiquidity);
         assertFalse(p.beforeRemoveLiquidity);
         assertFalse(p.afterRemoveLiquidity);
-        assertFalse(p.beforeSwap);
+        assertTrue(p.beforeSwap);
         assertTrue(p.afterSwap);
         assertFalse(p.beforeDonate);
         assertFalse(p.afterDonate);
-        assertFalse(p.beforeSwapReturnDelta);
+        assertTrue(p.beforeSwapReturnDelta);
         assertFalse(p.afterSwapReturnDelta);
         assertFalse(p.afterAddLiquidityReturnDelta);
         assertFalse(p.afterRemoveLiquidityReturnDelta);
@@ -468,7 +487,7 @@ contract VolumeDynamicFeeHookConfigAndEdgesTest is Test {
 
         assertEq(pv, 0);
         assertEq(ema, 0);
-        assertEq(idx, PAUSE_FEE_IDX);
+        assertEq(idx, FLOOR_IDX);
         assertEq(manager.updateCount(), updatesAfterPause);
     }
 
@@ -575,9 +594,10 @@ contract VolumeDynamicFeeHookConfigAndEdgesTest is Test {
         manager.callAfterSwap(hook, key, _deltaA0(-2_000_000));
         vm.warp(block.timestamp + PERIOD_SECONDS);
 
-        uint24 fee = hook.feeTiers(uint256(INITIAL_FEE_IDX));
+        uint24 fee = hook.feeTiers(uint256(FLOOR_IDX));
+        uint64 lpFeesUsd6 = uint64((uint256(2_000_000) * uint256(fee)) / 1_000_000);
         vm.expectEmit(true, true, true, true, address(hook));
-        emit PeriodClosed(fee, INITIAL_FEE_IDX, fee, INITIAL_FEE_IDX, 2_000_000, 2_000_000, 5_000, 10);
+        emit PeriodClosed(fee, FLOOR_IDX, fee, FLOOR_IDX, 2_000_000, 2_000_000, lpFeesUsd6, 10);
         manager.callAfterSwap(hook, key, _deltaZero());
     }
 
@@ -591,37 +611,47 @@ contract VolumeDynamicFeeHookConfigAndEdgesTest is Test {
         manager.callAfterSwap(hook, key, _deltaA0(-2_000_000));
         vm.warp(block.timestamp + PERIOD_SECONDS);
 
-        uint24 fee = hook.feeTiers(uint256(INITIAL_FEE_IDX));
+        uint24 fee = hook.feeTiers(uint256(FLOOR_IDX));
+        uint64 lpFeesUsd6 = uint64((uint256(2_000_000) * uint256(fee)) / 1_000_000);
         vm.expectEmit(true, true, true, true, address(hook));
-        emit PeriodClosed(fee, INITIAL_FEE_IDX, fee, INITIAL_FEE_IDX, 2_000_000, 2_000_000, 5_000, 9);
+        emit PeriodClosed(fee, FLOOR_IDX, fee, FLOOR_IDX, 2_000_000, 2_000_000, lpFeesUsd6, 9);
         manager.callAfterSwap(hook, key, _deltaZero());
     }
 
     function test_period_close_commits_state_before_fee_update_call() public {
         manager.callAfterInitialize(hook, key);
+        assertEq(manager.updateCount(), 1);
 
+        // Bootstrap EMA without changing fee.
+        manager.callAfterSwap(hook, key, _deltaA0(-2_000_000));
+        vm.warp(block.timestamp + PERIOD_SECONDS);
+        manager.callAfterSwap(hook, key, _deltaZero());
+
+        // Force one UP step to trigger updateDynamicLPFee().
+        manager.callAfterSwap(hook, key, _deltaA0(-20_000_000));
         uint256 closeTs = block.timestamp + PERIOD_SECONDS;
         vm.warp(closeTs);
         manager.callAfterSwap(hook, key, _deltaZero());
 
-        assertEq(manager.observedFeeIdx(), INITIAL_FEE_IDX - 1);
+        assertEq(manager.updateCount(), 2);
+        assertEq(manager.observedFeeIdx(), FLOOR_IDX + 1);
         assertEq(manager.observedPeriodStart(), uint64(closeTs));
         assertEq(manager.observedPeriodVolUsd6(), 0);
-        assertEq(manager.observedEmaVolUsd6(), 0);
-        assertEq(manager.observedLastDir(), 0);
+        assertEq(manager.observedEmaVolUsd6(), 4_250_000);
+        assertEq(manager.observedLastDir(), 1);
     }
 
-    function test_zero_ema_and_zero_close_steps_fee_down_one_tier() public {
+    function test_zero_ema_and_zero_close_keeps_fee_at_floor() public {
         manager.callAfterInitialize(hook, key);
 
         (,,, uint8 idxBefore,) = hook.unpackedState();
-        assertEq(idxBefore, INITIAL_FEE_IDX);
+        assertEq(idxBefore, FLOOR_IDX);
 
         vm.warp(block.timestamp + PERIOD_SECONDS);
         manager.callAfterSwap(hook, key, _deltaZero());
 
         (uint64 pv, uint96 ema,, uint8 idxAfter, uint8 dirAfter) = hook.unpackedState();
-        assertEq(idxAfter, INITIAL_FEE_IDX - 1);
+        assertEq(idxAfter, FLOOR_IDX);
         assertEq(dirAfter, 0);
         assertEq(ema, 0);
         assertEq(pv, 0);
@@ -634,12 +664,10 @@ contract VolumeDynamicFeeHookConfigAndEdgesTest is Test {
         manager.callAfterSwap(hook, key, _deltaA0(-1_000_000));
         vm.warp(block.timestamp + PERIOD_SECONDS);
 
-        vm.expectEmit(true, true, true, true, address(hook));
-        emit FeeUpdated(hook.feeTiers(uint256(INITIAL_FEE_IDX - 1)), INITIAL_FEE_IDX - 1, 0, 0);
         manager.callAfterSwap(hook, key, _deltaZero());
 
         (uint64 pv, uint96 ema,, uint8 idxAfter, uint8 dirAfter) = hook.unpackedState();
-        assertEq(idxAfter, INITIAL_FEE_IDX - 1);
+        assertEq(idxAfter, FLOOR_IDX);
         assertEq(dirAfter, 0);
         assertEq(ema, 0);
         assertEq(pv, 0);
@@ -654,7 +682,7 @@ contract VolumeDynamicFeeHookConfigAndEdgesTest is Test {
         manager.callAfterSwap(hook, key, _deltaZero());
 
         (uint64 pv, uint96 ema,, uint8 idxAfter, uint8 dirAfter) = hook.unpackedState();
-        assertEq(idxAfter, INITIAL_FEE_IDX);
+        assertEq(idxAfter, FLOOR_IDX);
         assertEq(dirAfter, 0);
         assertEq(ema, 1_000_001);
         assertEq(pv, 0);
@@ -680,7 +708,7 @@ contract VolumeDynamicFeeHookConfigAndEdgesTest is Test {
         assertEq(manager.updateCount(), updatesBefore);
     }
 
-    function test_lull_reset_when_already_initial_does_not_write_fee() public {
+    function test_lull_reset_when_already_floor_does_not_write_fee() public {
         manager.callAfterInitialize(hook, key);
         assertEq(manager.updateCount(), 1);
 
@@ -688,7 +716,7 @@ contract VolumeDynamicFeeHookConfigAndEdgesTest is Test {
         manager.callAfterSwap(hook, key, _deltaZero());
 
         (uint64 pv, uint96 ema,, uint8 idx, uint8 dir) = hook.unpackedState();
-        assertEq(idx, INITIAL_FEE_IDX);
+        assertEq(idx, FLOOR_IDX);
         assertEq(pv, 0);
         assertEq(ema, 0);
         assertEq(dir, 0);

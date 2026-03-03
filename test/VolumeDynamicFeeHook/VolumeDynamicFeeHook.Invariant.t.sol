@@ -88,10 +88,8 @@ abstract contract VolumeDynamicFeeHookInvariantBase is StdInvariant, Test {
     PoolKey internal key;
     VolumeDynamicFeeHookHandler internal handler;
 
-    uint8 internal constant INITIAL_FEE_IDX = 3;
     uint8 internal constant FLOOR_IDX = 0;
-    uint8 internal constant CAP_IDX = 6;
-    uint8 internal constant PAUSE_FEE_IDX = 3;
+    uint8 internal constant CAP_IDX = 5;
     uint16 internal constant CREATOR_FEE_BPS = 1000;
 
     uint32 internal constant PERIOD_SECONDS = 300; // fixed by requirement
@@ -100,6 +98,16 @@ abstract contract VolumeDynamicFeeHookInvariantBase is StdInvariant, Test {
     uint32 internal constant LULL_RESET_SECONDS = 3600;
 
     uint8 internal constant STABLE_DECIMALS = 6;
+
+    function _defaultFeeTiers() internal pure returns (uint24[] memory tiers) {
+        tiers = new uint24[](6);
+        tiers[0] = 90;
+        tiers[1] = 400;
+        tiers[2] = 900;
+        tiers[3] = 2500;
+        tiers[4] = 4500;
+        tiers[5] = 9000;
+    }
 
     function stableIsCurrency0() internal pure virtual returns (bool);
     function tickSpacing() internal pure virtual returns (int24);
@@ -113,10 +121,14 @@ abstract contract VolumeDynamicFeeHookInvariantBase is StdInvariant, Test {
         Currency c0 = Currency.wrap(token0);
         Currency c1 = Currency.wrap(token1);
         Currency usd = stableIsCurrency0() ? c0 : c1;
+        uint24[] memory feeTiers = _defaultFeeTiers();
 
         handler = new VolumeDynamicFeeHookHandler();
 
-        uint160 flags = uint160(Hooks.AFTER_INITIALIZE_FLAG | Hooks.AFTER_SWAP_FLAG);
+        uint160 flags = uint160(
+            Hooks.AFTER_INITIALIZE_FLAG | Hooks.BEFORE_SWAP_FLAG | Hooks.BEFORE_SWAP_RETURNS_DELTA_FLAG
+                | Hooks.AFTER_SWAP_FLAG
+        );
 
         bytes memory constructorArgs = abi.encode(
             IPoolManager(address(manager)),
@@ -125,15 +137,15 @@ abstract contract VolumeDynamicFeeHookInvariantBase is StdInvariant, Test {
             tickSpacing(),
             usd,
             STABLE_DECIMALS,
-            INITIAL_FEE_IDX,
             FLOOR_IDX,
             CAP_IDX,
+            feeTiers,
             PERIOD_SECONDS,
             EMA_PERIODS,
             DEADBAND_BPS,
             LULL_RESET_SECONDS,
             address(handler),
-            PAUSE_FEE_IDX,
+            address(handler),
             CREATOR_FEE_BPS
         );
 
@@ -147,15 +159,15 @@ abstract contract VolumeDynamicFeeHookInvariantBase is StdInvariant, Test {
             tickSpacing(),
             usd,
             STABLE_DECIMALS,
-            INITIAL_FEE_IDX,
             FLOOR_IDX,
             CAP_IDX,
+            feeTiers,
             PERIOD_SECONDS,
             EMA_PERIODS,
             DEADBAND_BPS,
             LULL_RESET_SECONDS,
             address(handler),
-            PAUSE_FEE_IDX,
+            address(handler),
             CREATOR_FEE_BPS
         );
 
@@ -189,11 +201,11 @@ abstract contract VolumeDynamicFeeHookInvariantBase is StdInvariant, Test {
         assertTrue(lastDir <= 2, "lastDir out of range");
     }
 
-    function invariant_pausedMeansPauseFee() public view {
+    function invariant_pausedMeansFloorFee() public view {
         if (!hook.isPaused()) return;
         (,,, uint8 feeIdx,) = hook.unpackedState();
-        assertEq(feeIdx, PAUSE_FEE_IDX, "paused feeIdx mismatch");
-        assertEq(hook.currentFeeBips(), hook.feeTiers(uint256(PAUSE_FEE_IDX)), "paused fee mismatch");
+        assertEq(feeIdx, FLOOR_IDX, "paused feeIdx mismatch");
+        assertEq(hook.currentFeeBips(), hook.feeTiers(uint256(FLOOR_IDX)), "paused fee mismatch");
     }
 
     function invariant_currentFeeMatchesTier() public view {

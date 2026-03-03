@@ -47,7 +47,7 @@
 
 ### Inactivity handling
 - Added `lullResetSeconds` (immutable). On the first swap after a long lull, the hook resets
-  `feeIdx` to `initialFeeIdx` and clears `emaVolume` to re-learn quickly.
+  `feeIdx` to `floorIdx` and clears `emaVolume` to re-learn quickly.
 
 ### License
 - Set license to Apache-2.0.

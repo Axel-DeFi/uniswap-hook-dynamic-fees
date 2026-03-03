@@ -15,13 +15,17 @@ set -euo pipefail
 #
 # Required config keys:
 #   POOL_MANAGER, VOLATILE, STABLE, STABLE_DECIMALS, TICK_SPACING
-#   INITIAL_FEE_IDX, FLOOR_IDX, CAP_IDX
+#   FLOOR_TIER, CAP_TIER
+#   FEE_TIERS (comma-separated fee levels in percent, for example 0.009,0.04,0.09)
 #   PERIOD_SECONDS, EMA_PERIODS, DEADBAND_BPS, LULL_RESET_SECONDS
-#   PAUSE_FEE_IDX, CREATOR_FEE_PERCENT
+#   CREATOR_FEE_PERCENT
 #
 # Guardian behavior:
 #   - If GUARDIAN is empty after sourcing config + .env, it defaults to the deployer address.
 #   - If REQUIRE_GUARDIAN_CONTRACT=1, deployment fails when GUARDIAN is an EOA.
+#
+# Creator behavior:
+#   - If CREATOR is empty after sourcing config + .env, it defaults to the deployer address.
 
 usage() {
   cat <<'EOF'
@@ -111,13 +115,100 @@ if [[ -z "${PRIVATE_KEY:-}" ]]; then
 fi
 
 # Validate required variables
-required=(POOL_MANAGER VOLATILE STABLE STABLE_DECIMALS TICK_SPACING INITIAL_FEE_IDX FLOOR_IDX CAP_IDX PERIOD_SECONDS EMA_PERIODS DEADBAND_BPS LULL_RESET_SECONDS PAUSE_FEE_IDX CREATOR_FEE_PERCENT)
+required=(POOL_MANAGER VOLATILE STABLE STABLE_DECIMALS TICK_SPACING FLOOR_TIER CAP_TIER FEE_TIERS PERIOD_SECONDS EMA_PERIODS DEADBAND_BPS LULL_RESET_SECONDS CREATOR_FEE_PERCENT)
 for k in "${required[@]}"; do
   if [[ -z "${!k:-}" ]]; then
     echo "ERROR: missing $k in $HOOK_CONF" >&2
     exit 1
   fi
 done
+
+percent_to_pips() {
+  local pct="$1"
+  awk -v pct="${pct}" '
+    BEGIN {
+      if (pct !~ /^[0-9]+([.][0-9]+)?$/) exit 1;
+      v = pct * 10000;
+      p = int(v + 0.5);
+      if (p < 1 || p > 1000000) exit 1;
+      print p;
+    }' 2>/dev/null
+}
+
+# Parse fee tiers from percent CSV into hundredths-of-a-bip values expected by the hook.
+# Example: 0.009% -> 90.
+IFS=',' read -r -a FEE_TIER_PCT_ITEMS <<< "${FEE_TIERS}"
+if (( ${#FEE_TIER_PCT_ITEMS[@]} == 0 )); then
+  echo "ERROR: FEE_TIERS must contain at least one value (for example 0.009,0.04,0.09)." >&2
+  exit 1
+fi
+if (( ${#FEE_TIER_PCT_ITEMS[@]} > 255 )); then
+  echo "ERROR: FEE_TIERS has ${#FEE_TIER_PCT_ITEMS[@]} values; max supported is 255." >&2
+  exit 1
+fi
+
+FEE_TIER_COUNT="${#FEE_TIER_PCT_ITEMS[@]}"
+export FEE_TIER_COUNT
+
+declare -a FEE_TIER_PIPS=()
+prev_tier_pips=-1
+for i in "${!FEE_TIER_PCT_ITEMS[@]}"; do
+  tier_pct="$(printf '%s' "${FEE_TIER_PCT_ITEMS[$i]}" | tr -d '[:space:]')"
+  tier_pips="$(percent_to_pips "${tier_pct}" || true)"
+  if [[ -z "${tier_pips}" ]]; then
+    echo "ERROR: FEE_TIERS item '${FEE_TIER_PCT_ITEMS[$i]}' is invalid. Use decimal percent values like 0.09." >&2
+    exit 1
+  fi
+  if (( prev_tier_pips >= 0 && tier_pips <= prev_tier_pips )); then
+    echo "ERROR: FEE_TIERS must be strictly increasing after conversion to pips." >&2
+    exit 1
+  fi
+  prev_tier_pips="${tier_pips}"
+  FEE_TIER_PIPS[$i]="${tier_pips}"
+
+  tier_var="FEE_TIER_${i}"
+  printf -v "${tier_var}" '%s' "${tier_pips}"
+  export "${tier_var}"
+done
+
+floor_tier_pct="$(printf '%s' "${FLOOR_TIER}" | tr -d '[:space:]')"
+cap_tier_pct="$(printf '%s' "${CAP_TIER}" | tr -d '[:space:]')"
+floor_tier_pips="$(percent_to_pips "${floor_tier_pct}" || true)"
+cap_tier_pips="$(percent_to_pips "${cap_tier_pct}" || true)"
+if [[ -z "${floor_tier_pips}" ]]; then
+  echo "ERROR: FLOOR_TIER='${FLOOR_TIER}' is invalid. Use decimal percent format like 0.04." >&2
+  exit 1
+fi
+if [[ -z "${cap_tier_pips}" ]]; then
+  echo "ERROR: CAP_TIER='${CAP_TIER}' is invalid. Use decimal percent format like 0.45." >&2
+  exit 1
+fi
+
+FLOOR_IDX=""
+CAP_IDX=""
+for i in "${!FEE_TIER_PIPS[@]}"; do
+  if [[ "${FEE_TIER_PIPS[$i]}" == "${floor_tier_pips}" ]]; then
+    FLOOR_IDX="${i}"
+  fi
+  if [[ "${FEE_TIER_PIPS[$i]}" == "${cap_tier_pips}" ]]; then
+    CAP_IDX="${i}"
+  fi
+done
+
+if [[ -z "${FLOOR_IDX}" ]]; then
+  echo "ERROR: FLOOR_TIER=${FLOOR_TIER}% is not present in FEE_TIERS='${FEE_TIERS}'." >&2
+  exit 1
+fi
+if [[ -z "${CAP_IDX}" ]]; then
+  echo "ERROR: CAP_TIER=${CAP_TIER}% is not present in FEE_TIERS='${FEE_TIERS}'." >&2
+  exit 1
+fi
+if (( FLOOR_IDX > CAP_IDX )); then
+  echo "ERROR: FLOOR_TIER index (${FLOOR_IDX}) must be <= CAP_TIER index (${CAP_IDX})." >&2
+  exit 1
+fi
+
+export FLOOR_IDX CAP_IDX
 
 # Human-friendly percent input in config (10 means 10%).
 if ! [[ "${CREATOR_FEE_PERCENT}" =~ ^[0-9]+$ ]]; then
@@ -132,10 +223,18 @@ CREATOR_FEE_BPS=$((CREATOR_FEE_PERCENT * 100))
 export CREATOR_FEE_BPS
 
 # Default guardian to deployer if empty
+DEPLOYER_ADDR="$(cast wallet address --private-key "${PRIVATE_KEY}" | awk '{print $1}')"
+
 if [[ -z "${GUARDIAN:-}" ]]; then
-  GUARDIAN="$(cast wallet address --private-key "${PRIVATE_KEY}" | awk '{print $1}')"
+  GUARDIAN="${DEPLOYER_ADDR}"
   export GUARDIAN
   echo "==> GUARDIAN not set; defaulting to deployer: ${GUARDIAN}"
+fi
+
+if [[ -z "${CREATOR:-}" ]]; then
+  CREATOR="${DEPLOYER_ADDR}"
+  export CREATOR
+  echo "==> CREATOR not set; defaulting to deployer: ${CREATOR}"
 fi
 
 # Optional safety: enforce contract-based guardian (e.g. multisig) in strict mode.

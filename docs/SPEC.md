@@ -24,7 +24,7 @@ This document is the single source of truth for the hook's design, configuration
 - At each period close, compare the closed volume to EMA and move the fee tier by **at most one step**.
 - Use a **deadband** (relative band) to prevent oscillation around the mean.
 - **Cap growth**: fee index is bounded by `[floorIdx, capIdx]` (cap is explicit and enforced).
-- **Lull reset**: after inactivity ≥ `lullResetSeconds`, reset to `initialFeeIdx` and clear EMA.
+- **Lull reset**: after inactivity ≥ `lullResetSeconds`, reset to `floorIdx` and clear EMA.
 
 ## Fee tiers
 
@@ -33,7 +33,7 @@ Example grid (basis points * 1e4): `95, 400, 900, 2500, 3000, 6000, 9000`.
 
 - `floorIdx` sets the minimum fee tier index.
 - `capIdx` sets the maximum fee tier index (explicit cap).
-- `initialFeeIdx` is used on pool initialization and on lull reset.
+- `floorIdx` is used on pool initialization, pause/unpause, and on lull reset.
 
 ## Perioding model
 
@@ -94,14 +94,14 @@ The guardian can pause/unpause the algorithm, but cannot set arbitrary fees.
 
 - `pause()`:
   - Freezes model updates.
-  - Resets volumes/EMA and sets the **target fee tier** to `pauseFeeIdx`.
+  - Resets volumes/EMA and sets the **target fee tier** to `floorIdx`.
   - If the pool is initialized, applies the fee **immediately** via `PoolManager.updateDynamicLPFee(...)` (called directly by the hook).
-  - If called before pool initialization, it only updates the hook state; `afterInitialize` will set `pauseFeeIdx` as the initial fee.
+  - If called before pool initialization, it only updates the hook state; `afterInitialize` will set `floorIdx` as the initial fee.
 
 - `unpause()`:
-  - Resets volumes/EMA and sets target to `initialFeeIdx`.
+  - Resets volumes/EMA and sets target to `floorIdx`.
   - If the pool is initialized, applies the fee **immediately** via `PoolManager.updateDynamicLPFee(...)` (called directly by the hook).
-  - If called before pool initialization, it only updates the hook state; `afterInitialize` will set `initialFeeIdx` as the initial fee.
+  - If called before pool initialization, it only updates the hook state; `afterInitialize` will set `floorIdx` as the initial fee.
 
 **Important:** There is no deferred/pending pause apply. Pause/unpause are immediate for initialized pools and deterministic for pre-init calls.
 

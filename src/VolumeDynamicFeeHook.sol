@@ -10,6 +10,7 @@ import {BalanceDelta, BalanceDeltaLibrary} from "@uniswap/v4-core/src/types/Bala
 import {SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {Hooks} from "@uniswap/v4-core/src/libraries/Hooks.sol";
 import {LPFeeLibrary} from "@uniswap/v4-core/src/libraries/LPFeeLibrary.sol";
+import {BeforeSwapDelta, toBeforeSwapDelta, BeforeSwapDeltaLibrary} from "@uniswap/v4-core/src/types/BeforeSwapDelta.sol";
 
 /**
  * @dev VolumeDynamicFeeHook
@@ -24,26 +25,24 @@ import {LPFeeLibrary} from "@uniswap/v4-core/src/libraries/LPFeeLibrary.sol";
 /// @notice Single-pool Uniswap v4 hook that updates dynamic LP fees using stable-coin volume heuristics.
 contract VolumeDynamicFeeHook is BaseHook {
     using BalanceDeltaLibrary for BalanceDelta;
+    using BeforeSwapDeltaLibrary for BeforeSwapDelta;
 
     // -----------------------------------------------------------------------
     // Fee tiers (hundredths of a bip). Example: 3000 = 0.30%
     // -----------------------------------------------------------------------
-    uint8 public constant FEE_TIER_COUNT = 7;
+    uint256 private constant MAX_FEE_TIER_COUNT = 255;
 
     error InvalidFeeIndex();
+    // forge-lint: disable-next-line(screaming-snake-case-immutable)
+    uint16 public immutable feeTierCount;
+    uint24[] private _feeTiersByIdx;
 
-    /// @notice Packed fee tiers by index (hundredths of a bip).
-    /// @dev Each fee is stored in 24 bits within PACKED_FEE_TIERS (little-endian by index).
-    uint256 private constant PACKED_FEE_TIERS = uint256(95) | (uint256(400) << 24) | (uint256(900) << 48)
-        | (uint256(2500) << 72) | (uint256(3000) << 96) | (uint256(6000) << 120) | (uint256(9000) << 144);
-
-    function feeTiers(uint256 idx) public pure returns (uint24) {
-        if (idx >= FEE_TIER_COUNT) revert InvalidFeeIndex();
-        // Extract 24-bit lane.
-        return uint24((PACKED_FEE_TIERS >> (idx * 24)) & 0xFFFFFF);
+    function feeTiers(uint256 idx) public view returns (uint24) {
+        if (idx >= feeTierCount) revert InvalidFeeIndex();
+        return _feeTiersByIdx[idx];
     }
 
-    function _feeTier(uint8 idx) internal pure returns (uint24) {
+    function _feeTier(uint8 idx) internal view returns (uint24) {
         return feeTiers(uint256(idx));
     }
 
@@ -68,8 +67,6 @@ contract VolumeDynamicFeeHook is BaseHook {
     uint64 internal immutable _stableScale;
 
     // forge-lint: disable-next-line(screaming-snake-case-immutable)
-    uint8 public immutable initialFeeIdx;
-    // forge-lint: disable-next-line(screaming-snake-case-immutable)
     uint8 public immutable floorIdx;
     // forge-lint: disable-next-line(screaming-snake-case-immutable)
     uint8 public immutable capIdx;
@@ -86,7 +83,7 @@ contract VolumeDynamicFeeHook is BaseHook {
     // forge-lint: disable-next-line(screaming-snake-case-immutable)
     address public immutable guardian;
     // forge-lint: disable-next-line(screaming-snake-case-immutable)
-    uint8 public immutable pauseFeeIdx;
+    address public immutable creator;
     // forge-lint: disable-next-line(screaming-snake-case-immutable)
     uint16 public immutable creatorFeeBps;
 
@@ -94,6 +91,8 @@ contract VolumeDynamicFeeHook is BaseHook {
     // Packed state (ONE storage slot)
     // -----------------------------------------------------------------------
     uint256 private _state;
+    uint256 private _creatorFees0;
+    uint256 private _creatorFees1;
 
     uint8 private constant DIR_NONE = 0;
     uint8 private constant DIR_UP = 1;
@@ -116,6 +115,8 @@ contract VolumeDynamicFeeHook is BaseHook {
     // closeVol is tracked as abs(stableAmount) in USD6.
     // 1_000_000 equals $1 of period-close volume.
     uint64 private constant DUST_CLOSE_VOL_USD6 = 1_000_000;
+    uint256 private constant FEE_SCALE = 1_000_000;
+    uint256 private constant BPS_SCALE = 10_000;
 
     uint256 private constant PAUSED_BIT = 234;
 
@@ -133,9 +134,11 @@ contract VolumeDynamicFeeHook is BaseHook {
         uint64 lpFeesUsd6,
         uint8 reasonCode
     );
-    event Paused(uint24 pauseFee, uint8 pauseFeeIdx);
+    event Paused(uint24 fee, uint8 feeIdx);
     event Unpaused();
     event LullReset(uint24 newFee, uint8 newFeeIdx);
+    event CreatorFeeAccrued(address indexed currency, uint256 amount, uint24 feeBips);
+    event CreatorFeesClaimed(address indexed to, uint256 amount0, uint256 amount1);
 
     // -----------------------------------------------------------------------
     // Errors
@@ -146,6 +149,9 @@ contract VolumeDynamicFeeHook is BaseHook {
     error NotInitialized();
     error InvalidConfig();
     error NotGuardian();
+    error NotCreator();
+    error InvalidRecipient();
+    error ClaimTooLarge();
 
     constructor(
         IPoolManager _poolManager,
@@ -154,15 +160,15 @@ contract VolumeDynamicFeeHook is BaseHook {
         int24 _poolTickSpacing,
         Currency _stableCurrency,
         uint8 stableDecimals,
-        uint8 _initialFeeIdx,
         uint8 _floorIdx,
         uint8 _capIdx,
+        uint24[] memory _feeTiers,
         uint32 _periodSeconds,
         uint8 _emaPeriods,
         uint16 _deadbandBps,
         uint32 _lullResetSeconds,
         address _guardian,
-        uint8 _pauseFeeIdx,
+        address _creator,
         uint16 _creatorFeeBps
     ) BaseHook(_poolManager) {
         if (address(_poolManager) == address(0)) revert InvalidConfig();
@@ -198,21 +204,30 @@ contract VolumeDynamicFeeHook is BaseHook {
 
         if (_guardian == address(0)) revert InvalidConfig();
         guardian = _guardian;
+        if (_creator == address(0)) revert InvalidConfig();
+        creator = _creator;
 
-        if (_pauseFeeIdx >= FEE_TIER_COUNT) revert InvalidFeeIndex();
-        pauseFeeIdx = _pauseFeeIdx;
         if (_creatorFeeBps > 10_000) revert InvalidConfig();
         creatorFeeBps = _creatorFeeBps;
 
-        if (_floorIdx >= FEE_TIER_COUNT || _capIdx >= FEE_TIER_COUNT || _initialFeeIdx >= FEE_TIER_COUNT) {
+        uint256 tierCount = _feeTiers.length;
+        if (tierCount == 0 || tierCount > MAX_FEE_TIER_COUNT) revert InvalidConfig();
+        if (tierCount <= uint256(_floorIdx) || tierCount <= uint256(_capIdx)) {
             revert InvalidFeeIndex();
         }
-        if (!(_floorIdx <= _initialFeeIdx && _initialFeeIdx <= _capIdx)) revert InvalidConfig();
-        if (!(_floorIdx <= _pauseFeeIdx && _pauseFeeIdx <= _capIdx)) revert InvalidConfig();
+        if (_floorIdx > _capIdx) revert InvalidConfig();
+        feeTierCount = uint16(tierCount);
 
+        uint24 prevTier;
+        for (uint256 i = 0; i < tierCount; ++i) {
+            uint24 tier = _feeTiers[i];
+            if (tier == 0) revert InvalidConfig();
+            if (i > 0 && tier <= prevTier) revert InvalidConfig();
+            _feeTiersByIdx.push(tier);
+            prevTier = tier;
+        }
         floorIdx = _floorIdx;
         capIdx = _capIdx;
-        initialFeeIdx = _initialFeeIdx;
 
         if (stableDecimals > 18) revert InvalidConfig();
 
@@ -234,7 +249,47 @@ contract VolumeDynamicFeeHook is BaseHook {
     // -----------------------------------------------------------------------
     function getHookPermissions() public pure override returns (Hooks.Permissions memory perms) {
         perms.afterInitialize = true;
+        perms.beforeSwap = true;
+        perms.beforeSwapReturnDelta = true;
         perms.afterSwap = true;
+    }
+
+    function _beforeSwap(address, PoolKey calldata key, SwapParams calldata params, bytes calldata)
+        internal
+        override
+        returns (bytes4, BeforeSwapDelta, uint24)
+    {
+        _validateKey(key);
+        if (isPaused() || creatorFeeBps == 0 || params.amountSpecified >= 0) {
+            return (IHooks.beforeSwap.selector, BeforeSwapDeltaLibrary.ZERO_DELTA, 0);
+        }
+
+        (,, uint64 periodStart, uint8 feeIdx,,) = _unpackState(_state);
+        if (periodStart == 0) {
+            return (IHooks.beforeSwap.selector, BeforeSwapDeltaLibrary.ZERO_DELTA, 0);
+        }
+
+        uint256 amountIn = uint256(-params.amountSpecified);
+        uint256 creatorCut = _computeCreatorFee(amountIn, _feeTier(feeIdx));
+        if (creatorCut == 0 || creatorCut >= amountIn) {
+            return (IHooks.beforeSwap.selector, BeforeSwapDeltaLibrary.ZERO_DELTA, 0);
+        }
+        uint256 maxSpecifiedDelta = uint256(type(uint128).max >> 1);
+        if (creatorCut > maxSpecifiedDelta) {
+            creatorCut = maxSpecifiedDelta;
+        }
+
+        Currency specifiedCurrency = params.zeroForOne ? key.currency0 : key.currency1;
+        poolManager.take(specifiedCurrency, address(this), creatorCut);
+        if (specifiedCurrency == poolCurrency0) {
+            _creatorFees0 += creatorCut;
+        } else {
+            _creatorFees1 += creatorCut;
+        }
+        emit CreatorFeeAccrued(Currency.unwrap(specifiedCurrency), creatorCut, _feeTier(feeIdx));
+
+        int128 specifiedDelta = int128(uint128(creatorCut));
+        return (IHooks.beforeSwap.selector, toBeforeSwapDelta(specifiedDelta, 0), 0);
     }
 
     // -----------------------------------------------------------------------
@@ -251,12 +306,11 @@ contract VolumeDynamicFeeHook is BaseHook {
         (,, uint64 periodStart,,,) = _unpackState(_state);
         if (periodStart != 0) revert AlreadyInitialized();
 
-        bool paused_ = isPaused();
         uint64 nowTs = _now64();
 
-        uint8 feeIdx = paused_ ? pauseFeeIdx : initialFeeIdx;
+        uint8 feeIdx = floorIdx;
 
-        _state = _packState(0, 0, nowTs, feeIdx, DIR_NONE, paused_);
+        _state = _packState(0, 0, nowTs, feeIdx, DIR_NONE, isPaused());
 
         poolManager.updateDynamicLPFee(key, _feeTier(feeIdx));
         emit FeeUpdated(_feeTier(feeIdx), feeIdx, 0, 0);
@@ -293,7 +347,7 @@ contract VolumeDynamicFeeHook is BaseHook {
 
             emaVol = 0;
             lastDir = DIR_NONE;
-            feeIdx = initialFeeIdx;
+            feeIdx = floorIdx;
             periodStart = nowTs;
 
             periodVol = _addSwapVolumeUsd6(0, delta);
@@ -411,6 +465,45 @@ contract VolumeDynamicFeeHook is BaseHook {
         return (pv, ev, ps, fi, ld);
     }
 
+    function creatorFeesAccrued() external view returns (uint256 token0, uint256 token1) {
+        return (_creatorFees0, _creatorFees1);
+    }
+
+    function claimCreatorFees(address to, uint256 amount0, uint256 amount1) external {
+        if (msg.sender != creator) revert NotCreator();
+        if (to == address(0)) revert InvalidRecipient();
+        if (amount0 > _creatorFees0 || amount1 > _creatorFees1) revert ClaimTooLarge();
+        if (amount0 > 0) {
+            _creatorFees0 -= amount0;
+            poolCurrency0.transfer(to, amount0);
+        }
+        if (amount1 > 0) {
+            _creatorFees1 -= amount1;
+            poolCurrency1.transfer(to, amount1);
+        }
+        if (amount0 > 0 || amount1 > 0) {
+            emit CreatorFeesClaimed(to, amount0, amount1);
+        }
+    }
+
+    function claimAllCreatorFees(address to) external {
+        if (msg.sender != creator) revert NotCreator();
+        if (to == address(0)) revert InvalidRecipient();
+        uint256 amount0 = _creatorFees0;
+        uint256 amount1 = _creatorFees1;
+        if (amount0 > 0) {
+            _creatorFees0 = 0;
+            poolCurrency0.transfer(to, amount0);
+        }
+        if (amount1 > 0) {
+            _creatorFees1 = 0;
+            poolCurrency1.transfer(to, amount1);
+        }
+        if (amount0 > 0 || amount1 > 0) {
+            emit CreatorFeesClaimed(to, amount0, amount1);
+        }
+    }
+
     // -----------------------------------------------------------------------
     // Guardian controls
     // -----------------------------------------------------------------------
@@ -423,23 +516,23 @@ contract VolumeDynamicFeeHook is BaseHook {
             _unpackState(_state);
         bool initialized = periodStart != 0;
 
-        // Reset state and force a conservative fee bucket.
+        // Reset state and force floor fee bucket.
         periodVol = 0;
         emaVol = 0;
         periodStart = initialized ? _now64() : uint64(0);
-        feeIdx = pauseFeeIdx;
+        feeIdx = floorIdx;
         lastDir = DIR_NONE;
         paused_ = true;
 
         _state = _packState(periodVol, emaVol, periodStart, feeIdx, lastDir, paused_);
 
-        // Apply pause fee immediately for initialized pools.
+        // Apply floor fee immediately for initialized pools.
         if (initialized) {
             poolManager.updateDynamicLPFee(_poolKey(), _feeTier(feeIdx));
             emit FeeUpdated(_feeTier(feeIdx), feeIdx, 0, 0);
         }
 
-        emit Paused(_feeTier(pauseFeeIdx), pauseFeeIdx);
+        emit Paused(_feeTier(floorIdx), floorIdx);
     }
 
     function unpause() external {
@@ -450,17 +543,17 @@ contract VolumeDynamicFeeHook is BaseHook {
             _unpackState(_state);
         bool initialized = periodStart != 0;
 
-        // Reset state and return to the initial fee bucket.
+        // Reset state and return to floor fee bucket.
         periodVol = 0;
         emaVol = 0;
         periodStart = initialized ? _now64() : uint64(0);
-        feeIdx = initialFeeIdx;
+        feeIdx = floorIdx;
         lastDir = DIR_NONE;
         paused_ = false;
 
         _state = _packState(periodVol, emaVol, periodStart, feeIdx, lastDir, paused_);
 
-        // Apply unpause fee immediately for initialized pools.
+        // Apply floor fee immediately for initialized pools.
         if (initialized) {
             poolManager.updateDynamicLPFee(_poolKey(), _feeTier(feeIdx));
             emit FeeUpdated(_feeTier(feeIdx), feeIdx, 0, 0);
@@ -478,6 +571,8 @@ contract VolumeDynamicFeeHook is BaseHook {
             hooks: IHooks(address(this))
         });
     }
+
+    receive() external payable {}
 
     // -----------------------------------------------------------------------
     // Internal helpers
@@ -538,6 +633,11 @@ contract VolumeDynamicFeeHook is BaseHook {
         if (fees > type(uint64).max) return type(uint64).max;
         // forge-lint: disable-next-line(unsafe-typecast)
         return uint64(fees);
+    }
+
+    function _computeCreatorFee(uint256 amountIn, uint24 feeBips) internal view returns (uint256) {
+        uint256 lpFeeAmount = (amountIn * uint256(feeBips)) / FEE_SCALE;
+        return (lpFeeAmount * uint256(creatorFeeBps)) / BPS_SCALE;
     }
 
     function _computeNextFeeIdx(uint8 feeIdx, uint8 lastDir, uint64 closeVol, uint96 emaVol)

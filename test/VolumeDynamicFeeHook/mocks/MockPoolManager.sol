@@ -4,6 +4,7 @@ pragma solidity ^0.8.26;
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
+import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 
 import {VolumeDynamicFeeHook} from "src/VolumeDynamicFeeHook.sol";
 
@@ -34,7 +35,7 @@ contract MockPoolManager {
         updateCount += 1;
 
         (observedPeriodVolUsd6, observedEmaVolUsd6, observedPeriodStart, observedFeeIdx, observedLastDir) =
-            VolumeDynamicFeeHook(address(key.hooks)).unpackedState();
+            VolumeDynamicFeeHook(payable(address(key.hooks))).unpackedState();
     }
 
     /// @notice Mimics PoolManager.unlock by calling back into the caller (msg.sender).
@@ -46,6 +47,22 @@ contract MockPoolManager {
 
     function setSkipUnlockCallback(bool v) external {
         skipUnlockCallback = v;
+    }
+
+    function exttload(bytes32) external pure returns (bytes32) {
+        return bytes32(0);
+    }
+
+    function exttload(bytes32[] calldata slots) external pure returns (bytes32[] memory values) {
+        values = new bytes32[](slots.length);
+    }
+
+    function take(Currency, address, uint256) external {}
+
+    function sync(Currency) external {}
+
+    function settle() external payable returns (uint256) {
+        return 0;
     }
 
     function callAfterInitialize(VolumeDynamicFeeHook hook, PoolKey calldata key) external {

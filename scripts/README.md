@@ -38,9 +38,13 @@ Secrets should live in `./.env` (repo root). Typical variables:
 
 ### Strategy / monetization params
 
-- `INITIAL_FEE_IDX`, `FLOOR_IDX`, `CAP_IDX` — dynamic LP fee tier bounds
-- `PAUSE_FEE_IDX` — fee tier used while paused
+- `FEE_TIERS` — comma-separated fee levels in percent (for example `0.009,0.04,0.09,0.25,0.45,0.90`)
+- `FLOOR_TIER`, `CAP_TIER` — floor/cap fee levels in percent (must match one of `FEE_TIERS`)
 - `CREATOR_FEE_PERCENT` — creator fee share in percent (for example `10` = 10%)
+
+Note:
+- Fee tiers are network-configurable with arbitrary count and passed to the hook constructor on deploy.
+- Floor tier is used as start fee and pause fee.
 
 ## Unified test runner
 
