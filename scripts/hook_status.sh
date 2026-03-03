@@ -2409,16 +2409,16 @@ render_dashboard_once() {
   live_period_vol="$(usd6_to_dollar "${pv}")"
   live_last_dir="$(dir_label "${last_dir}")"
   echo "Live:"
-  echo "  +------------+------------------+--------------+--------------+--------------------+"
-  printf "  | %s | %s | %s | %s | %s |\n" "$(center_text "Level" 10)" "$(center_text "TVL" 16)" "$(center_text "PeriodVol" 12)" "$(center_text "EMA" 12)" "$(center_text "Direction" 18)"
-  echo "  +------------+------------------+--------------+--------------+--------------------+"
+  echo "  +------------+------------------+------------------+--------------+----------------------+"
+  printf "  | %s | %s | %s | %s | %s |\n" "$(center_text "Level" 10)" "$(center_text "TVL" 16)" "$(center_text "PeriodVol" 16)" "$(center_text "EMA" 12)" "$(center_text "Direction" 20)"
+  echo "  +------------+------------------+------------------+--------------+----------------------+"
   printf "  | %s | %s | %s | %s | %s |\n" \
     "$(center_text "${fee_level_pct}" 10)" \
     "$(center_text "${pool_tvl_usd}" 16)" \
-    "$(center_text "${live_period_vol}" 12)" \
+    "$(center_text "${live_period_vol}" 16)" \
     "$(center_text "${ema_usd}" 12)" \
-    "$(center_text "${live_last_dir}" 18)"
-  echo "  +------------+------------------+--------------+--------------+--------------------+"
+    "$(center_text "${live_last_dir}" 20)"
+  echo "  +------------+------------------+------------------+--------------+----------------------+"
   if [[ -n "${state_view}" && "${state_view}" != "not-set" ]]; then
     echo "  StateView: ${state_view}"
   fi
@@ -2427,31 +2427,31 @@ render_dashboard_once() {
   fi
   echo
   echo "Historical Data:"
-  echo "  +------------+------------------+--------------+--------------+--------------------+"
+  echo "  +------------+------------------+------------------+--------------+----------------------+"
   printf "  | %s | %s | %s | %s | %s |\n" \
     "$(center_text "Period" 10)" \
     "$(center_text "Swaps" 16)" \
-    "$(center_text "Volume USD" 12)" \
+    "$(center_text "Volume USD" 16)" \
     "$(center_text "Fees USD" 12)" \
-    "$(center_text "Avg Vol/Day" 18)"
-  echo "  +------------+------------------+--------------+--------------+--------------------+"
-  printf "  | %s | %16s | %12s | %12s | %18s |\n" "$(center_text "1d" 10)" "${a24_swaps_fmt}" "${a24_volume_usd}" "${a24_fees_usd}" "${a24_avg_day_usd}"
-  printf "  | %s | %16s | %12s | %12s | %18s |\n" "$(center_text "7d" 10)" "${a7_swaps_fmt}" "${a7_volume_usd}" "${a7_fees_usd}" "${a7_avg_day_usd}"
-  printf "  | %s | %16s | %12s | %12s | %18s |\n" "$(center_text "30d" 10)" "${a30_swaps_fmt}" "${a30_volume_usd}" "${a30_fees_usd}" "${a30_avg_day_usd}"
-  printf "  | %s | %16s | %12s | %12s | %18s |\n" "$(center_text "90d" 10)" "${a90_swaps_fmt}" "${a90_volume_usd}" "${a90_fees_usd}" "${a90_avg_day_usd}"
-  printf "  | %s | %16s | %12s | %12s | %18s |\n" "$(center_text "180d" 10)" "${a180_swaps_fmt}" "${a180_volume_usd}" "${a180_fees_usd}" "${a180_avg_day_usd}"
-  printf "  | %s | %16s | %12s | %12s | %18s |\n" "$(center_text "365d" 10)" "${a365_swaps_fmt}" "${a365_volume_usd}" "${a365_fees_usd}" "${a365_avg_day_usd}"
-  echo "  +------------+------------------+--------------+--------------+--------------------+"
-  printf "  | %s | %16s | %12s | %12s | %18s |\n" "$(center_text "Lifetime" 10)" "${activity_swaps_fmt}" "${activity_volume_usd}" "${activity_fees_usd}" "${activity_avg_day_usd}"
-  echo "  +------------+------------------+--------------+--------------+--------------------+"
+    "$(center_text "Avg Vol/Day" 20)"
+  echo "  +------------+------------------+------------------+--------------+----------------------+"
+  printf "  | %s | %16s | %16s | %12s | %20s |\n" "$(center_text "1d" 10)" "${a24_swaps_fmt}" "${a24_volume_usd}" "${a24_fees_usd}" "${a24_avg_day_usd}"
+  printf "  | %s | %16s | %16s | %12s | %20s |\n" "$(center_text "7d" 10)" "${a7_swaps_fmt}" "${a7_volume_usd}" "${a7_fees_usd}" "${a7_avg_day_usd}"
+  printf "  | %s | %16s | %16s | %12s | %20s |\n" "$(center_text "30d" 10)" "${a30_swaps_fmt}" "${a30_volume_usd}" "${a30_fees_usd}" "${a30_avg_day_usd}"
+  printf "  | %s | %16s | %16s | %12s | %20s |\n" "$(center_text "90d" 10)" "${a90_swaps_fmt}" "${a90_volume_usd}" "${a90_fees_usd}" "${a90_avg_day_usd}"
+  printf "  | %s | %16s | %16s | %12s | %20s |\n" "$(center_text "180d" 10)" "${a180_swaps_fmt}" "${a180_volume_usd}" "${a180_fees_usd}" "${a180_avg_day_usd}"
+  printf "  | %s | %16s | %16s | %12s | %20s |\n" "$(center_text "365d" 10)" "${a365_swaps_fmt}" "${a365_volume_usd}" "${a365_fees_usd}" "${a365_avg_day_usd}"
+  echo "  +------------+------------------+------------------+--------------+----------------------+"
+  printf "  | %s | %16s | %16s | %12s | %20s |\n" "$(center_text "Lifetime" 10)" "${activity_swaps_fmt}" "${activity_volume_usd}" "${activity_fees_usd}" "${activity_avg_day_usd}"
+  echo "  +------------+------------------+------------------+--------------+----------------------+"
   if [[ "${activity_status}" != "OK" ]]; then
     echo "  status: ${activity_status}"
   fi
   echo
   echo "Fee Levels:"
-  echo "  +------------+------------------+--------------+--------------+--------------------+"
-  printf "  | %s | %s | %s | %s | %s |\n" "$(center_text "Level" 10)" "$(center_text "Swaps" 16)" "$(center_text "Volume USD" 12)" "$(center_text "Fees USD" 12)" "$(center_text "Fees/Swap" 18)"
-  echo "  +------------+------------------+--------------+--------------+--------------------+"
+  echo "  +------------+------------------+------------------+--------------+----------------------+"
+  printf "  | %s | %s | %s | %s | %s |\n" "$(center_text "Level" 10)" "$(center_text "Swaps" 16)" "$(center_text "Volume USD" 16)" "$(center_text "Fees USD" 12)" "$(center_text "Fees/Swap" 20)"
+  echo "  +------------+------------------+------------------+--------------+----------------------+"
   fee_printed_count=0
   can_filter_levels=0
   if [[ "${floor_idx}" =~ ^[0-9]+$ && "${cap_idx}" =~ ^[0-9]+$ ]]; then
@@ -2482,7 +2482,7 @@ render_dashboard_once() {
     tier_fees_usd="$(usd6_to_dollar_2dp "${tier_fees}")"
     tier_fee_per_swap_usd="$(fees_usd6_per_swap_2dp "${tier_fees}" "${tier_swaps}")"
     tier_fee_label="${tier_pct}"
-    printf "  | %s | %16s | %12s | %12s | %18s |\n" "$(center_text "${tier_fee_label}" 10)" "${tier_swaps_fmt}" "${tier_volume_usd}" "${tier_fees_usd}" "${tier_fee_per_swap_usd}"
+    printf "  | %s | %16s | %16s | %12s | %20s |\n" "$(center_text "${tier_fee_label}" 10)" "${tier_swaps_fmt}" "${tier_volume_usd}" "${tier_fees_usd}" "${tier_fee_per_swap_usd}"
     fee_printed_count=$((fee_printed_count + 1))
   done
   if (( fee_printed_count == 0 )); then
@@ -2516,29 +2516,29 @@ render_dashboard_once() {
       tier_fees_usd="$(usd6_to_dollar_2dp "${tier_fees}")"
       tier_fee_per_swap_usd="$(fees_usd6_per_swap_2dp "${tier_fees}" "${tier_swaps}")"
       tier_fee_label="${tier_pct}"
-      printf "  | %s | %16s | %12s | %12s | %18s |\n" "$(center_text "${tier_fee_label}" 10)" "${tier_swaps_fmt}" "${tier_volume_usd}" "${tier_fees_usd}" "${tier_fee_per_swap_usd}"
+      printf "  | %s | %16s | %16s | %12s | %20s |\n" "$(center_text "${tier_fee_label}" 10)" "${tier_swaps_fmt}" "${tier_volume_usd}" "${tier_fees_usd}" "${tier_fee_per_swap_usd}"
       fee_printed_count=$((fee_printed_count + 1))
     done < <(printf '%s\n' "${activity_fee_lines}")
   fi
   if (( fee_printed_count == 0 )); then
-    printf "  | %s | %16s | %12s | %12s | %18s |\n" "$(center_text "-" 10)" "-" "-" "-" "-"
+    printf "  | %s | %16s | %16s | %12s | %20s |\n" "$(center_text "-" 10)" "-" "-" "-" "-"
     if (( can_filter_levels == 0 )); then
       echo "  (waiting hook params: floor/cap unavailable)"
     else
       echo "  (no configured levels found)"
     fi
   fi
-  echo "  +------------+------------------+--------------+--------------+--------------------+"
+  echo "  +------------+------------------+------------------+--------------+----------------------+"
   echo
   echo "Activity (Last Hour):"
-  echo "  +------------+------------------+--------------+--------------+--------------------+"
+  echo "  +------------+------------------+------------------+--------------+----------------------+"
   printf "  | %s | %s | %s | %s | %s |\n" \
     "$(center_text "Time (UTC)" 10)" \
     "$(center_text "Level Change" 16)" \
-    "$(center_text "EMA" 12)" \
+    "$(center_text "EMA" 16)" \
     "$(center_text "Volume" 12)" \
-    "$(center_text "Reason" 18)"
-  echo "  +------------+------------------+--------------+--------------+--------------------+"
+    "$(center_text "Reason" 20)"
+  echo "  +------------+------------------+------------------+--------------+----------------------+"
   activity_rows_target=12
   if [[ "${period_seconds}" =~ ^[0-9]+$ ]] && (( period_seconds > 0 )); then
     period_estimate=$((3600 / period_seconds + 4))
@@ -2609,9 +2609,9 @@ render_dashboard_once() {
     fi
     lh_time_cell="$(center_text "${lh_time}" 10)"
     lh_change_cell="$(center_text "${lh_change}" 16)"
-    lh_ema_cell="$(printf '%12s' "${lh_ema}")"
+    lh_ema_cell="$(printf '%16s' "${lh_ema}")"
     lh_volume_cell="$(printf '%12s' "${lh_volume}")"
-    lh_reason_cell="$(printf '%18s' "${lh_reason_display}")"
+    lh_reason_cell="$(printf '%20s' "${lh_reason_display}")"
     printf "  | %s | %s | %s | %s | %s |\n" \
       "${lh_time_cell}" \
       "${lh_change_cell}" \
@@ -2624,14 +2624,14 @@ render_dashboard_once() {
     fi
   done < <(printf '%s\n' "${activity_stream_lines}")
   if (( lh_change_count == 0 )); then
-    printf "  | %s | %s | %12s | %12s | %18s |\n" \
+    printf "  | %s | %s | %16s | %12s | %20s |\n" \
       "$(center_text "-" 10)" \
       "$(center_text "-" 16)" \
       "-" \
       "-" \
       "-"
   fi
-  echo "  +------------+------------------+--------------+--------------+--------------------+"
+  echo "  +------------+------------------+------------------+--------------+----------------------+"
   lh_status="$(inline_value "${last_hour_status_line}" "status")"
   if [[ -n "${lh_status}" && "${lh_status}" != "OK" ]]; then
     echo "  status: ${lh_status}"
