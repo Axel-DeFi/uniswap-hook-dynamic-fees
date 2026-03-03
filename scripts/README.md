@@ -41,7 +41,7 @@ Secrets should live in `./.env` (repo root). Typical variables:
 - `INITIAL_FEE_IDX`, `FLOOR_IDX`, `CAP_IDX` — dynamic LP fee tier bounds
 - `PAUSE_FEE_IDX` — fee tier used while paused
 - `CREATOR_FEE_PERCENT` — creator fee share in percent (for example `10` = 10%)
-- `CREATOR_FEE_RECIPIENT` — optional payout recipient for creator fees (defaults to `GUARDIAN`)
+- `CREATOR_FEE_ADDRESS` — optional payout recipient for creator fees (defaults to `GUARDIAN`)
 
 ## Unified test runner
 

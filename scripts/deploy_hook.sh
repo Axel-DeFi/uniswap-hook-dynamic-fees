@@ -19,7 +19,7 @@ set -euo pipefail
 #   PERIOD_SECONDS, EMA_PERIODS, DEADBAND_BPS, LULL_RESET_SECONDS
 #   PAUSE_FEE_IDX, CREATOR_FEE_PERCENT
 # Optional:
-#   CREATOR_FEE_RECIPIENT (defaults to GUARDIAN)
+#   CREATOR_FEE_ADDRESS (defaults to GUARDIAN)
 #
 # Guardian behavior:
 #   - If GUARDIAN is empty after sourcing config + .env, it defaults to the deployer address.
@@ -140,11 +140,11 @@ if [[ -z "${GUARDIAN:-}" ]]; then
   echo "==> GUARDIAN not set; defaulting to deployer: ${GUARDIAN}"
 fi
 
-# Default creator fee recipient to guardian if empty.
-if [[ -z "${CREATOR_FEE_RECIPIENT:-}" ]]; then
-  CREATOR_FEE_RECIPIENT="${GUARDIAN}"
-  export CREATOR_FEE_RECIPIENT
-  echo "==> CREATOR_FEE_RECIPIENT not set; defaulting to GUARDIAN: ${CREATOR_FEE_RECIPIENT}"
+# Default creator fee address to guardian if empty.
+if [[ -z "${CREATOR_FEE_ADDRESS:-}" ]]; then
+  CREATOR_FEE_ADDRESS="${GUARDIAN}"
+  export CREATOR_FEE_ADDRESS
+  echo "==> CREATOR_FEE_ADDRESS not set; defaulting to GUARDIAN: ${CREATOR_FEE_ADDRESS}"
 fi
 
 # Optional safety: enforce contract-based guardian (e.g. multisig) in strict mode.

@@ -93,7 +93,7 @@ abstract contract VolumeDynamicFeeHookInvariantBase is StdInvariant, Test {
     uint8 internal constant CAP_IDX = 6;
     uint8 internal constant PAUSE_FEE_IDX = 3;
     uint16 internal constant CREATOR_FEE_BPS = 1000;
-    address internal constant CREATOR_FEE_RECIPIENT = address(0x000000000000000000000000000000000000c0Fe);
+    address internal constant CREATOR_FEE_ADDRESS = address(0x000000000000000000000000000000000000c0Fe);
 
     uint32 internal constant PERIOD_SECONDS = 300; // fixed by requirement
     uint8 internal constant EMA_PERIODS = 8;
@@ -138,7 +138,7 @@ abstract contract VolumeDynamicFeeHookInvariantBase is StdInvariant, Test {
             address(handler),
             PAUSE_FEE_IDX,
             CREATOR_FEE_BPS,
-            CREATOR_FEE_RECIPIENT
+            CREATOR_FEE_ADDRESS
         );
 
         (address mined, bytes32 salt) =
@@ -161,7 +161,7 @@ abstract contract VolumeDynamicFeeHookInvariantBase is StdInvariant, Test {
             address(handler),
             PAUSE_FEE_IDX,
             CREATOR_FEE_BPS,
-            CREATOR_FEE_RECIPIENT
+            CREATOR_FEE_ADDRESS
         );
 
         assertEq(address(hook), mined, "hook address mismatch");

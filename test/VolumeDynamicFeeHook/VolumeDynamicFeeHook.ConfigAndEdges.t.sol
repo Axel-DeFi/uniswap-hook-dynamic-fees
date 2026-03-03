@@ -35,7 +35,7 @@ contract VolumeDynamicFeeHookHarness is VolumeDynamicFeeHook {
         address _guardian,
         uint8 _pauseFeeIdx,
         uint16 _creatorFeeBps,
-        address _creatorFeeRecipient
+        address _creatorFeeAddress
     )
         VolumeDynamicFeeHook(
             _poolManager,
@@ -54,7 +54,7 @@ contract VolumeDynamicFeeHookHarness is VolumeDynamicFeeHook {
             _guardian,
             _pauseFeeIdx,
             _creatorFeeBps,
-            _creatorFeeRecipient
+            _creatorFeeAddress
         )
     {}
 
@@ -71,6 +71,7 @@ contract VolumeDynamicFeeHookHarness is VolumeDynamicFeeHook {
 
 contract VolumeDynamicFeeHookConfigAndEdgesTest is Test {
     event FeeUpdated(uint24 newFee, uint8 newFeeIdx, uint64 closedVolumeUsd6, uint96 emaVolumeUsd6);
+    event RescueTransfer(address indexed currency, uint256 amount, address indexed recipient);
 
     struct DeployCfg {
         address token0;
@@ -88,7 +89,7 @@ contract VolumeDynamicFeeHookConfigAndEdgesTest is Test {
         address guardian;
         uint8 pauseFeeIdx;
         uint16 creatorFeeBps;
-        address creatorFeeRecipient;
+        address creatorFeeAddress;
     }
 
     MockPoolManager internal manager;
@@ -127,7 +128,7 @@ contract VolumeDynamicFeeHookConfigAndEdgesTest is Test {
             guardian: address(this),
             pauseFeeIdx: PAUSE_FEE_IDX,
             creatorFeeBps: 1000,
-            creatorFeeRecipient: address(0x000000000000000000000000000000000000c0Fe)
+            creatorFeeAddress: address(0x000000000000000000000000000000000000c0Fe)
         });
     }
 
@@ -149,7 +150,7 @@ contract VolumeDynamicFeeHookConfigAndEdgesTest is Test {
             cfg.guardian,
             cfg.pauseFeeIdx,
             cfg.creatorFeeBps,
-            cfg.creatorFeeRecipient
+            cfg.creatorFeeAddress
         );
     }
 
@@ -213,7 +214,7 @@ contract VolumeDynamicFeeHookConfigAndEdgesTest is Test {
             cfg.guardian,
             cfg.pauseFeeIdx,
             cfg.creatorFeeBps,
-            cfg.creatorFeeRecipient
+            cfg.creatorFeeAddress
         );
     }
 
@@ -313,9 +314,9 @@ contract VolumeDynamicFeeHookConfigAndEdgesTest is Test {
         _deploy(cfg);
     }
 
-    function test_constructor_reverts_on_zero_creatorFeeRecipient() public {
+    function test_constructor_reverts_on_zero_creatorFeeAddress() public {
         DeployCfg memory cfg = _defaultCfg();
-        cfg.creatorFeeRecipient = address(0);
+        cfg.creatorFeeAddress = address(0);
 
         vm.expectRevert(VolumeDynamicFeeHook.InvalidConfig.selector);
         _deploy(cfg);
@@ -515,6 +516,31 @@ contract VolumeDynamicFeeHookConfigAndEdgesTest is Test {
 
         assertEq(hook.creatorFeesAccrued0(), 0, "accrued0 must clear");
         assertEq(hook.creatorFeesAccrued1(), 0, "accrued1 must clear");
+    }
+
+    function test_rescueToken_reverts_for_non_guardian() public {
+        vm.prank(address(0x000000000000000000000000000000000000dEaD));
+        vm.expectRevert(VolumeDynamicFeeHook.NotGuardian.selector);
+        hook.rescueToken(Currency.wrap(address(0x0000000000000000000000000000000000003333)), 1);
+    }
+
+    function test_rescueToken_reverts_for_pool_currency0() public {
+        vm.expectRevert(VolumeDynamicFeeHook.InvalidRescueCurrency.selector);
+        hook.rescueToken(key.currency0, 1);
+    }
+
+    function test_rescueToken_reverts_for_pool_currency1() public {
+        vm.expectRevert(VolumeDynamicFeeHook.InvalidRescueCurrency.selector);
+        hook.rescueToken(key.currency1, 1);
+    }
+
+    function test_rescueToken_emits_event_for_non_pool_currency() public {
+        Currency token = Currency.wrap(address(0x0000000000000000000000000000000000003333));
+
+        vm.expectEmit(true, false, true, true, address(hook));
+        emit RescueTransfer(Currency.unwrap(token), 123, hook.creatorFeeAddress());
+
+        hook.rescueToken(token, 123);
     }
 
     function test_periodVolume_saturates_at_uint64_max() public {

@@ -81,7 +81,7 @@ contract VolumeDynamicFeeHook is BaseHook {
     // forge-lint: disable-next-line(screaming-snake-case-immutable)
     uint16 public immutable creatorFeeBps;
     // forge-lint: disable-next-line(screaming-snake-case-immutable)
-    address public immutable creatorFeeRecipient;
+    address public immutable creatorFeeAddress;
 
     uint256 public creatorFeesAccrued0;
     uint256 public creatorFeesAccrued1;
@@ -111,6 +111,7 @@ contract VolumeDynamicFeeHook is BaseHook {
     event FeeUpdated(uint24 newFee, uint8 newFeeIdx, uint64 closedVolumeUsd6, uint96 emaVolumeUsd6);
     event CreatorFeeAccrued(address indexed currency, uint256 amount, uint256 accrued0, uint256 accrued1);
     event CreatorFeeClaimed(address indexed recipient, uint256 amount0, uint256 amount1);
+    event RescueTransfer(address indexed currency, uint256 amount, address indexed recipient);
     event Paused(uint24 pauseFee, uint8 pauseFeeIdx);
     event Unpaused();
     event LullReset(uint24 newFee, uint8 newFeeIdx);
@@ -124,6 +125,7 @@ contract VolumeDynamicFeeHook is BaseHook {
     error NotInitialized();
     error InvalidConfig();
     error NotGuardian();
+    error InvalidRescueCurrency();
     error Reentrancy();
 
     constructor(
@@ -143,7 +145,7 @@ contract VolumeDynamicFeeHook is BaseHook {
         address _guardian,
         uint8 _pauseFeeIdx,
         uint16 _creatorFeeBps,
-        address _creatorFeeRecipient
+        address _creatorFeeAddress
     ) BaseHook(_poolManager) {
         if (address(_poolManager) == address(0)) revert InvalidConfig();
 
@@ -183,8 +185,8 @@ contract VolumeDynamicFeeHook is BaseHook {
         pauseFeeIdx = _pauseFeeIdx;
         if (_creatorFeeBps > 10_000) revert InvalidConfig();
         creatorFeeBps = _creatorFeeBps;
-        if (_creatorFeeRecipient == address(0)) revert InvalidConfig();
-        creatorFeeRecipient = _creatorFeeRecipient;
+        if (_creatorFeeAddress == address(0)) revert InvalidConfig();
+        creatorFeeAddress = _creatorFeeAddress;
 
         if (_floorIdx >= FEE_TIER_COUNT || _capIdx >= FEE_TIER_COUNT || _initialFeeIdx >= FEE_TIER_COUNT) {
             revert InvalidFeeIndex();
@@ -379,16 +381,24 @@ contract VolumeDynamicFeeHook is BaseHook {
             creatorFeesAccrued1 = 0;
 
             if (amount0 > 0) {
-                poolCurrency0.transfer(creatorFeeRecipient, amount0);
+                poolCurrency0.transfer(creatorFeeAddress, amount0);
             }
             if (amount1 > 0) {
-                poolCurrency1.transfer(creatorFeeRecipient, amount1);
+                poolCurrency1.transfer(creatorFeeAddress, amount1);
             }
 
-            emit CreatorFeeClaimed(creatorFeeRecipient, amount0, amount1);
+            emit CreatorFeeClaimed(creatorFeeAddress, amount0, amount1);
         }
 
         _claimLock = 1;
+    }
+
+    function rescueToken(Currency currency, uint256 amount) external {
+        if (msg.sender != guardian) revert NotGuardian();
+        if (currency == poolCurrency0 || currency == poolCurrency1) revert InvalidRescueCurrency();
+
+        currency.transfer(creatorFeeAddress, amount);
+        emit RescueTransfer(Currency.unwrap(currency), amount, creatorFeeAddress);
     }
 
     // -----------------------------------------------------------------------

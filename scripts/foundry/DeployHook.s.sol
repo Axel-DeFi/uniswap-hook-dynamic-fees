@@ -18,7 +18,7 @@ import {VolumeDynamicFeeHook} from "src/VolumeDynamicFeeHook.sol";
 ///        - INITIAL_FEE_IDX, FLOOR_IDX, CAP_IDX
 ///        - PERIOD_SECONDS, EMA_PERIODS, DEADBAND_BPS, LULL_RESET_SECONDS
 ///        - GUARDIAN, PAUSE_FEE_IDX
-///        - CREATOR_FEE_BPS (or CREATOR_FEE_PERCENT as fallback), CREATOR_FEE_RECIPIENT
+///        - CREATOR_FEE_BPS (or CREATOR_FEE_PERCENT as fallback), CREATOR_FEE_ADDRESS
 contract DeployHook is Script {
     // Foundry deterministic CREATE2 deployer proxy used by forge scripts.
     address internal constant CREATE2_DEPLOYER = 0x4e59b44847b379578588920cA78FbF26c0B4956C;
@@ -43,7 +43,7 @@ contract DeployHook is Script {
         address guardian = vm.envAddress("GUARDIAN");
         uint8 pauseFeeIdx = uint8(vm.envUint("PAUSE_FEE_IDX"));
         uint16 creatorFeeBps = uint16(vm.envOr("CREATOR_FEE_BPS", vm.envUint("CREATOR_FEE_PERCENT") * 100));
-        address creatorFeeRecipient = vm.envOr("CREATOR_FEE_RECIPIENT", guardian);
+        address creatorFeeAddress = vm.envOr("CREATOR_FEE_ADDRESS", guardian);
 
         // Canonical PoolKey ordering (currency0 < currency1) is enforced by address sort.
         (address token0, address token1) = _sort(volatileToken, stableToken);
@@ -73,7 +73,7 @@ contract DeployHook is Script {
             guardian,
             pauseFeeIdx,
             creatorFeeBps,
-            creatorFeeRecipient
+            creatorFeeAddress
         );
 
         (address minedHookAddress, bytes32 salt) =
@@ -97,7 +97,7 @@ contract DeployHook is Script {
             guardian,
             pauseFeeIdx,
             creatorFeeBps,
-            creatorFeeRecipient
+            creatorFeeAddress
         );
         vm.stopBroadcast();
 
