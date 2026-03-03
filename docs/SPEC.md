@@ -19,7 +19,7 @@ This document is the single source of truth for the hook's design, configuration
 
 - Track a **USD proxy volume** per period from swap deltas:
   - For stable-paired pools, the stable side is treated as **USD** (assume 1 stable = $1).
-  - USD proxy volume is computed as: `volumeUSD6 += 2 * abs(stableAmount)` and normalized to **USD6** (1e6).
+  - USD proxy volume is computed as: `volumeUSD6 += abs(stableAmount)` and normalized to **USD6** (1e6).
 - Maintain an **EMA of volume** (emaVolumeUSD6) over a fixed number of periods.
 - At each period close, compare the closed volume to EMA and move the fee tier by **at most one step**.
 - Use a **deadband** (relative band) to prevent oscillation around the mean.
@@ -62,7 +62,7 @@ EMA update rule (Wilder-style smoothing):
 - This is intentionally different from the "classic EMA" form `alpha = 2 / (n + 1)`.
 
 Compute ratio-like score implicitly and apply:
-- **Dust close filter**: close volume `v` is treated as `0` when `v <= 2_000_000` (USD6 units in this hook, equivalent to `$1` under current `2 * abs(stableAmount)` accounting).
+- **Dust close filter**: close volume `v` is treated as `0` when `v <= 1_000_000` (USD6 units in this hook, equivalent to `$1` under `abs(stableAmount)` accounting).
 - **Deadband**: if `v` is within `± deadbandBps` of `ema`, keep the current fee tier.
 - Otherwise:
   - If `v` is meaningfully above EMA: **increase fee tier** by 1 step (up to cap).
@@ -119,8 +119,10 @@ This keeps updates efficient and minimizes SSTOREs.
 
 ## Events (no spam)
 
-No "period closed" event is emitted.
 Events are emitted only for meaningful transitions:
+- `PeriodClosed(...)` — emitted on each period close (including catch-up closes), with reason code and estimated LP fees for that close.
+  - `reasonCode = 9` is reserved strictly for deadband no-change (`ema > 0`, `v` inside band).
+  - `reasonCode = 10` is used for EMA bootstrap no-change (`ema == 0`, `v > 0`).
 - `FeeUpdated(...)` — only when fee tier changes (and also on init/pause-apply)
 - `Paused(...)`, `Unpaused()`
 - `LullReset(...)`

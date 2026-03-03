@@ -60,7 +60,7 @@ contract VolumeDynamicFeeHookHarness is VolumeDynamicFeeHook {
     function exposedComputeNextFeeIdx(uint8 feeIdx, uint8 lastDir, uint64 closeVol, uint96 emaVol)
         external
         view
-        returns (uint8 newFeeIdx, uint8 newLastDir, bool changed)
+        returns (uint8 newFeeIdx, uint8 newLastDir, bool changed, uint8 reasonCode)
     {
         return _computeNextFeeIdx(feeIdx, lastDir, closeVol, emaVol);
     }
@@ -68,6 +68,16 @@ contract VolumeDynamicFeeHookHarness is VolumeDynamicFeeHook {
 
 contract VolumeDynamicFeeHookConfigAndEdgesTest is Test {
     event FeeUpdated(uint24 newFee, uint8 newFeeIdx, uint64 closedVolumeUsd6, uint96 emaVolumeUsd6);
+    event PeriodClosed(
+        uint24 fromFee,
+        uint8 fromFeeIdx,
+        uint24 toFee,
+        uint8 toFeeIdx,
+        uint64 closedVolumeUsd6,
+        uint96 emaVolumeUsd6,
+        uint64 lpFeesUsd6,
+        uint8 reasonCode
+    );
 
     struct DeployCfg {
         address token0;
@@ -481,7 +491,7 @@ contract VolumeDynamicFeeHookConfigAndEdgesTest is Test {
         manager.callAfterSwap(h, k, _deltaA0(-1_000)); // 1.000 stable in 3 decimals
 
         (uint64 pv,,,,) = h.unpackedState();
-        assertEq(pv, 2_000_000); // 1e6 USD6 * 2
+        assertEq(pv, 1_000_000); // 1e6 USD6
     }
 
     function test_stableDecimals_gt_6_scales_down_to_usd6() public {
@@ -495,7 +505,7 @@ contract VolumeDynamicFeeHookConfigAndEdgesTest is Test {
         manager.callAfterSwap(h, k, _deltaA0(-1e18)); // 1.0 stable in 18 decimals
 
         (uint64 pv,,,,) = h.unpackedState();
-        assertEq(pv, 2_000_000); // 1e6 USD6 * 2
+        assertEq(pv, 1_000_000); // 1e6 USD6
     }
 
     function test_when_stable_is_currency1_volume_uses_amount1() public {
@@ -512,7 +522,7 @@ contract VolumeDynamicFeeHookConfigAndEdgesTest is Test {
 
         manager.callAfterSwap(h, k, _deltaA1(-1_000_000)); // amount1 is stable side
         (uint64 pvA1,,,,) = h.unpackedState();
-        assertEq(pvA1, 2_000_000);
+        assertEq(pvA1, 1_000_000);
     }
 
     function test_fee_reaches_cap_and_does_not_exceed() public {
@@ -538,17 +548,53 @@ contract VolumeDynamicFeeHookConfigAndEdgesTest is Test {
     }
 
     function test_computeNextFeeIdx_at_cap_clears_lastDir_when_no_step() public view {
-        (uint8 nf, uint8 nd, bool changed) = hook.exposedComputeNextFeeIdx(CAP_IDX, 0, 2_000_000, 1_000_000);
+        (uint8 nf, uint8 nd, bool changed,) = hook.exposedComputeNextFeeIdx(CAP_IDX, 0, 1_000_000, 1_000_000);
         assertEq(nf, CAP_IDX);
         assertEq(nd, 0);
         assertFalse(changed);
     }
 
     function test_computeNextFeeIdx_at_floor_clears_lastDir_when_no_step() public view {
-        (uint8 nf, uint8 nd, bool changed) = hook.exposedComputeNextFeeIdx(FLOOR_IDX, 0, 0, 1_000_000);
+        (uint8 nf, uint8 nd, bool changed,) = hook.exposedComputeNextFeeIdx(FLOOR_IDX, 0, 0, 1_000_000);
         assertEq(nf, FLOOR_IDX);
         assertEq(nd, 0);
         assertFalse(changed);
+    }
+
+    function test_reason_code_deadband_is_9() public view {
+        assertEq(hook.REASON_DEADBAND(), 9);
+    }
+
+    function test_reason_code_ema_bootstrap_is_10() public view {
+        assertEq(hook.REASON_EMA_BOOTSTRAP(), 10);
+    }
+
+    function test_period_close_emits_ema_bootstrap_reason_code_10() public {
+        manager.callAfterInitialize(hook, key);
+
+        manager.callAfterSwap(hook, key, _deltaA0(-2_000_000));
+        vm.warp(block.timestamp + PERIOD_SECONDS);
+
+        uint24 fee = hook.feeTiers(uint256(INITIAL_FEE_IDX));
+        vm.expectEmit(true, true, true, true, address(hook));
+        emit PeriodClosed(fee, INITIAL_FEE_IDX, fee, INITIAL_FEE_IDX, 2_000_000, 2_000_000, 5_000, 10);
+        manager.callAfterSwap(hook, key, _deltaZero());
+    }
+
+    function test_period_close_emits_deadband_reason_code_9() public {
+        manager.callAfterInitialize(hook, key);
+
+        manager.callAfterSwap(hook, key, _deltaA0(-2_000_000));
+        vm.warp(block.timestamp + PERIOD_SECONDS);
+        manager.callAfterSwap(hook, key, _deltaZero()); // EMA bootstrap close
+
+        manager.callAfterSwap(hook, key, _deltaA0(-2_000_000));
+        vm.warp(block.timestamp + PERIOD_SECONDS);
+
+        uint24 fee = hook.feeTiers(uint256(INITIAL_FEE_IDX));
+        vm.expectEmit(true, true, true, true, address(hook));
+        emit PeriodClosed(fee, INITIAL_FEE_IDX, fee, INITIAL_FEE_IDX, 2_000_000, 2_000_000, 5_000, 9);
+        manager.callAfterSwap(hook, key, _deltaZero());
     }
 
     function test_period_close_commits_state_before_fee_update_call() public {
@@ -584,7 +630,7 @@ contract VolumeDynamicFeeHookConfigAndEdgesTest is Test {
     function test_dust_close_volume_leq_one_usd_is_treated_as_zero() public {
         manager.callAfterInitialize(hook, key);
 
-        // 1.000000 stable in 6 decimals -> closeVol = 2_000_000 (dust threshold).
+        // 1.000000 stable in 6 decimals -> closeVol = 1_000_000 (dust threshold).
         manager.callAfterSwap(hook, key, _deltaA0(-1_000_000));
         vm.warp(block.timestamp + PERIOD_SECONDS);
 
@@ -602,7 +648,7 @@ contract VolumeDynamicFeeHookConfigAndEdgesTest is Test {
     function test_close_volume_above_one_usd_is_not_treated_as_zero() public {
         manager.callAfterInitialize(hook, key);
 
-        // 1.000001 stable in 6 decimals -> closeVol = 2_000_002 (> dust threshold).
+        // 1.000001 stable in 6 decimals -> closeVol = 1_000_001 (> dust threshold).
         manager.callAfterSwap(hook, key, _deltaA0(-1_000_001));
         vm.warp(block.timestamp + PERIOD_SECONDS);
         manager.callAfterSwap(hook, key, _deltaZero());
@@ -610,7 +656,7 @@ contract VolumeDynamicFeeHookConfigAndEdgesTest is Test {
         (uint64 pv, uint96 ema,, uint8 idxAfter, uint8 dirAfter) = hook.unpackedState();
         assertEq(idxAfter, INITIAL_FEE_IDX);
         assertEq(dirAfter, 0);
-        assertEq(ema, 2_000_002);
+        assertEq(ema, 1_000_001);
         assertEq(pv, 0);
     }
 

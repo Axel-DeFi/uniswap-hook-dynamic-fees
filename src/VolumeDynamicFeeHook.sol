@@ -11,6 +11,15 @@ import {SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {Hooks} from "@uniswap/v4-core/src/libraries/Hooks.sol";
 import {LPFeeLibrary} from "@uniswap/v4-core/src/libraries/LPFeeLibrary.sol";
 
+/**
+ * @dev VolumeDynamicFeeHook
+ *      Adaptive LP-fee hook for a single Uniswap v4 pool.
+ *      It tracks stable-side swap volume (USD6), updates an EMA on period close,
+ *      and shifts fee tiers by regime with deadband/reversal safeguards.
+ *
+ *      Repository: https://github.com/Axel-DeFi/uniswap-hook-dynamic-fees
+ *      (includes source code, documentation, and audit materials)
+ */
 /// @title VolumeDynamicFeeHook
 /// @notice Single-pool Uniswap v4 hook that updates dynamic LP fees using stable-coin volume heuristics.
 contract VolumeDynamicFeeHook is BaseHook {
@@ -90,11 +99,23 @@ contract VolumeDynamicFeeHook is BaseHook {
     uint8 private constant DIR_UP = 1;
     uint8 private constant DIR_DOWN = 2;
 
+    // Period-close reason codes (for PeriodClosed event).
+    uint8 public constant REASON_FEE_UP = 1;
+    uint8 public constant REASON_FEE_DOWN = 2;
+    uint8 public constant REASON_REVERSAL_LOCK = 3;
+    uint8 public constant REASON_CAP = 4;
+    uint8 public constant REASON_FLOOR = 5;
+    uint8 public constant REASON_ZERO_EMA_DECAY = 6;
+    uint8 public constant REASON_NO_SWAPS = 7;
+    uint8 public constant REASON_LULL_RESET = 8;
+    uint8 public constant REASON_DEADBAND = 9;
+    uint8 public constant REASON_EMA_BOOTSTRAP = 10;
+
     uint16 private constant MAX_LULL_PERIODS = 24;
     uint8 private constant MAX_EMA_PERIODS = 64;
-    // closeVol is tracked as 2 * abs(stableAmount) in USD6.
-    // 2_000_000 equals $1 of period-close volume in current units.
-    uint64 private constant DUST_CLOSE_VOL_USD6 = 2_000_000;
+    // closeVol is tracked as abs(stableAmount) in USD6.
+    // 1_000_000 equals $1 of period-close volume.
+    uint64 private constant DUST_CLOSE_VOL_USD6 = 1_000_000;
 
     uint256 private constant PAUSED_BIT = 234;
 
@@ -102,6 +123,16 @@ contract VolumeDynamicFeeHook is BaseHook {
     // Events
     // -----------------------------------------------------------------------
     event FeeUpdated(uint24 newFee, uint8 newFeeIdx, uint64 closedVolumeUsd6, uint96 emaVolumeUsd6);
+    event PeriodClosed(
+        uint24 fromFee,
+        uint8 fromFeeIdx,
+        uint24 toFee,
+        uint8 toFeeIdx,
+        uint64 closedVolumeUsd6,
+        uint96 emaVolumeUsd6,
+        uint64 lpFeesUsd6,
+        uint8 reasonCode
+    );
     event Paused(uint24 pauseFee, uint8 pauseFeeIdx);
     event Unpaused();
     event LullReset(uint24 newFee, uint8 newFeeIdx);
@@ -274,6 +305,16 @@ contract VolumeDynamicFeeHook is BaseHook {
                 emit FeeUpdated(_feeTier(feeIdx), feeIdx, 0, 0);
             }
 
+            emit PeriodClosed(
+                _feeTier(oldFeeIdx),
+                oldFeeIdx,
+                _feeTier(feeIdx),
+                feeIdx,
+                0,
+                0,
+                0,
+                REASON_LULL_RESET
+            );
             emit LullReset(_feeTier(feeIdx), feeIdx);
             return (IHooks.afterSwap.selector, 0);
         }
@@ -293,15 +334,32 @@ contract VolumeDynamicFeeHook is BaseHook {
                 uint64 vRaw = (i == 0) ? closeVol0 : uint64(0);
                 uint64 vEff = vRaw <= DUST_CLOSE_VOL_USD6 ? uint64(0) : vRaw;
 
+                uint96 emaBefore = ema;
                 ema = _updateEma(ema, vEff);
 
-                (uint8 nf, uint8 nd, bool changed) = _computeNextFeeIdx(f, d, vEff, ema);
+                uint8 fromFeeIdx = f;
+                uint24 fromFee = _feeTier(fromFeeIdx);
+                (uint8 nf, uint8 nd, bool changed, uint8 reasonCode) = _computeNextFeeIdx(f, d, vEff, ema);
                 if (changed) {
                     f = nf;
                     d = nd;
                 } else {
                     d = DIR_NONE;
                 }
+                if (reasonCode == REASON_DEADBAND && emaBefore == 0 && vEff > 0) {
+                    reasonCode = REASON_EMA_BOOTSTRAP;
+                }
+
+                emit PeriodClosed(
+                    fromFee,
+                    fromFeeIdx,
+                    _feeTier(f),
+                    f,
+                    vEff,
+                    ema,
+                    _estimateLpFeesUsd6(vEff, fromFee),
+                    reasonCode
+                );
             }
 
             emaVol = ema;
@@ -447,8 +505,8 @@ contract VolumeDynamicFeeHook is BaseHook {
 
         uint256 usd6 = _toUsd6(absStable);
 
-        // treat swap volume as 2 * stable-side abs delta (in + out)
-        uint256 add = usd6 << 1;
+        // treat swap volume as one-sided stable notional
+        uint256 add = usd6;
 
         uint256 sum = uint256(current) + add;
         if (sum > type(uint64).max) return type(uint64).max;
@@ -475,20 +533,31 @@ contract VolumeDynamicFeeHook is BaseHook {
         return uint96(updated);
     }
 
+    function _estimateLpFeesUsd6(uint64 closeVol, uint24 feeBips) internal pure returns (uint64) {
+        uint256 fees = (uint256(closeVol) * uint256(feeBips)) / 1_000_000;
+        if (fees > type(uint64).max) return type(uint64).max;
+        // forge-lint: disable-next-line(unsafe-typecast)
+        return uint64(fees);
+    }
+
     function _computeNextFeeIdx(uint8 feeIdx, uint8 lastDir, uint64 closeVol, uint96 emaVol)
         internal
         view
-        returns (uint8 newFeeIdx, uint8 newLastDir, bool changed)
+        returns (uint8 newFeeIdx, uint8 newLastDir, bool changed, uint8 reasonCode)
     {
         newFeeIdx = feeIdx;
         newLastDir = lastDir;
+        reasonCode = REASON_DEADBAND;
 
         if (emaVol == 0) {
             // Prevent fee stalling above floor in prolonged near-zero activity.
             if (closeVol == 0 && newFeeIdx > floorIdx) {
-                return (newFeeIdx - 1, DIR_NONE, true);
+                return (newFeeIdx - 1, DIR_NONE, true, REASON_ZERO_EMA_DECAY);
             }
-            return (newFeeIdx, DIR_NONE, false);
+            if (closeVol == 0) {
+                return (newFeeIdx, DIR_NONE, false, REASON_NO_SWAPS);
+            }
+            return (newFeeIdx, DIR_NONE, false, REASON_EMA_BOOTSTRAP);
         }
 
         uint256 emaU = uint256(emaVol);
@@ -502,7 +571,7 @@ contract VolumeDynamicFeeHook is BaseHook {
 
         // reversal lock: avoid immediate flip-flops across deadband
         if (dir != DIR_NONE && newLastDir != DIR_NONE && dir != newLastDir) {
-            return (newFeeIdx, DIR_NONE, false);
+            return (newFeeIdx, DIR_NONE, false, REASON_REVERSAL_LOCK);
         }
 
         if (dir == DIR_UP) {
@@ -510,19 +579,28 @@ contract VolumeDynamicFeeHook is BaseHook {
                 newFeeIdx = newFeeIdx + 1;
                 changed = true;
                 newLastDir = DIR_UP;
+                reasonCode = REASON_FEE_UP;
             } else {
                 newLastDir = DIR_NONE;
+                reasonCode = REASON_CAP;
             }
         } else if (dir == DIR_DOWN) {
             if (newFeeIdx > floorIdx) {
                 newFeeIdx = newFeeIdx - 1;
                 changed = true;
                 newLastDir = DIR_DOWN;
+                reasonCode = REASON_FEE_DOWN;
             } else {
                 newLastDir = DIR_NONE;
+                reasonCode = REASON_FLOOR;
             }
         } else {
             newLastDir = DIR_NONE;
+            if (closeVol == 0) {
+                reasonCode = REASON_NO_SWAPS;
+            } else {
+                reasonCode = REASON_DEADBAND;
+            }
         }
     }
 
