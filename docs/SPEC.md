@@ -119,8 +119,8 @@ This keeps updates efficient and minimizes SSTOREs.
 
 ## Events (no spam)
 
-No "period closed" event is emitted.
 Events are emitted only for meaningful transitions:
+- `PeriodClosed(...)` — emitted on each period close (including catch-up closes), with reason code and estimated LP fees for that close.
 - `FeeUpdated(...)` — only when fee tier changes (and also on init/pause-apply)
 - `Paused(...)`, `Unpaused()`
 - `LullReset(...)`

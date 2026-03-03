@@ -60,7 +60,7 @@ contract VolumeDynamicFeeHookHarness is VolumeDynamicFeeHook {
     function exposedComputeNextFeeIdx(uint8 feeIdx, uint8 lastDir, uint64 closeVol, uint96 emaVol)
         external
         view
-        returns (uint8 newFeeIdx, uint8 newLastDir, bool changed)
+        returns (uint8 newFeeIdx, uint8 newLastDir, bool changed, uint8 reasonCode)
     {
         return _computeNextFeeIdx(feeIdx, lastDir, closeVol, emaVol);
     }
@@ -68,6 +68,16 @@ contract VolumeDynamicFeeHookHarness is VolumeDynamicFeeHook {
 
 contract VolumeDynamicFeeHookConfigAndEdgesTest is Test {
     event FeeUpdated(uint24 newFee, uint8 newFeeIdx, uint64 closedVolumeUsd6, uint96 emaVolumeUsd6);
+    event PeriodClosed(
+        uint24 fromFee,
+        uint8 fromFeeIdx,
+        uint24 toFee,
+        uint8 toFeeIdx,
+        uint64 closedVolumeUsd6,
+        uint96 emaVolumeUsd6,
+        uint64 lpFeesUsd6,
+        uint8 reasonCode
+    );
 
     struct DeployCfg {
         address token0;
@@ -538,17 +548,33 @@ contract VolumeDynamicFeeHookConfigAndEdgesTest is Test {
     }
 
     function test_computeNextFeeIdx_at_cap_clears_lastDir_when_no_step() public view {
-        (uint8 nf, uint8 nd, bool changed) = hook.exposedComputeNextFeeIdx(CAP_IDX, 0, 1_000_000, 1_000_000);
+        (uint8 nf, uint8 nd, bool changed,) = hook.exposedComputeNextFeeIdx(CAP_IDX, 0, 1_000_000, 1_000_000);
         assertEq(nf, CAP_IDX);
         assertEq(nd, 0);
         assertFalse(changed);
     }
 
     function test_computeNextFeeIdx_at_floor_clears_lastDir_when_no_step() public view {
-        (uint8 nf, uint8 nd, bool changed) = hook.exposedComputeNextFeeIdx(FLOOR_IDX, 0, 0, 1_000_000);
+        (uint8 nf, uint8 nd, bool changed,) = hook.exposedComputeNextFeeIdx(FLOOR_IDX, 0, 0, 1_000_000);
         assertEq(nf, FLOOR_IDX);
         assertEq(nd, 0);
         assertFalse(changed);
+    }
+
+    function test_reason_code_deadband_is_9() public view {
+        assertEq(hook.REASON_DEADBAND(), 9);
+    }
+
+    function test_period_close_emits_deadband_reason_code_9() public {
+        manager.callAfterInitialize(hook, key);
+
+        manager.callAfterSwap(hook, key, _deltaA0(-2_000_000));
+        vm.warp(block.timestamp + PERIOD_SECONDS);
+
+        uint24 fee = hook.feeTiers(uint256(INITIAL_FEE_IDX));
+        vm.expectEmit(true, true, true, true, address(hook));
+        emit PeriodClosed(fee, INITIAL_FEE_IDX, fee, INITIAL_FEE_IDX, 2_000_000, 2_000_000, 5_000, 9);
+        manager.callAfterSwap(hook, key, _deltaZero());
     }
 
     function test_period_close_commits_state_before_fee_update_call() public {
