@@ -18,6 +18,8 @@ set -euo pipefail
 #   INITIAL_FEE_IDX, FLOOR_IDX, CAP_IDX
 #   PERIOD_SECONDS, EMA_PERIODS, DEADBAND_BPS, LULL_RESET_SECONDS
 #   PAUSE_FEE_IDX, CREATOR_FEE_PERCENT
+# Optional:
+#   CREATOR_FEE_RECIPIENT (defaults to GUARDIAN)
 #
 # Guardian behavior:
 #   - If GUARDIAN is empty after sourcing config + .env, it defaults to the deployer address.
@@ -136,6 +138,13 @@ if [[ -z "${GUARDIAN:-}" ]]; then
   GUARDIAN="$(cast wallet address --private-key "${PRIVATE_KEY}" | awk '{print $1}')"
   export GUARDIAN
   echo "==> GUARDIAN not set; defaulting to deployer: ${GUARDIAN}"
+fi
+
+# Default creator fee recipient to guardian if empty.
+if [[ -z "${CREATOR_FEE_RECIPIENT:-}" ]]; then
+  CREATOR_FEE_RECIPIENT="${GUARDIAN}"
+  export CREATOR_FEE_RECIPIENT
+  echo "==> CREATOR_FEE_RECIPIENT not set; defaulting to GUARDIAN: ${CREATOR_FEE_RECIPIENT}"
 fi
 
 # Optional safety: enforce contract-based guardian (e.g. multisig) in strict mode.

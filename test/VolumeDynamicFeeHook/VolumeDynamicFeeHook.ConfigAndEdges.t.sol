@@ -9,6 +9,7 @@ import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {BalanceDelta, toBalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
+import {SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {Hooks} from "@uniswap/v4-core/src/libraries/Hooks.sol";
 import {LPFeeLibrary} from "@uniswap/v4-core/src/libraries/LPFeeLibrary.sol";
 
@@ -33,7 +34,8 @@ contract VolumeDynamicFeeHookHarness is VolumeDynamicFeeHook {
         uint32 _lullResetSeconds,
         address _guardian,
         uint8 _pauseFeeIdx,
-        uint16 _creatorFeeBps
+        uint16 _creatorFeeBps,
+        address _creatorFeeRecipient
     )
         VolumeDynamicFeeHook(
             _poolManager,
@@ -51,7 +53,8 @@ contract VolumeDynamicFeeHookHarness is VolumeDynamicFeeHook {
             _lullResetSeconds,
             _guardian,
             _pauseFeeIdx,
-            _creatorFeeBps
+            _creatorFeeBps,
+            _creatorFeeRecipient
         )
     {}
 
@@ -85,6 +88,7 @@ contract VolumeDynamicFeeHookConfigAndEdgesTest is Test {
         address guardian;
         uint8 pauseFeeIdx;
         uint16 creatorFeeBps;
+        address creatorFeeRecipient;
     }
 
     MockPoolManager internal manager;
@@ -122,7 +126,8 @@ contract VolumeDynamicFeeHookConfigAndEdgesTest is Test {
             lullResetSeconds: LULL_RESET_SECONDS,
             guardian: address(this),
             pauseFeeIdx: PAUSE_FEE_IDX,
-            creatorFeeBps: 1000
+            creatorFeeBps: 1000,
+            creatorFeeRecipient: address(0x000000000000000000000000000000000000c0Fe)
         });
     }
 
@@ -143,7 +148,8 @@ contract VolumeDynamicFeeHookConfigAndEdgesTest is Test {
             cfg.lullResetSeconds,
             cfg.guardian,
             cfg.pauseFeeIdx,
-            cfg.creatorFeeBps
+            cfg.creatorFeeBps,
+            cfg.creatorFeeRecipient
         );
     }
 
@@ -206,7 +212,8 @@ contract VolumeDynamicFeeHookConfigAndEdgesTest is Test {
             cfg.lullResetSeconds,
             cfg.guardian,
             cfg.pauseFeeIdx,
-            cfg.creatorFeeBps
+            cfg.creatorFeeBps,
+            cfg.creatorFeeRecipient
         );
     }
 
@@ -306,6 +313,14 @@ contract VolumeDynamicFeeHookConfigAndEdgesTest is Test {
         _deploy(cfg);
     }
 
+    function test_constructor_reverts_on_zero_creatorFeeRecipient() public {
+        DeployCfg memory cfg = _defaultCfg();
+        cfg.creatorFeeRecipient = address(0);
+
+        vm.expectRevert(VolumeDynamicFeeHook.InvalidConfig.selector);
+        _deploy(cfg);
+    }
+
     function test_constructor_reverts_on_fee_idx_out_of_range() public {
         DeployCfg memory cfg = _defaultCfg();
         cfg.capIdx = 7;
@@ -357,7 +372,7 @@ contract VolumeDynamicFeeHookConfigAndEdgesTest is Test {
         hook.feeTiers(7);
     }
 
-    function test_permissions_are_exactly_afterInitialize_and_afterSwap() public view {
+    function test_permissions_are_exactly_afterInitialize_afterSwap_and_returnDelta() public view {
         Hooks.Permissions memory p = hook.getHookPermissions();
 
         assertFalse(p.beforeInitialize);
@@ -371,7 +386,7 @@ contract VolumeDynamicFeeHookConfigAndEdgesTest is Test {
         assertFalse(p.beforeDonate);
         assertFalse(p.afterDonate);
         assertFalse(p.beforeSwapReturnDelta);
-        assertFalse(p.afterSwapReturnDelta);
+        assertTrue(p.afterSwapReturnDelta);
         assertFalse(p.afterAddLiquidityReturnDelta);
         assertFalse(p.afterRemoveLiquidityReturnDelta);
     }
@@ -460,6 +475,46 @@ contract VolumeDynamicFeeHookConfigAndEdgesTest is Test {
         assertEq(ema, 0);
         assertEq(idx, PAUSE_FEE_IDX);
         assertEq(manager.updateCount(), updatesAfterPause);
+    }
+
+    function test_afterSwap_charges_creator_fee_and_tracks_accrual() public {
+        manager.callAfterInitialize(hook, key);
+
+        SwapParams memory params =
+            SwapParams({zeroForOne: true, amountSpecified: -1_000_000_000, sqrtPriceLimitX96: 0});
+        // unspecified token for zeroForOne exact-in is currency1
+        BalanceDelta delta = toBalanceDelta(-1_000_000_000, 500_000_000);
+
+        int128 hookDelta = manager.callAfterSwapWithParams(hook, key, params, delta);
+
+        assertEq(hookDelta, int128(50_000_000), "creator hook delta mismatch");
+        assertEq(
+            Currency.unwrap(manager.lastTakeCurrency()),
+            Currency.unwrap(key.currency1),
+            "take currency mismatch"
+        );
+        assertEq(manager.lastTakeTo(), address(hook), "take recipient mismatch");
+        assertEq(manager.lastTakeAmount(), 50_000_000, "take amount mismatch");
+        assertEq(hook.creatorFeesAccrued0(), 0, "unexpected accrued0");
+        assertEq(hook.creatorFeesAccrued1(), 50_000_000, "unexpected accrued1");
+    }
+
+    function test_claimCreatorFees_clears_accruals() public {
+        manager.callAfterInitialize(hook, key);
+
+        SwapParams memory params =
+            SwapParams({zeroForOne: true, amountSpecified: -1_000_000_000, sqrtPriceLimitX96: 0});
+        BalanceDelta delta = toBalanceDelta(-1_000_000_000, 500_000_000);
+        manager.callAfterSwapWithParams(hook, key, params, delta);
+
+        (uint256 a0Before, uint256 a1Before) = (hook.creatorFeesAccrued0(), hook.creatorFeesAccrued1());
+        assertEq(a0Before, 0, "unexpected accrued0 before claim");
+        assertEq(a1Before, 50_000_000, "unexpected accrued1 before claim");
+
+        hook.claimCreatorFees();
+
+        assertEq(hook.creatorFeesAccrued0(), 0, "accrued0 must clear");
+        assertEq(hook.creatorFeesAccrued1(), 0, "accrued1 must clear");
     }
 
     function test_periodVolume_saturates_at_uint64_max() public {

@@ -2,6 +2,7 @@
 pragma solidity ^0.8.26;
 
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
+import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 
@@ -19,6 +20,10 @@ contract MockPoolManager {
     uint256 public updateCount;
     uint256 public unlockCount;
     bool public skipUnlockCallback;
+    Currency public lastTakeCurrency;
+    address public lastTakeTo;
+    uint256 public lastTakeAmount;
+    uint256 public takeCount;
     uint64 public observedPeriodVolUsd6;
     uint96 public observedEmaVolUsd6;
     uint64 public observedPeriodStart;
@@ -48,6 +53,13 @@ contract MockPoolManager {
         skipUnlockCallback = v;
     }
 
+    function take(Currency currency, address to, uint256 amount) external {
+        lastTakeCurrency = currency;
+        lastTakeTo = to;
+        lastTakeAmount = amount;
+        takeCount += 1;
+    }
+
     function callAfterInitialize(VolumeDynamicFeeHook hook, PoolKey calldata key) external {
         hook.afterInitialize(address(0xBEEF), key, 0, 0);
     }
@@ -55,5 +67,14 @@ contract MockPoolManager {
     function callAfterSwap(VolumeDynamicFeeHook hook, PoolKey calldata key, BalanceDelta delta) external {
         SwapParams memory params = SwapParams({zeroForOne: true, amountSpecified: 0, sqrtPriceLimitX96: 0});
         hook.afterSwap(address(0xBEEF), key, params, delta, "");
+    }
+
+    function callAfterSwapWithParams(
+        VolumeDynamicFeeHook hook,
+        PoolKey calldata key,
+        SwapParams calldata params,
+        BalanceDelta delta
+    ) external returns (int128 hookDelta) {
+        (, hookDelta) = hook.afterSwap(address(0xBEEF), key, params, delta, "");
     }
 }

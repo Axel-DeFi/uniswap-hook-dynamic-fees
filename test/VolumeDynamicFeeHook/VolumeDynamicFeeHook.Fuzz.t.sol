@@ -34,6 +34,7 @@ contract VolumeDynamicFeeHookFuzzTest is Test {
     uint8 internal constant CAP_IDX = 6;
     uint8 internal constant PAUSE_FEE_IDX = 3;
     uint16 internal constant CREATOR_FEE_BPS = 1000;
+    address internal constant CREATOR_FEE_RECIPIENT = address(0x000000000000000000000000000000000000c0Fe);
 
     uint32 internal constant PERIOD_SECONDS = 300; // fixed by requirement
     uint8 internal constant EMA_PERIODS = 8;
@@ -62,7 +63,9 @@ contract VolumeDynamicFeeHookFuzzTest is Test {
     function _deployScenario(Currency c0, Currency c1, bool stableIsCurrency0, int24 tickSpacing) internal {
         Currency usd = stableIsCurrency0 ? c0 : c1;
 
-        uint160 flags = uint160(Hooks.AFTER_INITIALIZE_FLAG | Hooks.AFTER_SWAP_FLAG);
+        uint160 flags = uint160(
+            Hooks.AFTER_INITIALIZE_FLAG | Hooks.AFTER_SWAP_FLAG | Hooks.AFTER_SWAP_RETURNS_DELTA_FLAG
+        );
 
         bytes memory constructorArgs = abi.encode(
             IPoolManager(address(manager)),
@@ -80,7 +83,8 @@ contract VolumeDynamicFeeHookFuzzTest is Test {
             LULL_RESET_SECONDS,
             address(this),
             PAUSE_FEE_IDX,
-            CREATOR_FEE_BPS
+            CREATOR_FEE_BPS,
+            CREATOR_FEE_RECIPIENT
         );
 
         (address mined, bytes32 salt) =
@@ -102,7 +106,8 @@ contract VolumeDynamicFeeHookFuzzTest is Test {
             LULL_RESET_SECONDS,
             address(this),
             PAUSE_FEE_IDX,
-            CREATOR_FEE_BPS
+            CREATOR_FEE_BPS,
+            CREATOR_FEE_RECIPIENT
         );
 
         assertEq(address(hook), mined, "hook address mismatch");

@@ -80,6 +80,13 @@ contract VolumeDynamicFeeHook is BaseHook {
     uint8 public immutable pauseFeeIdx;
     // forge-lint: disable-next-line(screaming-snake-case-immutable)
     uint16 public immutable creatorFeeBps;
+    // forge-lint: disable-next-line(screaming-snake-case-immutable)
+    address public immutable creatorFeeRecipient;
+
+    uint256 public creatorFeesAccrued0;
+    uint256 public creatorFeesAccrued1;
+
+    uint256 private _claimLock = 1;
 
     // -----------------------------------------------------------------------
     // Packed state (ONE storage slot)
@@ -102,6 +109,8 @@ contract VolumeDynamicFeeHook is BaseHook {
     // Events
     // -----------------------------------------------------------------------
     event FeeUpdated(uint24 newFee, uint8 newFeeIdx, uint64 closedVolumeUsd6, uint96 emaVolumeUsd6);
+    event CreatorFeeAccrued(address indexed currency, uint256 amount, uint256 accrued0, uint256 accrued1);
+    event CreatorFeeClaimed(address indexed recipient, uint256 amount0, uint256 amount1);
     event Paused(uint24 pauseFee, uint8 pauseFeeIdx);
     event Unpaused();
     event LullReset(uint24 newFee, uint8 newFeeIdx);
@@ -115,6 +124,7 @@ contract VolumeDynamicFeeHook is BaseHook {
     error NotInitialized();
     error InvalidConfig();
     error NotGuardian();
+    error Reentrancy();
 
     constructor(
         IPoolManager _poolManager,
@@ -132,7 +142,8 @@ contract VolumeDynamicFeeHook is BaseHook {
         uint32 _lullResetSeconds,
         address _guardian,
         uint8 _pauseFeeIdx,
-        uint16 _creatorFeeBps
+        uint16 _creatorFeeBps,
+        address _creatorFeeRecipient
     ) BaseHook(_poolManager) {
         if (address(_poolManager) == address(0)) revert InvalidConfig();
 
@@ -172,6 +183,8 @@ contract VolumeDynamicFeeHook is BaseHook {
         pauseFeeIdx = _pauseFeeIdx;
         if (_creatorFeeBps > 10_000) revert InvalidConfig();
         creatorFeeBps = _creatorFeeBps;
+        if (_creatorFeeRecipient == address(0)) revert InvalidConfig();
+        creatorFeeRecipient = _creatorFeeRecipient;
 
         if (_floorIdx >= FEE_TIER_COUNT || _capIdx >= FEE_TIER_COUNT || _initialFeeIdx >= FEE_TIER_COUNT) {
             revert InvalidFeeIndex();
@@ -204,6 +217,7 @@ contract VolumeDynamicFeeHook is BaseHook {
     function getHookPermissions() public pure override returns (Hooks.Permissions memory perms) {
         perms.afterInitialize = true;
         perms.afterSwap = true;
+        perms.afterSwapReturnDelta = true;
     }
 
     // -----------------------------------------------------------------------
@@ -236,7 +250,7 @@ contract VolumeDynamicFeeHook is BaseHook {
     function _afterSwap(
         address,
         PoolKey calldata key,
-        SwapParams calldata,
+        SwapParams calldata params,
         BalanceDelta delta,
         bytes calldata
     ) internal override returns (bytes4, int128) {
@@ -244,7 +258,7 @@ contract VolumeDynamicFeeHook is BaseHook {
 
         if (isPaused()) {
             // Fee is applied immediately in pause()/unpause(); swaps while paused do not update state.
-            return (IHooks.afterSwap.selector, 0);
+            return (IHooks.afterSwap.selector, _collectCreatorFee(key, params, delta));
         }
 
         (uint64 periodVol, uint96 emaVol, uint64 periodStart, uint8 feeIdx, uint8 lastDir, bool paused_) =
@@ -275,7 +289,7 @@ contract VolumeDynamicFeeHook is BaseHook {
             }
 
             emit LullReset(_feeTier(feeIdx), feeIdx);
-            return (IHooks.afterSwap.selector, 0);
+            return (IHooks.afterSwap.selector, _collectCreatorFee(key, params, delta));
         }
 
         if (elapsed >= periodSeconds) {
@@ -321,7 +335,7 @@ contract VolumeDynamicFeeHook is BaseHook {
             poolManager.updateDynamicLPFee(key, _feeTier(feeIdx));
             emit FeeUpdated(_feeTier(feeIdx), feeIdx, closeVolForEvent, emaVol);
         }
-        return (IHooks.afterSwap.selector, 0);
+        return (IHooks.afterSwap.selector, _collectCreatorFee(key, params, delta));
     }
 
     // -----------------------------------------------------------------------
@@ -351,6 +365,30 @@ contract VolumeDynamicFeeHook is BaseHook {
     {
         (uint64 pv, uint96 ev, uint64 ps, uint8 fi, uint8 ld,) = _unpackState(_state);
         return (pv, ev, ps, fi, ld);
+    }
+
+    function claimCreatorFees() external returns (uint256 amount0, uint256 amount1) {
+        if (_claimLock != 1) revert Reentrancy();
+        _claimLock = 2;
+
+        amount0 = creatorFeesAccrued0;
+        amount1 = creatorFeesAccrued1;
+
+        if (amount0 > 0 || amount1 > 0) {
+            creatorFeesAccrued0 = 0;
+            creatorFeesAccrued1 = 0;
+
+            if (amount0 > 0) {
+                poolCurrency0.transfer(creatorFeeRecipient, amount0);
+            }
+            if (amount1 > 0) {
+                poolCurrency1.transfer(creatorFeeRecipient, amount1);
+            }
+
+            emit CreatorFeeClaimed(creatorFeeRecipient, amount0, amount1);
+        }
+
+        _claimLock = 1;
     }
 
     // -----------------------------------------------------------------------
@@ -524,6 +562,43 @@ contract VolumeDynamicFeeHook is BaseHook {
         } else {
             newLastDir = DIR_NONE;
         }
+    }
+
+    function _collectCreatorFee(PoolKey calldata key, SwapParams calldata params, BalanceDelta delta)
+        internal
+        returns (int128 creatorDelta)
+    {
+        if (creatorFeeBps == 0) return 0;
+        if (params.amountSpecified == 0) return 0;
+
+        // Hook delta in afterSwap is always in the unspecified token.
+        bool specifiedTokenIs0 = (params.amountSpecified < 0 == params.zeroForOne);
+        Currency feeCurrency = specifiedTokenIs0 ? key.currency1 : key.currency0;
+        int128 swapAmount = specifiedTokenIs0 ? delta.amount1() : delta.amount0();
+        if (swapAmount < 0) swapAmount = -swapAmount;
+        if (swapAmount == 0) return 0;
+
+        uint256 feeAmount = (uint256(uint128(swapAmount)) * uint256(creatorFeeBps)) / 10_000;
+        if (feeAmount == 0) return 0;
+
+        uint256 maxInt128 = uint256(uint128(type(int128).max));
+        if (feeAmount > maxInt128) feeAmount = maxInt128;
+
+        poolManager.take(feeCurrency, address(this), feeAmount);
+
+        if (feeCurrency == poolCurrency0) {
+            creatorFeesAccrued0 += feeAmount;
+        } else {
+            creatorFeesAccrued1 += feeAmount;
+        }
+
+        emit CreatorFeeAccrued(
+            Currency.unwrap(feeCurrency), feeAmount, creatorFeesAccrued0, creatorFeesAccrued1
+        );
+
+        // safe: bounded by int128 max above
+        // forge-lint: disable-next-line(unsafe-typecast)
+        creatorDelta = int128(uint128(feeAmount));
     }
 
     // -----------------------------------------------------------------------
