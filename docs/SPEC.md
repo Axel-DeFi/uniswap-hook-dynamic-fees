@@ -121,6 +121,8 @@ This keeps updates efficient and minimizes SSTOREs.
 
 Events are emitted only for meaningful transitions:
 - `PeriodClosed(...)` — emitted on each period close (including catch-up closes), with reason code and estimated LP fees for that close.
+  - `reasonCode = 9` is reserved strictly for deadband no-change (`ema > 0`, `v` inside band).
+  - `reasonCode = 10` is used for EMA bootstrap no-change (`ema == 0`, `v > 0`).
 - `FeeUpdated(...)` — only when fee tier changes (and also on init/pause-apply)
 - `Paused(...)`, `Unpaused()`
 - `LullReset(...)`

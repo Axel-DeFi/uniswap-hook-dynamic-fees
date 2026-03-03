@@ -11,6 +11,15 @@ import {SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {Hooks} from "@uniswap/v4-core/src/libraries/Hooks.sol";
 import {LPFeeLibrary} from "@uniswap/v4-core/src/libraries/LPFeeLibrary.sol";
 
+/**
+ * @dev VolumeDynamicFeeHook
+ *      Adaptive LP-fee hook for a single Uniswap v4 pool.
+ *      It tracks stable-side swap volume (USD6), updates an EMA on period close,
+ *      and shifts fee tiers by regime with deadband/reversal safeguards.
+ *
+ *      Repository: https://github.com/Axel-DeFi/uniswap-hook-dynamic-fees
+ *      (includes source code, documentation, and audit materials)
+ */
 /// @title VolumeDynamicFeeHook
 /// @notice Single-pool Uniswap v4 hook that updates dynamic LP fees using stable-coin volume heuristics.
 contract VolumeDynamicFeeHook is BaseHook {
@@ -100,6 +109,7 @@ contract VolumeDynamicFeeHook is BaseHook {
     uint8 public constant REASON_NO_SWAPS = 7;
     uint8 public constant REASON_LULL_RESET = 8;
     uint8 public constant REASON_DEADBAND = 9;
+    uint8 public constant REASON_EMA_BOOTSTRAP = 10;
 
     uint16 private constant MAX_LULL_PERIODS = 24;
     uint8 private constant MAX_EMA_PERIODS = 64;
@@ -324,6 +334,7 @@ contract VolumeDynamicFeeHook is BaseHook {
                 uint64 vRaw = (i == 0) ? closeVol0 : uint64(0);
                 uint64 vEff = vRaw <= DUST_CLOSE_VOL_USD6 ? uint64(0) : vRaw;
 
+                uint96 emaBefore = ema;
                 ema = _updateEma(ema, vEff);
 
                 uint8 fromFeeIdx = f;
@@ -334,6 +345,9 @@ contract VolumeDynamicFeeHook is BaseHook {
                     d = nd;
                 } else {
                     d = DIR_NONE;
+                }
+                if (reasonCode == REASON_DEADBAND && emaBefore == 0 && vEff > 0) {
+                    reasonCode = REASON_EMA_BOOTSTRAP;
                 }
 
                 emit PeriodClosed(
@@ -543,7 +557,7 @@ contract VolumeDynamicFeeHook is BaseHook {
             if (closeVol == 0) {
                 return (newFeeIdx, DIR_NONE, false, REASON_NO_SWAPS);
             }
-            return (newFeeIdx, DIR_NONE, false, REASON_DEADBAND);
+            return (newFeeIdx, DIR_NONE, false, REASON_EMA_BOOTSTRAP);
         }
 
         uint256 emaU = uint256(emaVol);

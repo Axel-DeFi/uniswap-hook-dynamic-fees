@@ -565,8 +565,28 @@ contract VolumeDynamicFeeHookConfigAndEdgesTest is Test {
         assertEq(hook.REASON_DEADBAND(), 9);
     }
 
+    function test_reason_code_ema_bootstrap_is_10() public view {
+        assertEq(hook.REASON_EMA_BOOTSTRAP(), 10);
+    }
+
+    function test_period_close_emits_ema_bootstrap_reason_code_10() public {
+        manager.callAfterInitialize(hook, key);
+
+        manager.callAfterSwap(hook, key, _deltaA0(-2_000_000));
+        vm.warp(block.timestamp + PERIOD_SECONDS);
+
+        uint24 fee = hook.feeTiers(uint256(INITIAL_FEE_IDX));
+        vm.expectEmit(true, true, true, true, address(hook));
+        emit PeriodClosed(fee, INITIAL_FEE_IDX, fee, INITIAL_FEE_IDX, 2_000_000, 2_000_000, 5_000, 10);
+        manager.callAfterSwap(hook, key, _deltaZero());
+    }
+
     function test_period_close_emits_deadband_reason_code_9() public {
         manager.callAfterInitialize(hook, key);
+
+        manager.callAfterSwap(hook, key, _deltaA0(-2_000_000));
+        vm.warp(block.timestamp + PERIOD_SECONDS);
+        manager.callAfterSwap(hook, key, _deltaZero()); // EMA bootstrap close
 
         manager.callAfterSwap(hook, key, _deltaA0(-2_000_000));
         vm.warp(block.timestamp + PERIOD_SECONDS);
