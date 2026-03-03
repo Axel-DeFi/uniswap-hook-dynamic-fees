@@ -78,6 +78,7 @@ contract VolumeDynamicFeeHookConfigAndEdgesTest is Test {
         uint64 lpFeesUsd6,
         uint8 reasonCode
     );
+    event RescueTransfer(address indexed currency, uint256 amount, address indexed recipient);
 
     struct DeployCfg {
         address token0;
@@ -489,6 +490,31 @@ contract VolumeDynamicFeeHookConfigAndEdgesTest is Test {
         assertEq(ema, 0);
         assertEq(idx, FLOOR_IDX);
         assertEq(manager.updateCount(), updatesAfterPause);
+    }
+
+    function test_rescueToken_reverts_for_non_guardian() public {
+        vm.prank(address(0x000000000000000000000000000000000000dEaD));
+        vm.expectRevert(VolumeDynamicFeeHook.NotGuardian.selector);
+        hook.rescueToken(Currency.wrap(address(0x0000000000000000000000000000000000003333)), 1);
+    }
+
+    function test_rescueToken_reverts_for_pool_currency0() public {
+        vm.expectRevert(VolumeDynamicFeeHook.InvalidRescueCurrency.selector);
+        hook.rescueToken(key.currency0, 1);
+    }
+
+    function test_rescueToken_reverts_for_pool_currency1() public {
+        vm.expectRevert(VolumeDynamicFeeHook.InvalidRescueCurrency.selector);
+        hook.rescueToken(key.currency1, 1);
+    }
+
+    function test_rescueToken_emits_event_for_non_pool_currency() public {
+        Currency token = Currency.wrap(address(0x0000000000000000000000000000000000003333));
+
+        vm.expectEmit(true, false, true, true, address(hook));
+        emit RescueTransfer(Currency.unwrap(token), 123, hook.creator());
+
+        hook.rescueToken(token, 123);
     }
 
     function test_periodVolume_saturates_at_uint64_max() public {

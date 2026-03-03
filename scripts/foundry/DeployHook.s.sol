@@ -21,6 +21,7 @@ import {VolumeDynamicFeeHook} from "src/VolumeDynamicFeeHook.sol";
 ///        - PERIOD_SECONDS, EMA_PERIODS, DEADBAND_BPS, LULL_RESET_SECONDS
 ///        - GUARDIAN
 ///        - CREATOR_FEE_BPS (or CREATOR_FEE_PERCENT as fallback)
+///        - Optional: CREATOR_FEE_ADDRESS (or legacy CREATOR)
 contract DeployHook is Script {
     // Foundry deterministic CREATE2 deployer proxy used by forge scripts.
     address internal constant CREATE2_DEPLOYER = 0x4e59b44847b379578588920cA78FbF26c0B4956C;
@@ -120,7 +121,7 @@ contract DeployHook is Script {
         cfg.deadbandBps = uint16(vm.envUint("DEADBAND_BPS"));
         cfg.lullResetSeconds = uint32(vm.envUint("LULL_RESET_SECONDS"));
         cfg.guardian = vm.envAddress("GUARDIAN");
-        cfg.creator = vm.envAddress("CREATOR");
+        cfg.creator = vm.envOr("CREATOR_FEE_ADDRESS", vm.envOr("CREATOR", cfg.guardian));
         cfg.creatorFeeBps = uint16(vm.envOr("CREATOR_FEE_BPS", vm.envUint("CREATOR_FEE_PERCENT") * 100));
     }
 

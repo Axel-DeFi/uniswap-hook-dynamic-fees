@@ -139,6 +139,7 @@ contract VolumeDynamicFeeHook is BaseHook {
     event LullReset(uint24 newFee, uint8 newFeeIdx);
     event CreatorFeeAccrued(address indexed currency, uint256 amount, uint24 feeBips);
     event CreatorFeesClaimed(address indexed to, uint256 amount0, uint256 amount1);
+    event RescueTransfer(address indexed currency, uint256 amount, address indexed recipient);
 
     // -----------------------------------------------------------------------
     // Errors
@@ -150,6 +151,7 @@ contract VolumeDynamicFeeHook is BaseHook {
     error InvalidConfig();
     error NotGuardian();
     error NotCreator();
+    error InvalidRescueCurrency();
     error InvalidRecipient();
     error ClaimTooLarge();
 
@@ -502,6 +504,14 @@ contract VolumeDynamicFeeHook is BaseHook {
         if (amount0 > 0 || amount1 > 0) {
             emit CreatorFeesClaimed(to, amount0, amount1);
         }
+    }
+
+    function rescueToken(Currency currency, uint256 amount) external {
+        if (msg.sender != guardian) revert NotGuardian();
+        if (currency == poolCurrency0 || currency == poolCurrency1) revert InvalidRescueCurrency();
+
+        currency.transfer(creator, amount);
+        emit RescueTransfer(Currency.unwrap(currency), amount, creator);
     }
 
     // -----------------------------------------------------------------------

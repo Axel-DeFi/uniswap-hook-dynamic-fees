@@ -19,13 +19,16 @@ set -euo pipefail
 #   FEE_TIERS (comma-separated fee levels in percent, for example 0.009,0.04,0.09)
 #   PERIOD_SECONDS, EMA_PERIODS, DEADBAND_BPS, LULL_RESET_SECONDS
 #   CREATOR_FEE_PERCENT
+# Optional:
+#   CREATOR_FEE_ADDRESS (defaults to GUARDIAN)
 #
 # Guardian behavior:
 #   - If GUARDIAN is empty after sourcing config + .env, it defaults to the deployer address.
 #   - If REQUIRE_GUARDIAN_CONTRACT=1, deployment fails when GUARDIAN is an EOA.
 #
 # Creator behavior:
-#   - If CREATOR is empty after sourcing config + .env, it defaults to the deployer address.
+#   - CREATOR_FEE_ADDRESS defines creator-fee receiver/controller.
+#   - If CREATOR_FEE_ADDRESS is empty, it defaults to GUARDIAN.
 
 usage() {
   cat <<'EOF'
@@ -231,11 +234,25 @@ if [[ -z "${GUARDIAN:-}" ]]; then
   echo "==> GUARDIAN not set; defaulting to deployer: ${GUARDIAN}"
 fi
 
-if [[ -z "${CREATOR:-}" ]]; then
-  CREATOR="${DEPLOYER_ADDR}"
-  export CREATOR
-  echo "==> CREATOR not set; defaulting to deployer: ${CREATOR}"
+# Use CREATOR_FEE_ADDRESS as canonical creator fee account.
+# Keep CREATOR exported for the current Solidity constructor/input naming.
+if [[ -z "${CREATOR_FEE_ADDRESS:-}" ]]; then
+  if [[ -n "${CREATOR:-}" ]]; then
+    CREATOR_FEE_ADDRESS="${CREATOR}"
+    echo "==> CREATOR_FEE_ADDRESS not set; reusing CREATOR: ${CREATOR_FEE_ADDRESS}"
+  else
+    CREATOR_FEE_ADDRESS="${GUARDIAN}"
+    echo "==> CREATOR_FEE_ADDRESS not set; defaulting to GUARDIAN: ${CREATOR_FEE_ADDRESS}"
+  fi
 fi
+export CREATOR_FEE_ADDRESS
+
+if [[ -n "${CREATOR:-}" && "${CREATOR}" != "${CREATOR_FEE_ADDRESS}" ]]; then
+  echo "ERROR: CREATOR (${CREATOR}) and CREATOR_FEE_ADDRESS (${CREATOR_FEE_ADDRESS}) differ. Use one value." >&2
+  exit 1
+fi
+CREATOR="${CREATOR_FEE_ADDRESS}"
+export CREATOR
 
 # Optional safety: enforce contract-based guardian (e.g. multisig) in strict mode.
 GUARDIAN_CODE="$(cast code "${GUARDIAN}" --rpc-url "${RPC_URL}" 2>/dev/null || true)"
