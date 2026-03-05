@@ -15,6 +15,7 @@ set -euo pipefail
 #
 # Requires in config:
 #   POOL_MANAGER, VOLATILE, STABLE, STABLE_DECIMALS, TICK_SPACING
+#   For --chain optimism, v2 strategy keys must also be present (CASH_TIER/EXTREME_TIER and thresholds/holds).
 #
 # INIT_PRICE_USD:
 #   - interpreted as STABLE per 1 VOLATILE token
@@ -103,6 +104,23 @@ for k in "${required[@]}"; do
     exit 1
   fi
 done
+
+if [[ "$CHAIN" == "optimism" ]]; then
+  required_v2=(
+    FLOOR_TIER CAP_TIER FEE_TIERS
+    CASH_TIER EXTREME_TIER
+    MIN_CLOSEVOL_TO_CASH_USD6 UP_R_TO_CASH_BPS CASH_HOLD_PERIODS
+    MIN_CLOSEVOL_TO_EXTREME_USD6 UP_R_TO_EXTREME_BPS UP_EXTREME_CONFIRM_PERIODS EXTREME_HOLD_PERIODS
+    DOWN_R_FROM_EXTREME_BPS DOWN_EXTREME_CONFIRM_PERIODS DOWN_R_FROM_CASH_BPS DOWN_CASH_CONFIRM_PERIODS
+    EMERGENCY_FLOOR_CLOSEVOL_USD6 EMERGENCY_CONFIRM_PERIODS
+  )
+  for k in "${required_v2[@]}"; do
+    if [[ -z "${!k:-}" ]]; then
+      echo "ERROR: missing v2 key $k in $CFG (required for Optimism deployment)." >&2
+      exit 1
+    fi
+  done
+fi
 
 # Ask for INIT_PRICE_USD if missing.
 if [[ -z "${INIT_PRICE_USD:-}" ]]; then

@@ -10,7 +10,11 @@ import {BalanceDelta, BalanceDeltaLibrary} from "@uniswap/v4-core/src/types/Bala
 import {SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {Hooks} from "@uniswap/v4-core/src/libraries/Hooks.sol";
 import {LPFeeLibrary} from "@uniswap/v4-core/src/libraries/LPFeeLibrary.sol";
-import {BeforeSwapDelta, toBeforeSwapDelta, BeforeSwapDeltaLibrary} from "@uniswap/v4-core/src/types/BeforeSwapDelta.sol";
+import {
+    BeforeSwapDelta,
+    toBeforeSwapDelta,
+    BeforeSwapDeltaLibrary
+} from "@uniswap/v4-core/src/types/BeforeSwapDelta.sol";
 
 /**
  * @dev VolumeDynamicFeeHook
@@ -70,6 +74,40 @@ contract VolumeDynamicFeeHook is BaseHook {
     uint8 public immutable floorIdx;
     // forge-lint: disable-next-line(screaming-snake-case-immutable)
     uint8 public immutable capIdx;
+    // forge-lint: disable-next-line(screaming-snake-case-immutable)
+    uint8 public immutable cashIdx;
+    // forge-lint: disable-next-line(screaming-snake-case-immutable)
+    uint8 public immutable extremeIdx;
+
+    // forge-lint: disable-next-line(screaming-snake-case-immutable)
+    uint64 public immutable minCloseVolToCashUsd6;
+    // forge-lint: disable-next-line(screaming-snake-case-immutable)
+    uint16 public immutable upRToCashBps;
+    // forge-lint: disable-next-line(screaming-snake-case-immutable)
+    uint8 public immutable cashHoldPeriods;
+
+    // forge-lint: disable-next-line(screaming-snake-case-immutable)
+    uint64 public immutable minCloseVolToExtremeUsd6;
+    // forge-lint: disable-next-line(screaming-snake-case-immutable)
+    uint16 public immutable upRToExtremeBps;
+    // forge-lint: disable-next-line(screaming-snake-case-immutable)
+    uint8 public immutable upExtremeConfirmPeriods;
+    // forge-lint: disable-next-line(screaming-snake-case-immutable)
+    uint8 public immutable extremeHoldPeriods;
+
+    // forge-lint: disable-next-line(screaming-snake-case-immutable)
+    uint16 public immutable downRFromExtremeBps;
+    // forge-lint: disable-next-line(screaming-snake-case-immutable)
+    uint8 public immutable downExtremeConfirmPeriods;
+    // forge-lint: disable-next-line(screaming-snake-case-immutable)
+    uint16 public immutable downRFromCashBps;
+    // forge-lint: disable-next-line(screaming-snake-case-immutable)
+    uint8 public immutable downCashConfirmPeriods;
+
+    // forge-lint: disable-next-line(screaming-snake-case-immutable)
+    uint64 public immutable emergencyFloorCloseVolUsd6;
+    // forge-lint: disable-next-line(screaming-snake-case-immutable)
+    uint8 public immutable emergencyConfirmPeriods;
 
     // forge-lint: disable-next-line(screaming-snake-case-immutable)
     uint32 public immutable periodSeconds;
@@ -95,8 +133,6 @@ contract VolumeDynamicFeeHook is BaseHook {
     uint256 private _creatorFees1;
 
     uint8 private constant DIR_NONE = 0;
-    uint8 private constant DIR_UP = 1;
-    uint8 private constant DIR_DOWN = 2;
 
     // Period-close reason codes (for PeriodClosed event).
     uint8 public constant REASON_FEE_UP = 1;
@@ -109,14 +145,29 @@ contract VolumeDynamicFeeHook is BaseHook {
     uint8 public constant REASON_LULL_RESET = 8;
     uint8 public constant REASON_DEADBAND = 9;
     uint8 public constant REASON_EMA_BOOTSTRAP = 10;
+    uint8 public constant REASON_JUMP_CASH = 11;
+    uint8 public constant REASON_JUMP_EXTREME = 12;
+    uint8 public constant REASON_DOWN_TO_CASH = 13;
+    uint8 public constant REASON_DOWN_TO_FLOOR = 14;
+    uint8 public constant REASON_HOLD = 15;
+    uint8 public constant REASON_EMERGENCY_FLOOR = 16;
+    uint8 public constant REASON_BOOTSTRAP_V2 = 17;
 
     uint16 private constant MAX_LULL_PERIODS = 24;
     uint8 private constant MAX_EMA_PERIODS = 64;
+    uint8 private constant MAX_HOLD_PERIODS = 31;
+    uint8 private constant MAX_UP_EXTREME_STREAK = 3;
+    uint8 private constant MAX_DOWN_STREAK = 7;
+    uint8 private constant MAX_EMERGENCY_STREAK = 3;
     // closeVol is tracked as abs(stableAmount) in USD6.
     // 1_000_000 equals $1 of period-close volume.
     uint64 private constant DUST_CLOSE_VOL_USD6 = 1_000_000;
     uint256 private constant FEE_SCALE = 1_000_000;
     uint256 private constant BPS_SCALE = 10_000;
+    uint256 private constant HOLD_REMAINING_SHIFT = 235;
+    uint256 private constant UP_EXTREME_STREAK_SHIFT = 240;
+    uint256 private constant DOWN_STREAK_SHIFT = 242;
+    uint256 private constant EMERGENCY_STREAK_SHIFT = 245;
 
     uint256 private constant PAUSED_BIT = 234;
 
@@ -154,6 +205,10 @@ contract VolumeDynamicFeeHook is BaseHook {
     error InvalidRescueCurrency();
     error InvalidRecipient();
     error ClaimTooLarge();
+    error TierNotFound();
+    error InvalidTierBounds();
+    error InvalidHoldPeriods();
+    error InvalidConfirmPeriods();
 
     constructor(
         IPoolManager _poolManager,
@@ -171,7 +226,22 @@ contract VolumeDynamicFeeHook is BaseHook {
         uint32 _lullResetSeconds,
         address _guardian,
         address _creator,
-        uint16 _creatorFeeBps
+        uint16 _creatorFeeBps,
+        uint24 _cashTier,
+        uint64 _minCloseVolToCashUsd6,
+        uint16 _upRToCashBps,
+        uint8 _cashHoldPeriods,
+        uint24 _extremeTier,
+        uint64 _minCloseVolToExtremeUsd6,
+        uint16 _upRToExtremeBps,
+        uint8 _upExtremeConfirmPeriods,
+        uint8 _extremeHoldPeriods,
+        uint16 _downRFromExtremeBps,
+        uint8 _downExtremeConfirmPeriods,
+        uint16 _downRFromCashBps,
+        uint8 _downCashConfirmPeriods,
+        uint64 _emergencyFloorCloseVolUsd6,
+        uint8 _emergencyConfirmPeriods
     ) BaseHook(_poolManager) {
         if (address(_poolManager) == address(0)) revert InvalidConfig();
 
@@ -221,15 +291,65 @@ contract VolumeDynamicFeeHook is BaseHook {
         feeTierCount = uint16(tierCount);
 
         uint24 prevTier;
+        uint8 cashTierIdx_;
+        uint8 extremeTierIdx_;
+        bool cashTierFound;
+        bool extremeTierFound;
         for (uint256 i = 0; i < tierCount; ++i) {
             uint24 tier = _feeTiers[i];
             if (tier == 0) revert InvalidConfig();
             if (i > 0 && tier <= prevTier) revert InvalidConfig();
             _feeTiersByIdx.push(tier);
+            if (tier == _cashTier) {
+                // forge-lint: disable-next-line(unsafe-typecast)
+                cashTierIdx_ = uint8(i);
+                cashTierFound = true;
+            }
+            if (tier == _extremeTier) {
+                // forge-lint: disable-next-line(unsafe-typecast)
+                extremeTierIdx_ = uint8(i);
+                extremeTierFound = true;
+            }
             prevTier = tier;
         }
+        if (!cashTierFound || !extremeTierFound) revert TierNotFound();
+
+        if (_floorIdx > cashTierIdx_ || cashTierIdx_ > extremeTierIdx_ || extremeTierIdx_ > _capIdx) {
+            revert InvalidTierBounds();
+        }
+
+        if (_cashHoldPeriods == 0 || _cashHoldPeriods > MAX_HOLD_PERIODS) revert InvalidHoldPeriods();
+        if (_extremeHoldPeriods == 0 || _extremeHoldPeriods > MAX_HOLD_PERIODS) revert InvalidHoldPeriods();
+        if (_upExtremeConfirmPeriods == 0 || _upExtremeConfirmPeriods > MAX_UP_EXTREME_STREAK) {
+            revert InvalidConfirmPeriods();
+        }
+        if (_downExtremeConfirmPeriods == 0 || _downExtremeConfirmPeriods > MAX_DOWN_STREAK) {
+            revert InvalidConfirmPeriods();
+        }
+        if (_downCashConfirmPeriods == 0 || _downCashConfirmPeriods > MAX_DOWN_STREAK) {
+            revert InvalidConfirmPeriods();
+        }
+        if (_emergencyConfirmPeriods == 0 || _emergencyConfirmPeriods > MAX_EMERGENCY_STREAK) {
+            revert InvalidConfirmPeriods();
+        }
+
         floorIdx = _floorIdx;
         capIdx = _capIdx;
+        cashIdx = cashTierIdx_;
+        extremeIdx = extremeTierIdx_;
+        minCloseVolToCashUsd6 = _minCloseVolToCashUsd6;
+        upRToCashBps = _upRToCashBps;
+        cashHoldPeriods = _cashHoldPeriods;
+        minCloseVolToExtremeUsd6 = _minCloseVolToExtremeUsd6;
+        upRToExtremeBps = _upRToExtremeBps;
+        upExtremeConfirmPeriods = _upExtremeConfirmPeriods;
+        extremeHoldPeriods = _extremeHoldPeriods;
+        downRFromExtremeBps = _downRFromExtremeBps;
+        downExtremeConfirmPeriods = _downExtremeConfirmPeriods;
+        downRFromCashBps = _downRFromCashBps;
+        downCashConfirmPeriods = _downCashConfirmPeriods;
+        emergencyFloorCloseVolUsd6 = _emergencyFloorCloseVolUsd6;
+        emergencyConfirmPeriods = _emergencyConfirmPeriods;
 
         if (stableDecimals > 18) revert InvalidConfig();
 
@@ -266,7 +386,7 @@ contract VolumeDynamicFeeHook is BaseHook {
             return (IHooks.beforeSwap.selector, BeforeSwapDeltaLibrary.ZERO_DELTA, 0);
         }
 
-        (,, uint64 periodStart, uint8 feeIdx,,) = _unpackState(_state);
+        (,, uint64 periodStart, uint8 feeIdx,,,,,,) = _unpackState(_state);
         if (periodStart == 0) {
             return (IHooks.beforeSwap.selector, BeforeSwapDeltaLibrary.ZERO_DELTA, 0);
         }
@@ -305,14 +425,14 @@ contract VolumeDynamicFeeHook is BaseHook {
     {
         _validateKey(key);
 
-        (,, uint64 periodStart,,,) = _unpackState(_state);
+        (,, uint64 periodStart,,,,,,,) = _unpackState(_state);
         if (periodStart != 0) revert AlreadyInitialized();
 
         uint64 nowTs = _now64();
 
         uint8 feeIdx = floorIdx;
 
-        _state = _packState(0, 0, nowTs, feeIdx, DIR_NONE, isPaused());
+        _state = _packState(0, 0, nowTs, feeIdx, DIR_NONE, isPaused(), 0, 0, 0, 0);
 
         poolManager.updateDynamicLPFee(key, _feeTier(feeIdx));
         emit FeeUpdated(_feeTier(feeIdx), feeIdx, 0, 0);
@@ -334,8 +454,18 @@ contract VolumeDynamicFeeHook is BaseHook {
             return (IHooks.afterSwap.selector, 0);
         }
 
-        (uint64 periodVol, uint96 emaVol, uint64 periodStart, uint8 feeIdx, uint8 lastDir, bool paused_) =
-            _unpackState(_state);
+        (
+            uint64 periodVol,
+            uint96 emaVol,
+            uint64 periodStart,
+            uint8 feeIdx,
+            uint8 lastDir,
+            bool paused_,
+            uint8 holdRemaining,
+            uint8 upExtremeStreak,
+            uint8 downStreak,
+            uint8 emergencyStreak
+        ) = _unpackState(_state);
 
         if (periodStart == 0) revert NotInitialized();
 
@@ -351,10 +481,25 @@ contract VolumeDynamicFeeHook is BaseHook {
             lastDir = DIR_NONE;
             feeIdx = floorIdx;
             periodStart = nowTs;
+            holdRemaining = 0;
+            upExtremeStreak = 0;
+            downStreak = 0;
+            emergencyStreak = 0;
 
             periodVol = _addSwapVolumeUsd6(0, delta);
 
-            _state = _packState(periodVol, emaVol, periodStart, feeIdx, lastDir, paused_);
+            _state = _packState(
+                periodVol,
+                emaVol,
+                periodStart,
+                feeIdx,
+                lastDir,
+                paused_,
+                holdRemaining,
+                upExtremeStreak,
+                downStreak,
+                emergencyStreak
+            );
 
             if (feeIdx != oldFeeIdx) {
                 poolManager.updateDynamicLPFee(key, _feeTier(feeIdx));
@@ -362,14 +507,7 @@ contract VolumeDynamicFeeHook is BaseHook {
             }
 
             emit PeriodClosed(
-                _feeTier(oldFeeIdx),
-                oldFeeIdx,
-                _feeTier(feeIdx),
-                feeIdx,
-                0,
-                0,
-                0,
-                REASON_LULL_RESET
+                _feeTier(oldFeeIdx), oldFeeIdx, _feeTier(feeIdx), feeIdx, 0, 0, 0, REASON_LULL_RESET
             );
             emit LullReset(_feeTier(feeIdx), feeIdx);
             return (IHooks.afterSwap.selector, 0);
@@ -384,7 +522,10 @@ contract VolumeDynamicFeeHook is BaseHook {
 
             uint96 ema = emaVol;
             uint8 f = feeIdx;
-            uint8 d = lastDir;
+            uint8 hold = holdRemaining;
+            uint8 upStreak = upExtremeStreak;
+            uint8 down = downStreak;
+            uint8 emergency = emergencyStreak;
 
             for (uint64 i = 0; i < periods; i++) {
                 uint64 vRaw = (i == 0) ? closeVol0 : uint64(0);
@@ -392,19 +533,17 @@ contract VolumeDynamicFeeHook is BaseHook {
 
                 uint96 emaBefore = ema;
                 ema = _updateEma(ema, vEff);
+                bool bootstrapV2 = emaBefore == 0 && vEff > 0;
 
                 uint8 fromFeeIdx = f;
                 uint24 fromFee = _feeTier(fromFeeIdx);
-                (uint8 nf, uint8 nd, bool changed, uint8 reasonCode) = _computeNextFeeIdx(f, d, vEff, ema);
-                if (changed) {
-                    f = nf;
-                    d = nd;
-                } else {
-                    d = DIR_NONE;
-                }
-                if (reasonCode == REASON_DEADBAND && emaBefore == 0 && vEff > 0) {
-                    reasonCode = REASON_EMA_BOOTSTRAP;
-                }
+                (uint8 nf, uint8 nh, uint8 nu, uint8 nd, uint8 ne,, uint8 reasonCode) =
+                    _computeNextFeeIdxV2(f, vEff, ema, bootstrapV2, hold, upStreak, down, emergency);
+                f = nf;
+                hold = nh;
+                upStreak = nu;
+                down = nd;
+                emergency = ne;
 
                 emit PeriodClosed(
                     fromFee,
@@ -420,7 +559,11 @@ contract VolumeDynamicFeeHook is BaseHook {
 
             emaVol = ema;
             feeIdx = f;
-            lastDir = d;
+            lastDir = DIR_NONE;
+            holdRemaining = hold;
+            upExtremeStreak = upStreak;
+            downStreak = down;
+            emergencyStreak = emergency;
             feeChanged = feeIdx != oldFeeIdx;
 
             periodStart = nowTs;
@@ -429,7 +572,18 @@ contract VolumeDynamicFeeHook is BaseHook {
 
         periodVol = _addSwapVolumeUsd6(periodVol, delta);
 
-        _state = _packState(periodVol, emaVol, periodStart, feeIdx, lastDir, paused_);
+        _state = _packState(
+            periodVol,
+            emaVol,
+            periodStart,
+            feeIdx,
+            lastDir,
+            paused_,
+            holdRemaining,
+            upExtremeStreak,
+            downStreak,
+            emergencyStreak
+        );
 
         if (feeChanged) {
             poolManager.updateDynamicLPFee(key, _feeTier(feeIdx));
@@ -447,7 +601,7 @@ contract VolumeDynamicFeeHook is BaseHook {
     }
 
     function currentFeeBips() external view returns (uint24) {
-        (,, uint64 periodStart, uint8 feeIdx,,) = _unpackState(_state);
+        (,, uint64 periodStart, uint8 feeIdx,,,,,,) = _unpackState(_state);
         if (periodStart == 0) revert NotInitialized();
         return _feeTier(feeIdx);
     }
@@ -463,7 +617,7 @@ contract VolumeDynamicFeeHook is BaseHook {
             uint8 lastDir
         )
     {
-        (uint64 pv, uint96 ev, uint64 ps, uint8 fi, uint8 ld,) = _unpackState(_state);
+        (uint64 pv, uint96 ev, uint64 ps, uint8 fi, uint8 ld,,,,,) = _unpackState(_state);
         return (pv, ev, ps, fi, ld);
     }
 
@@ -522,8 +676,18 @@ contract VolumeDynamicFeeHook is BaseHook {
         if (msg.sender != guardian) revert NotGuardian();
         if (isPaused()) return;
 
-        (uint64 periodVol, uint96 emaVol, uint64 periodStart, uint8 feeIdx, uint8 lastDir, bool paused_) =
-            _unpackState(_state);
+        (
+            uint64 periodVol,
+            uint96 emaVol,
+            uint64 periodStart,
+            uint8 feeIdx,
+            uint8 lastDir,
+            bool paused_,
+            uint8 holdRemaining,
+            uint8 upExtremeStreak,
+            uint8 downStreak,
+            uint8 emergencyStreak
+        ) = _unpackState(_state);
         bool initialized = periodStart != 0;
 
         // Reset state and force floor fee bucket.
@@ -533,8 +697,23 @@ contract VolumeDynamicFeeHook is BaseHook {
         feeIdx = floorIdx;
         lastDir = DIR_NONE;
         paused_ = true;
+        holdRemaining = 0;
+        upExtremeStreak = 0;
+        downStreak = 0;
+        emergencyStreak = 0;
 
-        _state = _packState(periodVol, emaVol, periodStart, feeIdx, lastDir, paused_);
+        _state = _packState(
+            periodVol,
+            emaVol,
+            periodStart,
+            feeIdx,
+            lastDir,
+            paused_,
+            holdRemaining,
+            upExtremeStreak,
+            downStreak,
+            emergencyStreak
+        );
 
         // Apply floor fee immediately for initialized pools.
         if (initialized) {
@@ -549,8 +728,18 @@ contract VolumeDynamicFeeHook is BaseHook {
         if (msg.sender != guardian) revert NotGuardian();
         if (!isPaused()) return;
 
-        (uint64 periodVol, uint96 emaVol, uint64 periodStart, uint8 feeIdx, uint8 lastDir, bool paused_) =
-            _unpackState(_state);
+        (
+            uint64 periodVol,
+            uint96 emaVol,
+            uint64 periodStart,
+            uint8 feeIdx,
+            uint8 lastDir,
+            bool paused_,
+            uint8 holdRemaining,
+            uint8 upExtremeStreak,
+            uint8 downStreak,
+            uint8 emergencyStreak
+        ) = _unpackState(_state);
         bool initialized = periodStart != 0;
 
         // Reset state and return to floor fee bucket.
@@ -560,8 +749,23 @@ contract VolumeDynamicFeeHook is BaseHook {
         feeIdx = floorIdx;
         lastDir = DIR_NONE;
         paused_ = false;
+        holdRemaining = 0;
+        upExtremeStreak = 0;
+        downStreak = 0;
+        emergencyStreak = 0;
 
-        _state = _packState(periodVol, emaVol, periodStart, feeIdx, lastDir, paused_);
+        _state = _packState(
+            periodVol,
+            emaVol,
+            periodStart,
+            feeIdx,
+            lastDir,
+            paused_,
+            holdRemaining,
+            upExtremeStreak,
+            downStreak,
+            emergencyStreak
+        );
 
         // Apply floor fee immediately for initialized pools.
         if (initialized) {
@@ -650,68 +854,194 @@ contract VolumeDynamicFeeHook is BaseHook {
         return (lpFeeAmount * uint256(creatorFeeBps)) / BPS_SCALE;
     }
 
-    function _computeNextFeeIdx(uint8 feeIdx, uint8 lastDir, uint64 closeVol, uint96 emaVol)
+    // Backward-compatible internal surface for existing test harnesses.
+    function _computeNextFeeIdx(uint8 feeIdx, uint8, uint64 closeVol, uint96 emaVol)
         internal
         view
         returns (uint8 newFeeIdx, uint8 newLastDir, bool changed, uint8 reasonCode)
     {
+        (newFeeIdx,,,,, changed, reasonCode) =
+            _computeNextFeeIdxV2(feeIdx, closeVol, emaVol, false, 0, 0, 0, 0);
+        newLastDir = DIR_NONE;
+    }
+
+    function _computeNextFeeIdxV2(
+        uint8 feeIdx,
+        uint64 closeVol,
+        uint96 emaVol,
+        bool bootstrapV2,
+        uint8 holdRemaining,
+        uint8 upExtremeStreak,
+        uint8 downStreak,
+        uint8 emergencyStreak
+    )
+        internal
+        view
+        returns (
+            uint8 newFeeIdx,
+            uint8 newHoldRemaining,
+            uint8 newUpExtremeStreak,
+            uint8 newDownStreak,
+            uint8 newEmergencyStreak,
+            bool changed,
+            uint8 reasonCode
+        )
+    {
         newFeeIdx = feeIdx;
-        newLastDir = lastDir;
-        reasonCode = REASON_DEADBAND;
+        newHoldRemaining = holdRemaining;
+        newUpExtremeStreak = upExtremeStreak;
+        newDownStreak = downStreak;
+        newEmergencyStreak = emergencyStreak;
+        reasonCode = closeVol == 0 ? REASON_NO_SWAPS : REASON_DEADBAND;
 
-        if (emaVol == 0) {
-            // Prevent fee stalling above floor in prolonged near-zero activity.
-            if (closeVol == 0 && newFeeIdx > floorIdx) {
-                return (newFeeIdx - 1, DIR_NONE, true, REASON_ZERO_EMA_DECAY);
+        // Rule 1: hold counter always decays first.
+        if (newHoldRemaining > 0) {
+            unchecked {
+                newHoldRemaining -= 1;
             }
-            if (closeVol == 0) {
-                return (newFeeIdx, DIR_NONE, false, REASON_NO_SWAPS);
-            }
-            return (newFeeIdx, DIR_NONE, false, REASON_EMA_BOOTSTRAP);
         }
 
-        uint256 emaU = uint256(emaVol);
-        uint256 lower = (emaU * (10000 - uint256(deadbandBps))) / 10000;
-        uint256 upper = (emaU * (10000 + uint256(deadbandBps))) / 10000;
-
-        uint8 dir;
-        if (uint256(closeVol) > upper) dir = DIR_UP;
-        else if (uint256(closeVol) < lower) dir = DIR_DOWN;
-        else dir = DIR_NONE;
-
-        // reversal lock: avoid immediate flip-flops across deadband
-        if (dir != DIR_NONE && newLastDir != DIR_NONE && dir != newLastDir) {
-            return (newFeeIdx, DIR_NONE, false, REASON_REVERSAL_LOCK);
+        // Rule 2: emergency floor guard runs before all transitions.
+        if (closeVol < emergencyFloorCloseVolUsd6) {
+            newEmergencyStreak = _incrementStreak(newEmergencyStreak, MAX_EMERGENCY_STREAK);
+        } else {
+            newEmergencyStreak = 0;
+        }
+        if (newEmergencyStreak >= emergencyConfirmPeriods && newFeeIdx != floorIdx) {
+            newFeeIdx = floorIdx;
+            newHoldRemaining = 0;
+            newUpExtremeStreak = 0;
+            newDownStreak = 0;
+            newEmergencyStreak = 0;
+            return (
+                newFeeIdx,
+                newHoldRemaining,
+                newUpExtremeStreak,
+                newDownStreak,
+                newEmergencyStreak,
+                true,
+                REASON_EMERGENCY_FLOOR
+            );
         }
 
-        if (dir == DIR_UP) {
-            if (newFeeIdx < capIdx) {
-                newFeeIdx = newFeeIdx + 1;
-                changed = true;
-                newLastDir = DIR_UP;
-                reasonCode = REASON_FEE_UP;
-            } else {
-                newLastDir = DIR_NONE;
-                reasonCode = REASON_CAP;
+        uint256 rBps = emaVol == 0 ? 0 : (uint256(closeVol) * BPS_SCALE) / uint256(emaVol);
+
+        // Rule 3a: floor -> cash fast jump.
+        if (newFeeIdx == floorIdx) {
+            bool canJumpCash = !bootstrapV2 && emaVol != 0 && closeVol >= minCloseVolToCashUsd6
+                && rBps >= uint256(upRToCashBps);
+            if (canJumpCash && newFeeIdx != cashIdx) {
+                newFeeIdx = cashIdx;
+                newHoldRemaining = cashHoldPeriods;
+                newUpExtremeStreak = 0;
+                newDownStreak = 0;
+                newEmergencyStreak = 0;
+                return (
+                    newFeeIdx,
+                    newHoldRemaining,
+                    newUpExtremeStreak,
+                    newDownStreak,
+                    newEmergencyStreak,
+                    true,
+                    REASON_JUMP_CASH
+                );
             }
-        } else if (dir == DIR_DOWN) {
-            if (newFeeIdx > floorIdx) {
-                newFeeIdx = newFeeIdx - 1;
-                changed = true;
-                newLastDir = DIR_DOWN;
-                reasonCode = REASON_FEE_DOWN;
+        }
+
+        // Rule 3b: cash -> extreme jump after consecutive confirmations.
+        if (newFeeIdx == cashIdx) {
+            if (closeVol >= minCloseVolToExtremeUsd6 && rBps >= uint256(upRToExtremeBps)) {
+                newUpExtremeStreak = _incrementStreak(newUpExtremeStreak, MAX_UP_EXTREME_STREAK);
             } else {
-                newLastDir = DIR_NONE;
-                reasonCode = REASON_FLOOR;
+                newUpExtremeStreak = 0;
+            }
+            if (!bootstrapV2 && newUpExtremeStreak >= upExtremeConfirmPeriods && newFeeIdx != extremeIdx) {
+                newFeeIdx = extremeIdx;
+                newHoldRemaining = extremeHoldPeriods;
+                newUpExtremeStreak = 0;
+                newDownStreak = 0;
+                newEmergencyStreak = 0;
+                return (
+                    newFeeIdx,
+                    newHoldRemaining,
+                    newUpExtremeStreak,
+                    newDownStreak,
+                    newEmergencyStreak,
+                    true,
+                    REASON_JUMP_EXTREME
+                );
             }
         } else {
-            newLastDir = DIR_NONE;
-            if (closeVol == 0) {
-                reasonCode = REASON_NO_SWAPS;
-            } else {
-                reasonCode = REASON_DEADBAND;
-            }
+            newUpExtremeStreak = 0;
         }
+
+        // Rule 4: down transitions are blocked while hold is active.
+        if (newHoldRemaining > 0) {
+            newDownStreak = 0;
+            return (
+                newFeeIdx,
+                newHoldRemaining,
+                newUpExtremeStreak,
+                newDownStreak,
+                newEmergencyStreak,
+                false,
+                REASON_HOLD
+            );
+        }
+
+        if (newFeeIdx == extremeIdx) {
+            if (rBps <= uint256(downRFromExtremeBps)) {
+                newDownStreak = _incrementStreak(newDownStreak, MAX_DOWN_STREAK);
+            } else {
+                newDownStreak = 0;
+            }
+            if (newDownStreak >= downExtremeConfirmPeriods) {
+                newDownStreak = 0;
+                if (newFeeIdx != cashIdx) {
+                    newFeeIdx = cashIdx;
+                    return (
+                        newFeeIdx,
+                        newHoldRemaining,
+                        newUpExtremeStreak,
+                        newDownStreak,
+                        newEmergencyStreak,
+                        true,
+                        REASON_DOWN_TO_CASH
+                    );
+                }
+            }
+        } else if (newFeeIdx == cashIdx) {
+            if (rBps <= uint256(downRFromCashBps)) {
+                newDownStreak = _incrementStreak(newDownStreak, MAX_DOWN_STREAK);
+            } else {
+                newDownStreak = 0;
+            }
+            if (newDownStreak >= downCashConfirmPeriods) {
+                newDownStreak = 0;
+                if (newFeeIdx != floorIdx) {
+                    newFeeIdx = floorIdx;
+                    return (
+                        newFeeIdx,
+                        newHoldRemaining,
+                        newUpExtremeStreak,
+                        newDownStreak,
+                        newEmergencyStreak,
+                        true,
+                        REASON_DOWN_TO_FLOOR
+                    );
+                }
+            }
+        } else {
+            newDownStreak = 0;
+        }
+
+        if (bootstrapV2) {
+            reasonCode = REASON_BOOTSTRAP_V2;
+        }
+    }
+
+    function _incrementStreak(uint8 current, uint8 maxValue) internal pure returns (uint8) {
+        return current < maxValue ? current + 1 : maxValue;
     }
 
     // -----------------------------------------------------------------------
@@ -724,13 +1054,21 @@ contract VolumeDynamicFeeHook is BaseHook {
         uint64 periodStart,
         uint8 feeIdx,
         uint8 lastDir,
-        bool paused
+        bool paused,
+        uint8 holdRemaining,
+        uint8 upExtremeStreak,
+        uint8 downStreak,
+        uint8 emergencyStreak
     ) internal pure returns (uint256 packed) {
         packed = uint256(periodVol);
         packed |= uint256(emaVol) << 64;
         packed |= uint256(periodStart) << 160;
         packed |= uint256(feeIdx) << 224;
         packed |= (uint256(lastDir) & 0x3) << 232;
+        packed |= (uint256(holdRemaining) & 0x1F) << HOLD_REMAINING_SHIFT;
+        packed |= (uint256(upExtremeStreak) & 0x3) << UP_EXTREME_STREAK_SHIFT;
+        packed |= (uint256(downStreak) & 0x7) << DOWN_STREAK_SHIFT;
+        packed |= (uint256(emergencyStreak) & 0x3) << EMERGENCY_STREAK_SHIFT;
 
         if (paused) packed |= uint256(1) << PAUSED_BIT;
     }
@@ -744,7 +1082,11 @@ contract VolumeDynamicFeeHook is BaseHook {
             uint64 periodStart,
             uint8 feeIdx,
             uint8 lastDir,
-            bool paused
+            bool paused,
+            uint8 holdRemaining,
+            uint8 upExtremeStreak,
+            uint8 downStreak,
+            uint8 emergencyStreak
         )
     {
         // forge-lint: disable-next-line(unsafe-typecast)
@@ -758,5 +1100,9 @@ contract VolumeDynamicFeeHook is BaseHook {
         lastDir = uint8((packed >> 232) & 0x3);
 
         paused = ((packed >> PAUSED_BIT) & 1) == 1;
+        holdRemaining = uint8((packed >> HOLD_REMAINING_SHIFT) & 0x1F);
+        upExtremeStreak = uint8((packed >> UP_EXTREME_STREAK_SHIFT) & 0x3);
+        downStreak = uint8((packed >> DOWN_STREAK_SHIFT) & 0x7);
+        emergencyStreak = uint8((packed >> EMERGENCY_STREAK_SHIFT) & 0x3);
     }
 }

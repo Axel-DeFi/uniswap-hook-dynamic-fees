@@ -9,7 +9,7 @@ import {HookMiner} from "@uniswap/v4-hooks-public/src/utils/HookMiner.sol";
 import {VolumeDynamicFeeHook} from "src/VolumeDynamicFeeHook.sol";
 
 /// @notice Mines the hook address flags and deploys VolumeDynamicFeeHook via CREATE2.
-/// @dev Constructor args are pre-encoded off-chain and passed via CONSTRUCTOR_ARGS_HEX.
+/// @dev Constructor args (including v2 controller params) are pre-encoded off-chain and passed via CONSTRUCTOR_ARGS_HEX.
 contract DeployHook is Script {
     // Foundry deterministic CREATE2 deployer proxy used by forge scripts.
     address internal constant CREATE2_DEPLOYER = 0x4e59b44847b379578588920cA78FbF26c0B4956C;
@@ -27,7 +27,8 @@ contract DeployHook is Script {
         (address minedHookAddress, bytes32 salt) =
             HookMiner.find(CREATE2_DEPLOYER, flags, type(VolumeDynamicFeeHook).creationCode, constructorArgs);
 
-        bytes memory creationCodeWithArgs = abi.encodePacked(type(VolumeDynamicFeeHook).creationCode, constructorArgs);
+        bytes memory creationCodeWithArgs =
+            abi.encodePacked(type(VolumeDynamicFeeHook).creationCode, constructorArgs);
 
         vm.startBroadcast();
         (bool ok,) = CREATE2_DEPLOYER.call(abi.encodePacked(salt, creationCodeWithArgs));

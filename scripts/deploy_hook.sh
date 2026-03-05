@@ -19,6 +19,11 @@ set -euo pipefail
 #   FEE_TIERS (comma-separated fee levels in percent, for example 0.009,0.04,0.09)
 #   PERIOD_SECONDS, EMA_PERIODS, DEADBAND_BPS, LULL_RESET_SECONDS
 #   CREATOR_FEE_PERCENT
+#   CASH_TIER, EXTREME_TIER
+#   MIN_CLOSEVOL_TO_CASH_USD6, UP_R_TO_CASH_BPS, CASH_HOLD_PERIODS
+#   MIN_CLOSEVOL_TO_EXTREME_USD6, UP_R_TO_EXTREME_BPS, UP_EXTREME_CONFIRM_PERIODS, EXTREME_HOLD_PERIODS
+#   DOWN_R_FROM_EXTREME_BPS, DOWN_EXTREME_CONFIRM_PERIODS, DOWN_R_FROM_CASH_BPS, DOWN_CASH_CONFIRM_PERIODS
+#   EMERGENCY_FLOOR_CLOSEVOL_USD6, EMERGENCY_CONFIRM_PERIODS
 # Optional:
 #   CREATOR_FEE_ADDRESS (defaults to GUARDIAN)
 #
@@ -130,7 +135,17 @@ if [[ -z "${PRIVATE_KEY:-}" ]]; then
 fi
 
 # Validate required variables
-required=(POOL_MANAGER VOLATILE STABLE STABLE_DECIMALS TICK_SPACING FLOOR_TIER CAP_TIER FEE_TIERS PERIOD_SECONDS EMA_PERIODS DEADBAND_BPS LULL_RESET_SECONDS CREATOR_FEE_PERCENT)
+required=(
+  POOL_MANAGER VOLATILE STABLE STABLE_DECIMALS TICK_SPACING
+  FLOOR_TIER CAP_TIER FEE_TIERS
+  PERIOD_SECONDS EMA_PERIODS DEADBAND_BPS LULL_RESET_SECONDS
+  CREATOR_FEE_PERCENT
+  CASH_TIER EXTREME_TIER
+  MIN_CLOSEVOL_TO_CASH_USD6 UP_R_TO_CASH_BPS CASH_HOLD_PERIODS
+  MIN_CLOSEVOL_TO_EXTREME_USD6 UP_R_TO_EXTREME_BPS UP_EXTREME_CONFIRM_PERIODS EXTREME_HOLD_PERIODS
+  DOWN_R_FROM_EXTREME_BPS DOWN_EXTREME_CONFIRM_PERIODS DOWN_R_FROM_CASH_BPS DOWN_CASH_CONFIRM_PERIODS
+  EMERGENCY_FLOOR_CLOSEVOL_USD6 EMERGENCY_CONFIRM_PERIODS
+)
 for k in "${required[@]}"; do
   if [[ -z "${!k:-}" ]]; then
     echo "ERROR: missing $k in $HOOK_CONF" >&2
@@ -148,6 +163,15 @@ percent_to_pips() {
       if (p < 1 || p > 1000000) exit 1;
       print p;
     }' 2>/dev/null
+}
+
+require_uint() {
+  local name="$1"
+  local value="${!name:-}"
+  if ! [[ "$value" =~ ^[0-9]+$ ]]; then
+    echo "ERROR: ${name} must be an unsigned integer, got '${value}'." >&2
+    exit 1
+  fi
 }
 
 # Parse fee tiers from percent CSV into hundredths-of-a-bip values expected by the hook.
@@ -224,6 +248,58 @@ if (( FLOOR_IDX > CAP_IDX )); then
 fi
 
 export FLOOR_IDX CAP_IDX
+
+CASH_TIER_PIPS="$(percent_to_pips "$(printf '%s' "${CASH_TIER}" | tr -d '[:space:]')" || true)"
+EXTREME_TIER_PIPS="$(percent_to_pips "$(printf '%s' "${EXTREME_TIER}" | tr -d '[:space:]')" || true)"
+if [[ -z "${CASH_TIER_PIPS}" ]]; then
+  echo "ERROR: CASH_TIER='${CASH_TIER}' is invalid. Use decimal percent format like 0.25." >&2
+  exit 1
+fi
+if [[ -z "${EXTREME_TIER_PIPS}" ]]; then
+  echo "ERROR: EXTREME_TIER='${EXTREME_TIER}' is invalid. Use decimal percent format like 0.90." >&2
+  exit 1
+fi
+
+CASH_IDX=""
+EXTREME_IDX=""
+for i in "${!FEE_TIER_PIPS[@]}"; do
+  if [[ "${FEE_TIER_PIPS[$i]}" == "${CASH_TIER_PIPS}" ]]; then
+    CASH_IDX="${i}"
+  fi
+  if [[ "${FEE_TIER_PIPS[$i]}" == "${EXTREME_TIER_PIPS}" ]]; then
+    EXTREME_IDX="${i}"
+  fi
+done
+
+if [[ -z "${CASH_IDX}" ]]; then
+  echo "ERROR: CASH_TIER=${CASH_TIER}% is not present in FEE_TIERS='${FEE_TIERS}'." >&2
+  exit 1
+fi
+if [[ -z "${EXTREME_IDX}" ]]; then
+  echo "ERROR: EXTREME_TIER=${EXTREME_TIER}% is not present in FEE_TIERS='${FEE_TIERS}'." >&2
+  exit 1
+fi
+if (( FLOOR_IDX > CASH_IDX || CASH_IDX > EXTREME_IDX || EXTREME_IDX > CAP_IDX )); then
+  echo "ERROR: tier bounds must satisfy FLOOR <= CASH <= EXTREME <= CAP (by index in FEE_TIERS)." >&2
+  exit 1
+fi
+
+for n in \
+  MIN_CLOSEVOL_TO_CASH_USD6 \
+  UP_R_TO_CASH_BPS \
+  CASH_HOLD_PERIODS \
+  MIN_CLOSEVOL_TO_EXTREME_USD6 \
+  UP_R_TO_EXTREME_BPS \
+  UP_EXTREME_CONFIRM_PERIODS \
+  EXTREME_HOLD_PERIODS \
+  DOWN_R_FROM_EXTREME_BPS \
+  DOWN_EXTREME_CONFIRM_PERIODS \
+  DOWN_R_FROM_CASH_BPS \
+  DOWN_CASH_CONFIRM_PERIODS \
+  EMERGENCY_FLOOR_CLOSEVOL_USD6 \
+  EMERGENCY_CONFIRM_PERIODS; do
+  require_uint "$n"
+done
 
 # Human-friendly percent input in config (10 means 10%).
 if ! [[ "${CREATOR_FEE_PERCENT}" =~ ^[0-9]+$ ]]; then
@@ -302,7 +378,7 @@ export DEPLOY_JSON_PATH="${OUT_PATH}"
 read -r POOL_CURRENCY0 POOL_CURRENCY1 <<< "$(sort_pool_tokens "${VOLATILE}" "${STABLE}")"
 FEE_TIERS_ARG="[$(IFS=,; echo "${FEE_TIER_PIPS[*]}")]"
 CONSTRUCTOR_ARGS_HEX="$(cast abi-encode \
-  "constructor(address,address,address,int24,address,uint8,uint8,uint8,uint24[],uint32,uint8,uint16,uint32,address,address,uint16)" \
+  "constructor(address,address,address,int24,address,uint8,uint8,uint8,uint24[],uint32,uint8,uint16,uint32,address,address,uint16,uint24,uint64,uint16,uint8,uint24,uint64,uint16,uint8,uint8,uint16,uint8,uint16,uint8,uint64,uint8)" \
   "${POOL_MANAGER}" \
   "${POOL_CURRENCY0}" \
   "${POOL_CURRENCY1}" \
@@ -318,7 +394,22 @@ CONSTRUCTOR_ARGS_HEX="$(cast abi-encode \
   "${LULL_RESET_SECONDS}" \
   "${GUARDIAN}" \
   "${CREATOR}" \
-  "${CREATOR_FEE_BPS}")"
+  "${CREATOR_FEE_BPS}" \
+  "${CASH_TIER_PIPS}" \
+  "${MIN_CLOSEVOL_TO_CASH_USD6}" \
+  "${UP_R_TO_CASH_BPS}" \
+  "${CASH_HOLD_PERIODS}" \
+  "${EXTREME_TIER_PIPS}" \
+  "${MIN_CLOSEVOL_TO_EXTREME_USD6}" \
+  "${UP_R_TO_EXTREME_BPS}" \
+  "${UP_EXTREME_CONFIRM_PERIODS}" \
+  "${EXTREME_HOLD_PERIODS}" \
+  "${DOWN_R_FROM_EXTREME_BPS}" \
+  "${DOWN_EXTREME_CONFIRM_PERIODS}" \
+  "${DOWN_R_FROM_CASH_BPS}" \
+  "${DOWN_CASH_CONFIRM_PERIODS}" \
+  "${EMERGENCY_FLOOR_CLOSEVOL_USD6}" \
+  "${EMERGENCY_CONFIRM_PERIODS}")"
 if [[ -z "${CONSTRUCTOR_ARGS_HEX}" || "${CONSTRUCTOR_ARGS_HEX}" == "0x" ]]; then
   echo "ERROR: failed to encode constructor args" >&2
   exit 1

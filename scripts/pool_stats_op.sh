@@ -336,6 +336,7 @@ headers = [
     "Fee p90",
     "ID"
 ]
+# Account-type enrichment (EOA/Router) is intentionally omitted to avoid extra RPC code lookups.
 
 rows = []
 for r in results:
