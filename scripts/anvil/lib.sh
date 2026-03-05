@@ -34,25 +34,67 @@ to_hex_uint() {
 }
 
 rpc_call() {
-  cast rpc --rpc-url "${RPC_URL}" "$@"
+  local method="${1:?rpc method is required}"
+  local params_json="${2:-[]}"
+  local payload response rc
+
+  payload="$(jq -cn --arg m "${method}" --argjson p "${params_json}" '{jsonrpc:"2.0",id:1,method:$m,params:$p}')" || return 1
+
+  set +e
+  response="$(curl -fsS -H "Content-Type: application/json" --data "${payload}" "${RPC_URL}" 2>&1)"
+  rc=$?
+  set -e
+  if [[ "${rc}" -ne 0 ]]; then
+    debug "rpc_call transport error method=${method}: ${response}"
+    return 1
+  fi
+
+  if jq -e '.error != null' >/dev/null 2>&1 <<<"${response}"; then
+    debug "rpc_call rpc error method=${method}: ${response}"
+    return 1
+  fi
+
+  jq -r 'if (.result|type) == "string" then .result else (.result|tojson) end' <<<"${response}"
+}
+
+evm_snapshot() {
+  local snap_id
+  snap_id="$(rpc_call "evm_snapshot" "[]" 2>/dev/null || true)"
+  if [[ -z "${snap_id}" || "${snap_id}" == "null" ]]; then
+    return 1
+  fi
+  printf '%s\n' "${snap_id}"
+}
+
+evm_revert() {
+  local snapshot_id="${1:?snapshot id is required}"
+  local params out
+  params="$(jq -cn --arg s "${snapshot_id}" '[$s]')" || return 1
+  out="$(rpc_call "evm_revert" "${params}" 2>/dev/null || true)"
+  if [[ "${out}" == "true" ]]; then
+    printf 'true\n'
+    return 0
+  fi
+  printf 'false\n'
+  return 1
 }
 
 mine() {
-  rpc_call evm_mine >/dev/null
+  rpc_call "evm_mine" "[]" >/dev/null
 }
 
 warp_seconds() {
   local delta="${1:?delta seconds is required}"
-  rpc_call evm_increaseTime "${delta}" >/dev/null
+  rpc_call "evm_increaseTime" "[${delta}]" >/dev/null
   mine
 }
 
 warp_to() {
   local ts="${1:?timestamp is required}"
-  if rpc_call anvil_setNextBlockTimestamp "${ts}" >/dev/null 2>&1; then
+  if rpc_call "anvil_setNextBlockTimestamp" "[${ts}]" >/dev/null 2>&1; then
     :
   else
-    rpc_call evm_setNextBlockTimestamp "${ts}" >/dev/null
+    rpc_call "evm_setNextBlockTimestamp" "[${ts}]" >/dev/null
   fi
   mine
 }
@@ -306,16 +348,104 @@ compute_pool_id() {
 set_eth_balance() {
   local addr="${1:?address is required}"
   local wei="${2:?wei value is required}"
-  local hex_value
+  local hex_value params
   hex_value="$(to_hex_uint "${wei}")"
-  rpc_call anvil_setBalance "${addr}" "${hex_value}" >/dev/null
+  params="$(jq -cn --arg a "${addr}" --arg v "${hex_value}" '[$a,$v]')" || return 1
+  rpc_call "anvil_setBalance" "${params}" >/dev/null
 }
 
 block_timestamp() {
   local block_json ts_hex
-  block_json="$(rpc_call eth_getBlockByNumber latest false)"
+  block_json="$(rpc_call "eth_getBlockByNumber" '["latest", false]')"
   ts_hex="$(jq -r '.timestamp' <<<"${block_json}")"
   cast to-dec "${ts_hex}"
+}
+
+line_kv_get() {
+  local line="$1"
+  local key="$2"
+  tr ' ' '\n' <<<"${line}" | sed -n "s/^${key}=//p" | head -n 1
+}
+
+get_fee_tier() {
+  local hook="${1:-${HOOK_ADDRESS:-}}"
+  local fee
+  [[ -n "${hook}" ]] || return 1
+  fee="$(cast_call_single "${hook}" "currentFeeBips()(uint24)" || true)"
+  if [[ "${fee}" =~ ^[0-9]+$ ]]; then
+    printf '%s\n' "${fee}"
+  else
+    printf 'NOT_INITIALIZED\n'
+  fi
+}
+
+get_state_debug() {
+  local hook="${1:-${HOOK_ADDRESS:-}}"
+  local state_json fee_idx hold_remaining up_streak down_streak emergency_streak period_start period_vol ema_vol rbps
+  [[ -n "${hook}" ]] || return 1
+
+  state_json="$(cast_call_json "${hook}" "getStateDebug()(uint8,uint8,uint8,uint8,uint8,uint64,uint64,uint96,bool)")" || return 1
+  fee_idx="$(jq -r '.[0]' <<<"${state_json}")"
+  hold_remaining="$(jq -r '.[1]' <<<"${state_json}")"
+  up_streak="$(jq -r '.[2]' <<<"${state_json}")"
+  down_streak="$(jq -r '.[3]' <<<"${state_json}")"
+  emergency_streak="$(jq -r '.[4]' <<<"${state_json}")"
+  period_start="$(jq -r '.[5]' <<<"${state_json}")"
+  period_vol="$(jq -r '.[6]' <<<"${state_json}")"
+  ema_vol="$(jq -r '.[7]' <<<"${state_json}")"
+
+  rbps="0"
+  if [[ "${ema_vol}" =~ ^[0-9]+$ && "${period_vol}" =~ ^[0-9]+$ && "${ema_vol}" != "0" ]]; then
+    rbps="$(python3 - <<'PY' "${period_vol}" "${ema_vol}"
+import sys
+pv = int(sys.argv[1])
+ev = int(sys.argv[2])
+print((pv * 10000) // ev if ev > 0 else 0)
+PY
+)"
+  fi
+
+  printf 'feeIdx=%s rBps=%s closeVol=%s holdRemaining=%s emaVol=%s periodStart=%s upStreak=%s downStreak=%s emergencyStreak=%s\n' \
+    "${fee_idx}" "${rbps}" "${period_vol}" "${hold_remaining}" "${ema_vol}" "${period_start}" \
+    "${up_streak}" "${down_streak}" "${emergency_streak}"
+}
+
+checkpoint() {
+  local label="${1:?checkpoint label is required}"
+  local expected_fee="${2:-}"
+  local hook="${HOOK_ADDRESS:-}"
+  local fee state rbps close_vol hold_remaining line
+
+  [[ -n "${hook}" ]] || return 1
+
+  fee="$(get_fee_tier "${hook}" || true)"
+  state="$(get_state_debug "${hook}" || true)"
+  rbps="$(line_kv_get "${state}" "rBps")"
+  close_vol="$(line_kv_get "${state}" "closeVol")"
+  hold_remaining="$(line_kv_get "${state}" "holdRemaining")"
+
+  [[ -n "${rbps}" ]] || rbps="n/a"
+  [[ -n "${close_vol}" ]] || close_vol="n/a"
+  [[ -n "${hold_remaining}" ]] || hold_remaining="n/a"
+
+  if [[ -n "${expected_fee}" ]]; then
+    line="checkpoint=${label} feeTier=${fee} expectedFee=${expected_fee} rBps=${rbps} closeVol=${close_vol} holdRemaining=${hold_remaining}"
+  else
+    line="checkpoint=${label} feeTier=${fee} expectedFee=- rBps=${rbps} closeVol=${close_vol} holdRemaining=${hold_remaining}"
+  fi
+
+  if [[ "${VERBOSE}" == "1" ]]; then
+    printf '%s\n' "${line}" >&2
+  fi
+
+  if [[ -n "${expected_fee}" ]]; then
+    assert_eq "checkpoint ${label} fee" "${fee}" "${expected_fee}" || {
+      printf '%s\n' "${line}"
+      return 1
+    }
+  fi
+
+  printf '%s\n' "${line}"
 }
 
 call_hook_getters() {

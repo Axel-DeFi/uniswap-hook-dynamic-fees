@@ -10,6 +10,7 @@ set -euo pipefail
 # Optional env:
 #   SEPOLIA_FORK_BLOCK Fork block number (default: latest).
 #   VERBOSE=1          Enable verbose debug logs.
+#   DISABLE_SNAPSHOT=1 Disable scenario snapshot isolation (debug only).
 #
 # What this validates:
 #   - Deploy/create pipeline against local Anvil fork (no manual steps).
@@ -27,6 +28,7 @@ require_cmd forge
 require_cmd jq
 require_cmd python3
 require_cmd rg
+require_cmd curl
 
 : "${SEPOLIA_FORK_URL:?SEPOLIA_FORK_URL is required}"
 : "${PRIVATE_KEY:?PRIVATE_KEY is required}"
@@ -35,6 +37,7 @@ export CHAIN="sepolia"
 ANVIL_RPC_URL="http://127.0.0.1:8545"
 export RPC_URL="${ANVIL_RPC_URL}"
 export VERBOSE="${VERBOSE:-0}"
+DISABLE_SNAPSHOT="${DISABLE_SNAPSHOT:-0}"
 
 OWNER_PK="${PRIVATE_KEY}"
 GUARDIAN_PK="0x59c6995e998f97a5a0044966f0945385aace2f59b95f4d9b3e9b6a38f9f6f62b"
@@ -80,6 +83,9 @@ SC_KEYS=""
 SC_FEE_BEFORE=""
 SC_FEE_AFTER=""
 SC_EXPECTED_FLOOR=""
+SC_CHECKPOINT_LINES=()
+BASE_SNAPSHOT_ID=""
+SCENARIO_SNAPSHOT_ID=""
 
 cleanup() {
   if [[ -n "${ANVIL_PID}" ]]; then
@@ -149,6 +155,142 @@ safe_expected_floor_bips() {
   fi
 }
 
+snapshot_enabled() {
+  [[ "${DISABLE_SNAPSHOT}" != "1" ]]
+}
+
+snapshot_take_safe() {
+  local label="$1"
+  local snap_id
+  snap_id="$(evm_snapshot 2>/dev/null || true)"
+  if [[ -z "${snap_id}" || "${snap_id}" == "null" ]]; then
+    log "WARN: snapshot failed (${label})"
+    return 1
+  fi
+  printf '%s\n' "${snap_id}"
+}
+
+snapshot_revert_safe() {
+  local snap_id="$1"
+  local label="$2"
+  local reverted
+  reverted="$(evm_revert "${snap_id}" 2>/dev/null || true)"
+  if [[ "${reverted}" != "true" ]]; then
+    log "WARN: revert failed (${label}) id=${snap_id}"
+    return 1
+  fi
+  return 0
+}
+
+init_baseline_snapshot() {
+  if ! snapshot_enabled; then
+    log "snapshot isolation: disabled (DISABLE_SNAPSHOT=1)"
+    return 0
+  fi
+  BASE_SNAPSHOT_ID="$(snapshot_take_safe "baseline init")" || return 1
+  return 0
+}
+
+prepare_scenario_isolation() {
+  local scenario_id="$1"
+  if ! snapshot_enabled; then
+    SCENARIO_SNAPSHOT_ID=""
+    return 0
+  fi
+  if [[ -z "${BASE_SNAPSHOT_ID}" ]]; then
+    log "WARN: missing baseline snapshot before ${scenario_id}"
+    return 1
+  fi
+  snapshot_revert_safe "${BASE_SNAPSHOT_ID}" "before ${scenario_id}" || return 1
+  BASE_SNAPSHOT_ID="$(snapshot_take_safe "baseline refresh before ${scenario_id}")" || return 1
+  SCENARIO_SNAPSHOT_ID="$(snapshot_take_safe "scenario ${scenario_id} start")" || return 1
+  return 0
+}
+
+finalize_scenario_isolation() {
+  local scenario_id="$1"
+  if ! snapshot_enabled; then
+    return 0
+  fi
+  if [[ -z "${SCENARIO_SNAPSHOT_ID}" ]]; then
+    log "WARN: missing scenario snapshot during cleanup (${scenario_id})"
+    return 1
+  fi
+  snapshot_revert_safe "${SCENARIO_SNAPSHOT_ID}" "after ${scenario_id}" || return 1
+  SCENARIO_SNAPSHOT_ID=""
+  BASE_SNAPSHOT_ID="$(snapshot_take_safe "baseline refresh after ${scenario_id}")" || return 1
+  return 0
+}
+
+scenario_checkpoint() {
+  local label="$1"
+  local expected_fee="${2:-}"
+  local line
+
+  if [[ -n "${expected_fee}" ]]; then
+    if ! line="$(checkpoint "${label}" "${expected_fee}")"; then
+      SC_CHECKPOINT_LINES+=("${line:-checkpoint=${label} failed}")
+      return 1
+    fi
+  else
+    if ! line="$(checkpoint "${label}")"; then
+      SC_CHECKPOINT_LINES+=("${line:-checkpoint=${label} failed}")
+      return 1
+    fi
+  fi
+  SC_CHECKPOINT_LINES+=("${line}")
+  return 0
+}
+
+compact_checkpoint_entry() {
+  local line="$1"
+  local label fee expected
+  label="$(kv_get "${line}" "checkpoint")"
+  fee="$(kv_get "${line}" "feeTier")"
+  expected="$(kv_get "${line}" "expectedFee")"
+
+  [[ -n "${label}" ]] || label="unknown"
+  [[ -n "${fee}" ]] || fee="n/a"
+
+  if [[ -n "${expected}" && "${expected}" != "-" ]]; then
+    printf '%s:%s/%s' "${label}" "${fee}" "${expected}"
+  else
+    printf '%s:%s' "${label}" "${fee}"
+  fi
+}
+
+checkpoint_summary_compact() {
+  local total max i item out
+  total="${#SC_CHECKPOINT_LINES[@]}"
+  if (( total == 0 )); then
+    printf 'checkpoints=n/a\n'
+    return 0
+  fi
+
+  if [[ "${VERBOSE}" == "1" ]]; then
+    max="${total}"
+  else
+    max=4
+  fi
+
+  out=""
+  for i in $(seq 0 $((total - 1))); do
+    if (( i >= max )); then
+      break
+    fi
+    item="$(compact_checkpoint_entry "${SC_CHECKPOINT_LINES[$i]}")"
+    if [[ -z "${out}" ]]; then
+      out="${item}"
+    else
+      out="${out},${item}"
+    fi
+  done
+  if (( total > max )); then
+    out="${out},..."
+  fi
+  printf 'checkpoints=%s\n' "${out}"
+}
+
 record_scenario() {
   local id="$1"
   local status="$2"
@@ -178,34 +320,66 @@ scenario_field_by_id() {
 run_scenario() {
   local id="$1"
   local fn="$2"
-  local status reason metrics
+  local status reason metrics checkpoint_summary
+  local scenario_ok=0
+  local isolation_ok=1
 
   SC_REASON=""
   SC_KEYS=""
+  SC_CHECKPOINT_LINES=()
+
+  if ! prepare_scenario_isolation "${id}"; then
+    isolation_ok=0
+  fi
+
   SC_FEE_BEFORE="$(safe_current_fee_bips)"
   SC_EXPECTED_FLOOR="$(safe_expected_floor_bips)"
 
   log "==> ${id}"
   log "${id}: fee_before=${SC_FEE_BEFORE} expected_floor=${SC_EXPECTED_FLOOR}"
   if "${fn}"; then
+    scenario_ok=1
+  else
+    scenario_ok=0
+  fi
+
+  if snapshot_enabled && [[ -n "${SCENARIO_SNAPSHOT_ID}" ]]; then
+    if ! finalize_scenario_isolation "${id}"; then
+      isolation_ok=0
+    fi
+  fi
+
+  SC_FEE_AFTER="$(safe_current_fee_bips)"
+  log "${id}: fee_after=${SC_FEE_AFTER} expected_floor=${SC_EXPECTED_FLOOR}"
+  checkpoint_summary="$(checkpoint_summary_compact)"
+
+  metrics="${SC_KEYS}"
+  if [[ -z "${metrics}" ]]; then
+    metrics="${checkpoint_summary} feeBefore=${SC_FEE_BEFORE} feeAfter=${SC_FEE_AFTER} expectedFloor=${SC_EXPECTED_FLOOR}"
+  else
+    metrics="${metrics} ${checkpoint_summary} feeBefore=${SC_FEE_BEFORE} feeAfter=${SC_FEE_AFTER} expectedFloor=${SC_EXPECTED_FLOOR}"
+  fi
+
+  if (( scenario_ok == 1 && isolation_ok == 1 )); then
     status="PASS"
     reason="${SC_REASON:-ok}"
     PASS_COUNT=$((PASS_COUNT + 1))
   else
     status="FAIL"
-    reason="${SC_REASON:-failed}"
+    if (( isolation_ok == 0 )); then
+      if [[ -n "${SC_REASON}" ]]; then
+        reason="snapshot isolation failed; ${SC_REASON}"
+      elif (( scenario_ok == 1 )); then
+        reason="snapshot isolation failed"
+      else
+        reason="snapshot isolation failed; failed"
+      fi
+    else
+      reason="${SC_REASON:-failed}"
+    fi
     FAIL_COUNT=$((FAIL_COUNT + 1))
   fi
 
-  SC_FEE_AFTER="$(safe_current_fee_bips)"
-  log "${id}: fee_after=${SC_FEE_AFTER} expected_floor=${SC_EXPECTED_FLOOR}"
-
-  metrics="${SC_KEYS}"
-  if [[ -z "${metrics}" ]]; then
-    metrics="feeBefore=${SC_FEE_BEFORE} feeAfter=${SC_FEE_AFTER} expectedFloor=${SC_EXPECTED_FLOOR}"
-  else
-    metrics="${metrics} feeBefore=${SC_FEE_BEFORE} feeAfter=${SC_FEE_AFTER} expectedFloor=${SC_EXPECTED_FLOOR}"
-  fi
   record_scenario "${id}" "${status}" "${reason}" "${metrics}"
   log "${id}: ${status} - ${reason} | ${metrics}"
 }
@@ -722,6 +896,7 @@ scenario_s0() {
   fee_floor="$(tier_by_idx "${FLOOR_IDX}")"
   current_fee="$(cast_call_single "${HOOK_ADDRESS}" "currentFeeBips()(uint24)")"
   assert_eq "initial fee is floor" "${current_fee}" "${fee_floor}" || return 1
+  scenario_checkpoint "after_create_pool_expect_floor" "${fee_floor}" || return 1
 
   expected_mask=$(( (1 << 12) + (1 << 7) + (1 << 6) + (1 << 3) ))
   hook_int="$(python3 - <<'PY' "${HOOK_ADDRESS}"
@@ -741,6 +916,7 @@ PY
 )" "${DYNAMIC_FEE_FLAG}" || return 1
 
   swap_exact_in_eth "2000000000000000" || return 1
+  scenario_checkpoint "after_min_swap" || return 1
 
   current_fee="$(cast_call_single "${HOOK_ADDRESS}" "currentFeeBips()(uint24)")"
   assert_eq "fee after smoke swap remains floor" "${current_fee}" "${fee_floor}" || return 1
@@ -825,6 +1001,7 @@ scenario_s2() {
   ema="$(cast_call_single "${HOOK_ADDRESS}" "emaPeriods()(uint8)")"
   lull="$(cast_call_single "${HOOK_ADDRESS}" "lullResetSeconds()(uint32)")"
   deadband="$(cast_call_single "${HOOK_ADDRESS}" "deadbandBps()(uint16)")"
+  scenario_checkpoint "before_pause" || return 1
 
   swap_exact_in_eth "3000000000000000" || return 1
   close_period_with_seed_eth "1000000000000000" || return 1
@@ -834,6 +1011,7 @@ scenario_s2() {
     "${err_requires_paused}" || return 1
 
   cast_send_retry --private-key "${GUARDIAN_PK}" "${HOOK_ADDRESS}" "pause()" >/dev/null || return 1
+  scenario_checkpoint "after_pause" || return 1
   cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" \
     "setFeeTiersAndRoles(uint24[],uint8,uint8,uint8,uint8)" "${tiers_arg}" "${FLOOR_IDX}" "${CASH_IDX}" "${EXTREME_IDX}" "${CAP_IDX}" >/dev/null || return 1
 
@@ -855,6 +1033,7 @@ scenario_s2() {
   if (( period_start > now_ts + 2 || period_start + 2 < now_ts )); then
     set_scenario_fail "periodStart mismatch after setFeeTiersAndRoles reset" || return 1
   fi
+  scenario_checkpoint "after_setFeeTiersAndRoles_expect_reset_floor" "${floor_fee}" || return 1
   assert_eq "paused true after pause flow" "$(cast_call_single "${HOOK_ADDRESS}" "isPaused()(bool)")" "true" || return 1
   cast_send_retry --private-key "${GUARDIAN_PK}" "${HOOK_ADDRESS}" "unpause()" >/dev/null || return 1
   assert_eq "fee still floor after tiers reset" "$(cast_call_single "${HOOK_ADDRESS}" "currentFeeBips()(uint24)")" "${floor_fee}" || return 1
@@ -887,7 +1066,9 @@ scenario_s2() {
   if (( period_start > now_ts + 2 || period_start + 2 < now_ts )); then
     set_scenario_fail "periodStart mismatch after setTimingParams reset" || return 1
   fi
+  scenario_checkpoint "after_setTimingParams_expect_reset_floor" "${floor_fee}" || return 1
   cast_send_retry --private-key "${GUARDIAN_PK}" "${HOOK_ADDRESS}" "unpause()" >/dev/null || return 1
+  scenario_checkpoint "after_unpause" || return 1
 
   SC_REASON="pause gating for cold updates enforced; reset semantics deterministic"
   refresh_metrics
@@ -960,7 +1141,7 @@ scenario_s4() {
 
 scenario_s5() {
   local state_json fee_idx hold_rem up_streak down_streak em_streak
-  local floor_idx cash_idx extreme_idx saw_up_confirm
+  local floor_idx cash_idx extreme_idx floor_fee cash_fee extreme_fee saw_up_confirm
   local high_swap low_swap
   local -a high_steps
 
@@ -973,6 +1154,9 @@ scenario_s5() {
   floor_idx="${FLOOR_IDX}"
   cash_idx="${CASH_IDX}"
   extreme_idx="${EXTREME_IDX}"
+  floor_fee="$(tier_by_idx "${floor_idx}")"
+  cash_fee="$(tier_by_idx "${cash_idx}")"
+  extreme_fee="$(tier_by_idx "${extreme_idx}")"
 
   reset_state_floor_unpaused || return 1
   cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" "setCreatorFeePercent(uint16)" 0 >/dev/null || return 1
@@ -995,11 +1179,13 @@ scenario_s5() {
 
   state_json="$(state_debug_json)"
   assert_eq "bootstrap ema starts at 0" "$(jq -r '.[7]' <<<"${state_json}")" "0" || return 1
+  scenario_checkpoint "before_bootstrap" || return 1
 
   swap_exact_in_eth "${high_swap}" || return 1
   close_period_with_seed_eth "${high_swap}" || return 1
   fee_idx="$(jq -r '.[0]' <<<"$(state_debug_json)")"
   assert_eq "bootstrap closure stays floor" "${fee_idx}" "${floor_idx}" || return 1
+  scenario_checkpoint "after_bootstrap_close" || return 1
 
   close_until_idx_eth "${cash_idx}" 6 "${high_steps[@]}" || {
     set_fail_with_state "jump to cash failed" || return 1
@@ -1007,6 +1193,7 @@ scenario_s5() {
   state_json="$(state_debug_json)"
   hold_rem="$(jq -r '.[1]' <<<"${state_json}")"
   assert_true "cash hold set >0" "[[ ${hold_rem} -gt 0 ]]" || return 1
+  scenario_checkpoint "enter_cash" "${cash_fee}" || return 1
 
   saw_up_confirm=0
   local extreme_round
@@ -1042,6 +1229,7 @@ scenario_s5() {
     set_fail_with_state "jump to extreme after confirms failed" || return 1
   fi
   assert_true "extreme hold set >0" "[[ ${hold_rem} -gt 0 ]]" || return 1
+  scenario_checkpoint "enter_extreme" "${extreme_fee}" || return 1
 
   close_period_with_seed_eth "${low_swap}" || return 1
   assert_eq "down blocked by hold #1" "$(jq -r '.[0]' <<<"$(state_debug_json)")" "${extreme_idx}" || return 1
@@ -1053,12 +1241,14 @@ scenario_s5() {
 
   close_period_with_seed_eth "${low_swap}" || return 1
   assert_eq "extreme down to cash after confirms" "$(jq -r '.[0]' <<<"$(state_debug_json)")" "${cash_idx}" || return 1
+  scenario_checkpoint "down_to_cash" "${cash_fee}" || return 1
 
   close_period_with_seed_eth "${low_swap}" || return 1
   assert_eq "cash down confirm #1 keeps cash" "$(jq -r '.[0]' <<<"$(state_debug_json)")" "${cash_idx}" || return 1
 
   close_period_with_seed_eth "${low_swap}" || return 1
   assert_eq "cash down to floor after confirms" "$(jq -r '.[0]' <<<"$(state_debug_json)")" "${floor_idx}" || return 1
+  scenario_checkpoint "down_to_floor" "${floor_fee}" || return 1
 
   CP_EMERGENCY_FLOOR_CLOSEVOL_USD6="900000000000"
   CP_EMERGENCY_CONFIRM_PERIODS="2"
@@ -1088,6 +1278,7 @@ scenario_s5() {
   assert_eq "emergency reset up streak" "${up_streak}" "0" || return 1
   assert_eq "emergency reset down streak" "${down_streak}" "0" || return 1
   assert_eq "emergency reset emergency streak" "${em_streak}" "0" || return 1
+  scenario_checkpoint "emergency_floor" "${floor_fee}" || return 1
 
   restore_base_controller || return 1
 
@@ -1147,6 +1338,7 @@ scenario_s7() {
   close_until_idx_eth "${cash_idx}" 6 "${high_steps[@]}" || {
     set_fail_with_state "lull precondition did not reach cash" || return 1
   }
+  scenario_checkpoint "pre_lull" || return 1
 
   lull="$(cast_call_single "${HOOK_ADDRESS}" "lullResetSeconds()(uint32)")"
   warp_seconds "$((lull + 1))"
@@ -1165,6 +1357,7 @@ scenario_s7() {
   assert_eq "lull reset up streak" "${up_streak}" "0" || return 1
   assert_eq "lull reset down streak" "${down_streak}" "0" || return 1
   assert_eq "lull reset emergency streak" "${em_streak}" "0" || return 1
+  scenario_checkpoint "post_lull_reset_expect_floor" "$(tier_by_idx "${floor_idx}")" || return 1
 
   restore_base_controller || return 1
 
@@ -1232,6 +1425,9 @@ main() {
 
   load_fee_tiers || die "Failed to load fee tiers after deployment"
   persist_base_controller || die "Failed to load base controller params"
+  if ! init_baseline_snapshot; then
+    log "WARN: snapshot baseline init failed; scenarios will be marked non-deterministic"
+  fi
 
   run_scenario "S0" scenario_s0
   run_scenario "S1" scenario_s1
