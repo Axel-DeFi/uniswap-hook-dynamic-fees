@@ -149,6 +149,7 @@ abstract contract VolumeDynamicFeeHookInvariantBase is
             EMA_PERIODS,
             DEADBAND_BPS,
             LULL_RESET_SECONDS,
+            address(this),
             address(handler),
             address(handler),
             CREATOR_FEE_BPS
@@ -172,6 +173,7 @@ abstract contract VolumeDynamicFeeHookInvariantBase is
             EMA_PERIODS,
             DEADBAND_BPS,
             LULL_RESET_SECONDS,
+            address(this),
             address(handler),
             address(handler),
             CREATOR_FEE_BPS
@@ -203,20 +205,26 @@ abstract contract VolumeDynamicFeeHookInvariantBase is
     function invariant_feeIdxAlwaysWithinBounds() public view {
         (,, uint64 ps, uint8 feeIdx, uint8 lastDir) = hook.unpackedState();
         assertTrue(ps != 0, "not initialized");
-        assertTrue(feeIdx >= FLOOR_IDX && feeIdx <= CAP_IDX, "feeIdx out of bounds");
+        assertTrue(feeIdx < hook.feeTierCount(), "feeIdx >= feeTierCount");
+        assertTrue(feeIdx >= hook.floorIdx() && feeIdx <= hook.capIdx(), "feeIdx out of floor/cap bounds");
         assertTrue(lastDir <= 2, "lastDir out of range");
     }
 
     function invariant_pausedMeansFloorFee() public view {
         if (!hook.isPaused()) return;
         (,,, uint8 feeIdx,) = hook.unpackedState();
-        assertEq(feeIdx, FLOOR_IDX, "paused feeIdx mismatch");
-        assertEq(hook.currentFeeBips(), hook.feeTiers(uint256(FLOOR_IDX)), "paused fee mismatch");
+        assertEq(feeIdx, hook.floorIdx(), "paused feeIdx mismatch");
+        assertEq(hook.currentFeeBips(), hook.feeTiers(uint256(hook.floorIdx())), "paused fee mismatch");
     }
 
     function invariant_currentFeeMatchesTier() public view {
         (,,, uint8 feeIdx,,) = _unpack();
-        assertEq(hook.currentFeeBips(), hook.feeTiers(uint256(feeIdx)), "fee tier mismatch");
+        uint24 currentFee = hook.currentFeeBips();
+        uint24 floorFee = hook.feeTiers(uint256(hook.floorIdx()));
+        uint24 capFee = hook.feeTiers(uint256(hook.capIdx()));
+        assertEq(currentFee, hook.feeTiers(uint256(feeIdx)), "fee tier mismatch");
+        assertTrue(currentFee >= floorFee, "fee below floor");
+        assertTrue(currentFee <= capFee, "fee above cap");
     }
 
     function _unpack()

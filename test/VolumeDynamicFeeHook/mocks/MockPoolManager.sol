@@ -19,6 +19,7 @@ contract MockPoolManager {
     uint24 public lastFee;
     uint256 public updateCount;
     uint256 public unlockCount;
+    uint256 public takeCount;
     bool public skipUnlockCallback;
     uint64 public observedPeriodVolUsd6;
     uint96 public observedEmaVolUsd6;
@@ -57,7 +58,9 @@ contract MockPoolManager {
         values = new bytes32[](slots.length);
     }
 
-    function take(Currency, address, uint256) external {}
+    function take(Currency, address, uint256) external {
+        takeCount += 1;
+    }
 
     function sync(Currency) external {}
 

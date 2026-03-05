@@ -94,6 +94,7 @@ contract VolumeDynamicFeeHookFuzzTest is Test, VolumeDynamicFeeHookV2DeployHelpe
             LULL_RESET_SECONDS,
             address(this),
             address(this),
+            address(this),
             CREATOR_FEE_BPS
         );
 
@@ -115,6 +116,7 @@ contract VolumeDynamicFeeHookFuzzTest is Test, VolumeDynamicFeeHookV2DeployHelpe
             EMA_PERIODS,
             DEADBAND_BPS,
             LULL_RESET_SECONDS,
+            address(this),
             address(this),
             address(this),
             CREATOR_FEE_BPS
@@ -165,17 +167,22 @@ contract VolumeDynamicFeeHookFuzzTest is Test, VolumeDynamicFeeHookV2DeployHelpe
         (uint64 pv, uint96 ema, uint64 ps, uint8 feeIdx, uint8 lastDir) = s.hook.unpackedState();
 
         assertTrue(ps != 0, "periodStart==0");
-        assertTrue(feeIdx >= FLOOR_IDX && feeIdx <= CAP_IDX, "feeIdx out of bounds");
+        assertTrue(feeIdx < s.hook.feeTierCount(), "feeIdx >= feeTierCount");
+        assertTrue(feeIdx >= s.hook.floorIdx() && feeIdx <= s.hook.capIdx(), "feeIdx out of floor/cap bounds");
         assertTrue(lastDir <= 2, "lastDir out of range");
 
         if (s.hook.isPaused()) {
-            assertEq(feeIdx, FLOOR_IDX, "paused feeIdx mismatch");
+            assertEq(feeIdx, s.hook.floorIdx(), "paused feeIdx mismatch");
             assertEq(pv, 0, "paused pv must be 0");
             assertEq(ema, 0, "paused ema must be 0");
         }
 
         uint24 fee = s.hook.currentFeeBips();
+        uint24 floorFee = s.hook.feeTiers(uint256(s.hook.floorIdx()));
+        uint24 capFee = s.hook.feeTiers(uint256(s.hook.capIdx()));
         assertEq(fee, s.hook.feeTiers(uint256(feeIdx)), "fee tier mismatch");
+        assertTrue(fee >= floorFee, "fee below floor");
+        assertTrue(fee <= capFee, "fee above cap");
     }
 
     /// @notice Randomized long sequence: swaps + time jumps + pause/unpause.
@@ -213,26 +220,15 @@ contract VolumeDynamicFeeHookFuzzTest is Test, VolumeDynamicFeeHookV2DeployHelpe
     function testFuzz_lullReset_restoresFloorAndClearsEma(uint256 seed) public {
         Scenario storage s = _pick(seed);
 
-        // Seed EMA and ensure fee moves above floor before lull.
-        uint128 vol = uint128(bound(seed, 2_000_000, 5_000_000_000));
-        manager.callAfterSwap(s.hook, s.key, _deltaStableAbs(s.stableIsCurrency0, vol));
+        // Seed EMA at floor.
+        manager.callAfterSwap(s.hook, s.key, _deltaStableAbs(s.stableIsCurrency0, 1_000_000_000));
         vm.warp(block.timestamp + PERIOD_SECONDS);
         manager.callAfterSwap(s.hook, s.key, _deltaZero());
 
-        uint256 targetUp = uint256(vol) + (uint256(vol) * (uint256(DEADBAND_BPS) + 2000)) / 10_000 + 2_000_000;
-        if (targetUp > MAX_VOL) targetUp = MAX_VOL;
-        uint128 upVol = uint128(targetUp);
-        if (upVol <= vol) upVol = vol + 2_000_000;
-        for (uint256 i = 0; i < 3; i++) {
-            manager.callAfterSwap(s.hook, s.key, _deltaStableAbs(s.stableIsCurrency0, upVol));
-            vm.warp(block.timestamp + PERIOD_SECONDS);
-            manager.callAfterSwap(s.hook, s.key, _deltaZero());
-            (,,, uint8 idx,) = s.hook.unpackedState();
-            if (idx > FLOOR_IDX) break;
-            uint256 nextUp = uint256(upVol) * 2;
-            if (nextUp > MAX_VOL) nextUp = MAX_VOL;
-            upVol = uint128(nextUp);
-        }
+        // Force floor -> cash jump.
+        manager.callAfterSwap(s.hook, s.key, _deltaStableAbs(s.stableIsCurrency0, 50_000_000_000));
+        vm.warp(block.timestamp + PERIOD_SECONDS);
+        manager.callAfterSwap(s.hook, s.key, _deltaZero());
 
         (, uint96 emaBefore,, uint8 feeBefore,) = s.hook.unpackedState();
         assertTrue(emaBefore > 0, "EMA should be seeded");
@@ -269,44 +265,27 @@ contract VolumeDynamicFeeHookFuzzTest is Test, VolumeDynamicFeeHookV2DeployHelpe
         assertEq(lastDir, 0, "dir must be NONE within deadband");
     }
 
-    /// @notice Reversal lock: after moving up, an immediate down signal must be blocked.
-    function testFuzz_reversalLock_blocksImmediateFlip(uint256 seed) public {
+    /// @notice Hold should block immediate down move right after a floor->cash jump.
+    function testFuzz_holdBlocksImmediateDownFromCash(uint256 seed) public {
         Scenario storage s = _pick(seed);
 
-        uint128 seedVol = uint128(bound(seed, 2_000_000, 5_000_000_000));
-        uint256 targetHigh =
-            uint256(seedVol) + (uint256(seedVol) * (uint256(DEADBAND_BPS) + 2000)) / 10_000 + 2_000_000;
-        if (targetHigh > MAX_VOL) targetHigh = MAX_VOL;
-        uint128 highVol = uint128(targetHigh);
-        if (highVol <= seedVol) highVol = seedVol + 2_000_000;
-
         // Seed EMA.
-        manager.callAfterSwap(s.hook, s.key, _deltaStableAbs(s.stableIsCurrency0, seedVol));
+        manager.callAfterSwap(s.hook, s.key, _deltaStableAbs(s.stableIsCurrency0, 1_000_000_000));
         vm.warp(block.timestamp + PERIOD_SECONDS);
         manager.callAfterSwap(s.hook, s.key, _deltaZero());
 
-        // High closes until we get one UP step.
-        for (uint256 i = 0; i < 3; i++) {
-            manager.callAfterSwap(s.hook, s.key, _deltaStableAbs(s.stableIsCurrency0, highVol));
-            vm.warp(block.timestamp + PERIOD_SECONDS);
-            manager.callAfterSwap(s.hook, s.key, _deltaZero());
-            (,,, uint8 idx,) = s.hook.unpackedState();
-            if (idx > FLOOR_IDX) break;
-            uint256 nextHigh = uint256(highVol) * 2;
-            if (nextHigh > MAX_VOL) nextHigh = MAX_VOL;
-            highVol = uint128(nextHigh);
-        }
+        // Force floor->cash jump.
+        manager.callAfterSwap(s.hook, s.key, _deltaStableAbs(s.stableIsCurrency0, 50_000_000_000));
+        vm.warp(block.timestamp + PERIOD_SECONDS);
+        manager.callAfterSwap(s.hook, s.key, _deltaZero());
+        (,,, uint8 feeAfterJump,) = s.hook.unpackedState();
+        assertEq(feeAfterJump, s.hook.cashIdx(), "expected cash regime");
 
-        (,,, uint8 feeAfterUp, uint8 dirAfterUp) = s.hook.unpackedState();
-        assertEq(feeAfterUp, FLOOR_IDX + 1, "expected one step up");
-        assertEq(dirAfterUp, 1, "expected UP dir");
-
-        // Zero close would signal DOWN, but must be blocked.
+        // Immediate zero close should be blocked by hold and keep cash fee.
         vm.warp(block.timestamp + PERIOD_SECONDS);
         manager.callAfterSwap(s.hook, s.key, _deltaZero());
 
-        (,,, uint8 feeAfterAttempt, uint8 dirAfterAttempt) = s.hook.unpackedState();
-        assertEq(feeAfterAttempt, FLOOR_IDX + 1, "reversal lock must block flip");
-        assertEq(dirAfterAttempt, 0, "dir must reset after blocked reversal");
+        (,,, uint8 feeAfterAttempt,) = s.hook.unpackedState();
+        assertEq(feeAfterAttempt, s.hook.cashIdx(), "hold must block immediate down move");
     }
 }

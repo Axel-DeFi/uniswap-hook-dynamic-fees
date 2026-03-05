@@ -67,6 +67,7 @@ abstract contract VolumeDynamicFeeHookV2DeployHelper {
         uint8 emaPeriods,
         uint16 deadbandBps,
         uint32 lullResetSeconds,
+        address owner,
         address guardian,
         address creator,
         uint16 creatorFeeBps
@@ -85,6 +86,7 @@ abstract contract VolumeDynamicFeeHookV2DeployHelper {
             emaPeriods,
             deadbandBps,
             lullResetSeconds,
+            owner,
             guardian,
             creator,
             creatorFeeBps,
@@ -120,6 +122,7 @@ abstract contract VolumeDynamicFeeHookV2DeployHelper {
         uint8 emaPeriods,
         uint16 deadbandBps,
         uint32 lullResetSeconds,
+        address owner,
         address guardian,
         address creator,
         uint16 creatorFeeBps
@@ -138,6 +141,7 @@ abstract contract VolumeDynamicFeeHookV2DeployHelper {
             emaPeriods,
             deadbandBps,
             lullResetSeconds,
+            owner,
             guardian,
             creator,
             creatorFeeBps,
@@ -174,6 +178,7 @@ abstract contract VolumeDynamicFeeHookV2DeployHelper {
         uint8 emaPeriods,
         uint16 deadbandBps,
         uint32 lullResetSeconds,
+        address owner,
         address guardian,
         address creator,
         uint16 creatorFeeBps
@@ -192,6 +197,7 @@ abstract contract VolumeDynamicFeeHookV2DeployHelper {
             emaPeriods,
             deadbandBps,
             lullResetSeconds,
+            owner,
             guardian,
             creator,
             creatorFeeBps,

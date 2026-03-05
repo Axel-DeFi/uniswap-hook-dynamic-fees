@@ -32,6 +32,7 @@ contract VolumeDynamicFeeHookHarness is VolumeDynamicFeeHook {
         uint8 _emaPeriods,
         uint16 _deadbandBps,
         uint32 _lullResetSeconds,
+        address _owner,
         address _guardian,
         address _creator,
         uint16 _creatorFeeBps,
@@ -65,6 +66,7 @@ contract VolumeDynamicFeeHookHarness is VolumeDynamicFeeHook {
             _emaPeriods,
             _deadbandBps,
             _lullResetSeconds,
+            _owner,
             _guardian,
             _creator,
             _creatorFeeBps,
@@ -124,6 +126,7 @@ contract VolumeDynamicFeeHookConfigAndEdgesTest is Test, VolumeDynamicFeeHookV2D
         uint8 emaPeriods;
         uint16 deadbandBps;
         uint32 lullResetSeconds;
+        address owner;
         address guardian;
         address creator;
         uint16 creatorFeeBps;
@@ -160,6 +163,7 @@ contract VolumeDynamicFeeHookConfigAndEdgesTest is Test, VolumeDynamicFeeHookV2D
             emaPeriods: 8,
             deadbandBps: 500,
             lullResetSeconds: LULL_RESET_SECONDS,
+            owner: address(this),
             guardian: address(this),
             creator: address(this),
             creatorFeeBps: 1000
@@ -191,6 +195,7 @@ contract VolumeDynamicFeeHookConfigAndEdgesTest is Test, VolumeDynamicFeeHookV2D
             cfg.emaPeriods,
             cfg.deadbandBps,
             cfg.lullResetSeconds,
+            cfg.owner,
             cfg.guardian,
             cfg.creator,
             cfg.creatorFeeBps,
@@ -269,6 +274,7 @@ contract VolumeDynamicFeeHookConfigAndEdgesTest is Test, VolumeDynamicFeeHookV2D
             cfg.emaPeriods,
             cfg.deadbandBps,
             cfg.lullResetSeconds,
+            cfg.owner,
             cfg.guardian,
             cfg.creator,
             cfg.creatorFeeBps,
@@ -391,7 +397,7 @@ contract VolumeDynamicFeeHookConfigAndEdgesTest is Test, VolumeDynamicFeeHookV2D
         cfg.floorIdx = 5;
         cfg.capIdx = 4;
 
-        vm.expectRevert(VolumeDynamicFeeHook.InvalidConfig.selector);
+        vm.expectRevert(VolumeDynamicFeeHook.InvalidTierBounds.selector);
         _deploy(cfg);
     }
 
@@ -635,21 +641,22 @@ contract VolumeDynamicFeeHookConfigAndEdgesTest is Test, VolumeDynamicFeeHookV2D
         _seedEma();
 
         for (uint256 i = 0; i < 10; i++) {
-            manager.callAfterSwap(hook, key, _deltaA0(-5_000_000_000));
+            manager.callAfterSwap(hook, key, _deltaA0(-50_000_000_000));
             vm.warp(block.timestamp + PERIOD_SECONDS);
             manager.callAfterSwap(hook, key, _deltaZero());
         }
 
         (,,, uint8 idxBefore,) = hook.unpackedState();
-        assertEq(idxBefore, CAP_IDX);
+        assertEq(idxBefore, hook.cashIdx());
 
         uint256 updatesBefore = manager.updateCount();
-        manager.callAfterSwap(hook, key, _deltaA0(-5_000_000_000));
+        manager.callAfterSwap(hook, key, _deltaA0(-50_000_000_000));
         vm.warp(block.timestamp + PERIOD_SECONDS);
         manager.callAfterSwap(hook, key, _deltaZero());
 
         (,,, uint8 idxAfter,) = hook.unpackedState();
-        assertEq(idxAfter, CAP_IDX);
+        assertEq(idxAfter, idxBefore);
+        assertTrue(idxAfter <= CAP_IDX);
         assertEq(manager.updateCount(), updatesBefore);
     }
 
@@ -714,18 +721,18 @@ contract VolumeDynamicFeeHookConfigAndEdgesTest is Test, VolumeDynamicFeeHookV2D
         vm.warp(block.timestamp + PERIOD_SECONDS);
         manager.callAfterSwap(hook, key, _deltaZero());
 
-        // Force one UP step to trigger updateDynamicLPFee().
-        manager.callAfterSwap(hook, key, _deltaA0(-20_000_000));
+        // Force a floor->cash jump in v2 to trigger updateDynamicLPFee().
+        manager.callAfterSwap(hook, key, _deltaA0(-4_000_000_000));
         uint256 closeTs = block.timestamp + PERIOD_SECONDS;
         vm.warp(closeTs);
         manager.callAfterSwap(hook, key, _deltaZero());
 
         assertEq(manager.updateCount(), 2);
-        assertEq(manager.observedFeeIdx(), FLOOR_IDX + 1);
+        assertEq(manager.observedFeeIdx(), hook.cashIdx());
         assertEq(manager.observedPeriodStart(), uint64(closeTs));
         assertEq(manager.observedPeriodVolUsd6(), 0);
-        assertEq(manager.observedEmaVolUsd6(), 4_250_000);
-        assertEq(manager.observedLastDir(), 1);
+        assertEq(manager.observedEmaVolUsd6(), 501_750_000);
+        assertEq(manager.observedLastDir(), 0);
     }
 
     function test_zero_ema_and_zero_close_keeps_fee_at_floor() public {
