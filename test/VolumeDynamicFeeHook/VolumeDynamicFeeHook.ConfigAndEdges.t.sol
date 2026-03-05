@@ -14,6 +14,7 @@ import {LPFeeLibrary} from "@uniswap/v4-core/src/libraries/LPFeeLibrary.sol";
 
 import {VolumeDynamicFeeHook} from "src/VolumeDynamicFeeHook.sol";
 import {MockPoolManager} from "./mocks/MockPoolManager.sol";
+import {VolumeDynamicFeeHookV2DeployHelper} from "./utils/VolumeDynamicFeeHookV2DeployHelper.sol";
 
 /// @notice Harness that bypasses permission-bit address validation to isolate constructor config checks.
 contract VolumeDynamicFeeHookHarness is VolumeDynamicFeeHook {
@@ -33,7 +34,22 @@ contract VolumeDynamicFeeHookHarness is VolumeDynamicFeeHook {
         uint32 _lullResetSeconds,
         address _guardian,
         address _creator,
-        uint16 _creatorFeeBps
+        uint16 _creatorFeeBps,
+        uint24 _cashTier,
+        uint64 _minCloseVolToCashUsd6,
+        uint16 _upRToCashBps,
+        uint8 _cashHoldPeriods,
+        uint24 _extremeTier,
+        uint64 _minCloseVolToExtremeUsd6,
+        uint16 _upRToExtremeBps,
+        uint8 _upExtremeConfirmPeriods,
+        uint8 _extremeHoldPeriods,
+        uint16 _downRFromExtremeBps,
+        uint8 _downExtremeConfirmPeriods,
+        uint16 _downRFromCashBps,
+        uint8 _downCashConfirmPeriods,
+        uint64 _emergencyFloorCloseVolUsd6,
+        uint8 _emergencyConfirmPeriods
     )
         VolumeDynamicFeeHook(
             _poolManager,
@@ -51,7 +67,22 @@ contract VolumeDynamicFeeHookHarness is VolumeDynamicFeeHook {
             _lullResetSeconds,
             _guardian,
             _creator,
-            _creatorFeeBps
+            _creatorFeeBps,
+            _cashTier,
+            _minCloseVolToCashUsd6,
+            _upRToCashBps,
+            _cashHoldPeriods,
+            _extremeTier,
+            _minCloseVolToExtremeUsd6,
+            _upRToExtremeBps,
+            _upExtremeConfirmPeriods,
+            _extremeHoldPeriods,
+            _downRFromExtremeBps,
+            _downExtremeConfirmPeriods,
+            _downRFromCashBps,
+            _downCashConfirmPeriods,
+            _emergencyFloorCloseVolUsd6,
+            _emergencyConfirmPeriods
         )
     {}
 
@@ -66,7 +97,7 @@ contract VolumeDynamicFeeHookHarness is VolumeDynamicFeeHook {
     }
 }
 
-contract VolumeDynamicFeeHookConfigAndEdgesTest is Test {
+contract VolumeDynamicFeeHookConfigAndEdgesTest is Test, VolumeDynamicFeeHookV2DeployHelper {
     event FeeUpdated(uint24 newFee, uint8 newFeeIdx, uint64 closedVolumeUsd6, uint96 emaVolumeUsd6);
     event PeriodClosed(
         uint24 fromFee,
@@ -162,7 +193,22 @@ contract VolumeDynamicFeeHookConfigAndEdgesTest is Test {
             cfg.lullResetSeconds,
             cfg.guardian,
             cfg.creator,
-            cfg.creatorFeeBps
+            cfg.creatorFeeBps,
+            _resolveCashTier(cfg.feeTiers),
+            V2_MIN_CLOSEVOL_TO_CASH_USD6,
+            V2_UP_R_TO_CASH_BPS,
+            V2_CASH_HOLD_PERIODS,
+            _resolveExtremeTier(cfg.feeTiers),
+            V2_MIN_CLOSEVOL_TO_EXTREME_USD6,
+            V2_UP_R_TO_EXTREME_BPS,
+            V2_UP_EXTREME_CONFIRM_PERIODS,
+            V2_EXTREME_HOLD_PERIODS,
+            V2_DOWN_R_FROM_EXTREME_BPS,
+            V2_DOWN_EXTREME_CONFIRM_PERIODS,
+            V2_DOWN_R_FROM_CASH_BPS,
+            V2_DOWN_CASH_CONFIRM_PERIODS,
+            V2_EMERGENCY_FLOOR_CLOSEVOL_USD6,
+            V2_EMERGENCY_CONFIRM_PERIODS
         );
     }
 
@@ -225,7 +271,22 @@ contract VolumeDynamicFeeHookConfigAndEdgesTest is Test {
             cfg.lullResetSeconds,
             cfg.guardian,
             cfg.creator,
-            cfg.creatorFeeBps
+            cfg.creatorFeeBps,
+            _resolveCashTier(cfg.feeTiers),
+            V2_MIN_CLOSEVOL_TO_CASH_USD6,
+            V2_UP_R_TO_CASH_BPS,
+            V2_CASH_HOLD_PERIODS,
+            _resolveExtremeTier(cfg.feeTiers),
+            V2_MIN_CLOSEVOL_TO_EXTREME_USD6,
+            V2_UP_R_TO_EXTREME_BPS,
+            V2_UP_EXTREME_CONFIRM_PERIODS,
+            V2_EXTREME_HOLD_PERIODS,
+            V2_DOWN_R_FROM_EXTREME_BPS,
+            V2_DOWN_EXTREME_CONFIRM_PERIODS,
+            V2_DOWN_R_FROM_CASH_BPS,
+            V2_DOWN_CASH_CONFIRM_PERIODS,
+            V2_EMERGENCY_FLOOR_CLOSEVOL_USD6,
+            V2_EMERGENCY_CONFIRM_PERIODS
         );
     }
 

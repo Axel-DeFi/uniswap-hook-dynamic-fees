@@ -15,10 +15,11 @@ import {HookMiner} from "@uniswap/v4-hooks-public/src/utils/HookMiner.sol";
 
 import {VolumeDynamicFeeHook} from "src/VolumeDynamicFeeHook.sol";
 import {MockPoolManager} from "./mocks/MockPoolManager.sol";
+import {VolumeDynamicFeeHookV2DeployHelper} from "./utils/VolumeDynamicFeeHookV2DeployHelper.sol";
 
 /// @notice Scenario-based fuzz tests designed to be run many times.
 /// @dev "Full" becomes heavier by increasing fuzz runs and by covering multiple valid scenarios.
-contract VolumeDynamicFeeHookFuzzTest is Test {
+contract VolumeDynamicFeeHookFuzzTest is Test, VolumeDynamicFeeHookV2DeployHelper {
     struct Scenario {
         VolumeDynamicFeeHook hook;
         PoolKey key;
@@ -77,7 +78,7 @@ contract VolumeDynamicFeeHookFuzzTest is Test {
                 | Hooks.AFTER_SWAP_FLAG
         );
 
-        bytes memory constructorArgs = abi.encode(
+        bytes memory constructorArgs = _constructorArgsV2(
             IPoolManager(address(manager)),
             c0,
             c1,
@@ -99,7 +100,8 @@ contract VolumeDynamicFeeHookFuzzTest is Test {
         (address mined, bytes32 salt) =
             HookMiner.find(address(this), flags, type(VolumeDynamicFeeHook).creationCode, constructorArgs);
 
-        VolumeDynamicFeeHook hook = new VolumeDynamicFeeHook{salt: salt}(
+        VolumeDynamicFeeHook hook = _deployHookV2(
+            salt,
             IPoolManager(address(manager)),
             c0,
             c1,

@@ -16,6 +16,7 @@ import {HookMiner} from "@uniswap/v4-hooks-public/src/utils/HookMiner.sol";
 
 import {VolumeDynamicFeeHook} from "src/VolumeDynamicFeeHook.sol";
 import {MockPoolManager} from "./mocks/MockPoolManager.sol";
+import {VolumeDynamicFeeHookV2DeployHelper} from "./utils/VolumeDynamicFeeHookV2DeployHelper.sol";
 
 contract VolumeDynamicFeeHookHandler is Test {
     MockPoolManager public manager;
@@ -82,7 +83,11 @@ contract VolumeDynamicFeeHookHandler is Test {
     }
 }
 
-abstract contract VolumeDynamicFeeHookInvariantBase is StdInvariant, Test {
+abstract contract VolumeDynamicFeeHookInvariantBase is
+    StdInvariant,
+    Test,
+    VolumeDynamicFeeHookV2DeployHelper
+{
     MockPoolManager internal manager;
     VolumeDynamicFeeHook internal hook;
     PoolKey internal key;
@@ -130,7 +135,7 @@ abstract contract VolumeDynamicFeeHookInvariantBase is StdInvariant, Test {
                 | Hooks.AFTER_SWAP_FLAG
         );
 
-        bytes memory constructorArgs = abi.encode(
+        bytes memory constructorArgs = _constructorArgsV2(
             IPoolManager(address(manager)),
             c0,
             c1,
@@ -152,7 +157,8 @@ abstract contract VolumeDynamicFeeHookInvariantBase is StdInvariant, Test {
         (address mined, bytes32 salt) =
             HookMiner.find(address(this), flags, type(VolumeDynamicFeeHook).creationCode, constructorArgs);
 
-        hook = new VolumeDynamicFeeHook{salt: salt}(
+        hook = _deployHookV2(
+            salt,
             IPoolManager(address(manager)),
             c0,
             c1,
