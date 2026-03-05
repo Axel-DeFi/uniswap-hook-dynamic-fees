@@ -10,6 +10,8 @@ import {BalanceDelta, BalanceDeltaLibrary} from "@uniswap/v4-core/src/types/Bala
 import {SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {Hooks} from "@uniswap/v4-core/src/libraries/Hooks.sol";
 import {LPFeeLibrary} from "@uniswap/v4-core/src/libraries/LPFeeLibrary.sol";
+import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+import {Ownable2Step} from "@openzeppelin/contracts/access/Ownable2Step.sol";
 import {
     BeforeSwapDelta,
     toBeforeSwapDelta,
@@ -27,19 +29,62 @@ import {
  */
 /// @title VolumeDynamicFeeHook
 /// @notice Single-pool Uniswap v4 hook that updates dynamic LP fees using stable-coin volume heuristics.
-contract VolumeDynamicFeeHook is BaseHook {
+contract VolumeDynamicFeeHook is BaseHook, Ownable2Step {
     using BalanceDeltaLibrary for BalanceDelta;
     using BeforeSwapDeltaLibrary for BeforeSwapDelta;
 
     // -----------------------------------------------------------------------
     // Fee tiers (hundredths of a bip). Example: 3000 = 0.30%
     // -----------------------------------------------------------------------
-    uint256 private constant MAX_FEE_TIER_COUNT = 255;
+    uint256 private constant MAX_FEE_TIER_COUNT = 16;
+
+    struct ControllerConfig {
+        uint64 minCloseVolToCashUsd6;
+        uint64 minCloseVolToExtremeUsd6;
+        uint64 emergencyFloorCloseVolUsd6;
+        uint32 periodSeconds;
+        uint32 lullResetSeconds;
+        uint16 upRToCashBps;
+        uint16 upRToExtremeBps;
+        uint16 downRFromExtremeBps;
+        uint16 downRFromCashBps;
+        uint16 deadbandBps;
+        uint16 creatorFeeBps;
+        uint8 emaPeriods;
+        uint8 cashHoldPeriods;
+        uint8 upExtremeConfirmPeriods;
+        uint8 extremeHoldPeriods;
+        uint8 downExtremeConfirmPeriods;
+        uint8 downCashConfirmPeriods;
+        uint8 emergencyConfirmPeriods;
+        uint8 floorIdx;
+        uint8 cashIdx;
+        uint8 extremeIdx;
+        uint8 capIdx;
+    }
+
+    struct ControllerParams {
+        uint64 minCloseVolToCashUsd6;
+        uint16 upRToCashBps;
+        uint8 cashHoldPeriods;
+        uint64 minCloseVolToExtremeUsd6;
+        uint16 upRToExtremeBps;
+        uint8 upExtremeConfirmPeriods;
+        uint8 extremeHoldPeriods;
+        uint16 downRFromExtremeBps;
+        uint8 downExtremeConfirmPeriods;
+        uint16 downRFromCashBps;
+        uint8 downCashConfirmPeriods;
+        uint64 emergencyFloorCloseVolUsd6;
+        uint8 emergencyConfirmPeriods;
+    }
 
     error InvalidFeeIndex();
-    // forge-lint: disable-next-line(screaming-snake-case-immutable)
-    uint16 public immutable feeTierCount;
+    uint16 public feeTierCount;
     uint24[] private _feeTiersByIdx;
+    ControllerConfig private _config;
+    address private _guardian;
+    address private _creator;
 
     function feeTiers(uint256 idx) public view returns (uint24) {
         if (idx >= feeTierCount) revert InvalidFeeIndex();
@@ -53,77 +98,17 @@ contract VolumeDynamicFeeHook is BaseHook {
     // -----------------------------------------------------------------------
     // Immutable configuration
     // -----------------------------------------------------------------------
-    // forge-lint: disable-next-line(screaming-snake-case-immutable)
+    // -----------------------------------------------------------------------
+    // Immutable pool binding
+    // -----------------------------------------------------------------------
     Currency public immutable poolCurrency0;
-    // forge-lint: disable-next-line(screaming-snake-case-immutable)
     Currency public immutable poolCurrency1;
-    // forge-lint: disable-next-line(screaming-snake-case-immutable)
     int24 public immutable poolTickSpacing;
-    // forge-lint: disable-next-line(screaming-snake-case-immutable)
     Currency public immutable stableCurrency;
 
-    // forge-lint: disable-next-line(screaming-snake-case-immutable)
     bool internal immutable _stableIsCurrency0;
-
-    // forge-lint: disable-next-line(screaming-snake-case-immutable)
     bool internal immutable _scaleIsMul;
-    // forge-lint: disable-next-line(screaming-snake-case-immutable)
     uint64 internal immutable _stableScale;
-
-    // forge-lint: disable-next-line(screaming-snake-case-immutable)
-    uint8 public immutable floorIdx;
-    // forge-lint: disable-next-line(screaming-snake-case-immutable)
-    uint8 public immutable capIdx;
-    // forge-lint: disable-next-line(screaming-snake-case-immutable)
-    uint8 public immutable cashIdx;
-    // forge-lint: disable-next-line(screaming-snake-case-immutable)
-    uint8 public immutable extremeIdx;
-
-    // forge-lint: disable-next-line(screaming-snake-case-immutable)
-    uint64 public immutable minCloseVolToCashUsd6;
-    // forge-lint: disable-next-line(screaming-snake-case-immutable)
-    uint16 public immutable upRToCashBps;
-    // forge-lint: disable-next-line(screaming-snake-case-immutable)
-    uint8 public immutable cashHoldPeriods;
-
-    // forge-lint: disable-next-line(screaming-snake-case-immutable)
-    uint64 public immutable minCloseVolToExtremeUsd6;
-    // forge-lint: disable-next-line(screaming-snake-case-immutable)
-    uint16 public immutable upRToExtremeBps;
-    // forge-lint: disable-next-line(screaming-snake-case-immutable)
-    uint8 public immutable upExtremeConfirmPeriods;
-    // forge-lint: disable-next-line(screaming-snake-case-immutable)
-    uint8 public immutable extremeHoldPeriods;
-
-    // forge-lint: disable-next-line(screaming-snake-case-immutable)
-    uint16 public immutable downRFromExtremeBps;
-    // forge-lint: disable-next-line(screaming-snake-case-immutable)
-    uint8 public immutable downExtremeConfirmPeriods;
-    // forge-lint: disable-next-line(screaming-snake-case-immutable)
-    uint16 public immutable downRFromCashBps;
-    // forge-lint: disable-next-line(screaming-snake-case-immutable)
-    uint8 public immutable downCashConfirmPeriods;
-
-    // forge-lint: disable-next-line(screaming-snake-case-immutable)
-    uint64 public immutable emergencyFloorCloseVolUsd6;
-    // forge-lint: disable-next-line(screaming-snake-case-immutable)
-    uint8 public immutable emergencyConfirmPeriods;
-
-    // forge-lint: disable-next-line(screaming-snake-case-immutable)
-    uint32 public immutable periodSeconds;
-    // forge-lint: disable-next-line(screaming-snake-case-immutable)
-    uint8 public immutable emaPeriods;
-    // forge-lint: disable-next-line(screaming-snake-case-immutable)
-    uint16 public immutable deadbandBps;
-    // forge-lint: disable-next-line(screaming-snake-case-immutable)
-    uint32 public immutable lullResetSeconds;
-
-    // forge-lint: disable-next-line(screaming-snake-case-immutable)
-    address public immutable guardian;
-    // forge-lint: disable-next-line(screaming-snake-case-immutable)
-    address public immutable creator;
-    // forge-lint: disable-next-line(screaming-snake-case-immutable)
-    uint16 public immutable creatorFeeBps;
 
     // -----------------------------------------------------------------------
     // Packed state (ONE storage slot)
@@ -191,6 +176,29 @@ contract VolumeDynamicFeeHook is BaseHook {
     event CreatorFeeAccrued(address indexed currency, uint256 amount, uint24 feeBips);
     event CreatorFeesClaimed(address indexed to, uint256 amount0, uint256 amount1);
     event RescueTransfer(address indexed currency, uint256 amount, address indexed recipient);
+    event OwnerUpdated(address indexed previousOwner, address indexed newOwner);
+    event GuardianUpdated(address indexed previousGuardian, address indexed newGuardian);
+    event FeeTiersUpdated(uint24[] tiers, uint8 floorIdx, uint8 cashIdx, uint8 extremeIdx, uint8 capIdx);
+    event ControllerParamsUpdated(
+        uint64 minCloseVolToCashUsd6,
+        uint16 upRToCashBps,
+        uint8 cashHoldPeriods,
+        uint64 minCloseVolToExtremeUsd6,
+        uint16 upRToExtremeBps,
+        uint8 upExtremeConfirmPeriods,
+        uint8 extremeHoldPeriods,
+        uint16 downRFromExtremeBps,
+        uint8 downExtremeConfirmPeriods,
+        uint16 downRFromCashBps,
+        uint8 downCashConfirmPeriods,
+        uint64 emergencyFloorCloseVolUsd6,
+        uint8 emergencyConfirmPeriods
+    );
+    event TimingParamsUpdated(
+        uint32 periodSeconds, uint8 emaPeriods, uint32 lullResetSeconds, uint16 deadbandBps
+    );
+    event CreatorFeeConfigUpdated(address indexed creator, uint16 creatorFeeBps);
+    event StateReset(uint8 feeIdx, uint64 periodStart, bool paused, uint8 reasonCode);
 
     // -----------------------------------------------------------------------
     // Errors
@@ -209,6 +217,13 @@ contract VolumeDynamicFeeHook is BaseHook {
     error InvalidTierBounds();
     error InvalidHoldPeriods();
     error InvalidConfirmPeriods();
+    error RequiresPaused();
+
+    uint8 private constant RESET_REASON_ADMIN_TIERS = 1;
+    uint8 private constant RESET_REASON_ADMIN_TIMING = 2;
+    uint8 private constant RESET_REASON_GUARDIAN_PAUSE = 3;
+    uint8 private constant RESET_REASON_GUARDIAN_UNPAUSE = 4;
+    uint8 private constant RESET_REASON_GUARDIAN_EMERGENCY = 5;
 
     constructor(
         IPoolManager _poolManager,
@@ -224,8 +239,9 @@ contract VolumeDynamicFeeHook is BaseHook {
         uint8 _emaPeriods,
         uint16 _deadbandBps,
         uint32 _lullResetSeconds,
-        address _guardian,
-        address _creator,
+        address _owner,
+        address _guardianAddr,
+        address _creatorAddr,
         uint16 _creatorFeeBps,
         uint24 _cashTier,
         uint64 _minCloseVolToCashUsd6,
@@ -242,7 +258,7 @@ contract VolumeDynamicFeeHook is BaseHook {
         uint8 _downCashConfirmPeriods,
         uint64 _emergencyFloorCloseVolUsd6,
         uint8 _emergencyConfirmPeriods
-    ) BaseHook(_poolManager) {
+    ) BaseHook(_poolManager) Ownable(_owner) {
         if (address(_poolManager) == address(0)) revert InvalidConfig();
 
         // enforce canonical ordering for determinism
@@ -260,96 +276,30 @@ contract VolumeDynamicFeeHook is BaseHook {
         stableCurrency = _stableCurrency;
         _stableIsCurrency0 = (_stableCurrency == _poolCurrency0);
 
-        if (_periodSeconds == 0) revert InvalidConfig();
-        periodSeconds = _periodSeconds;
+        _setTimingParamsInternal(_periodSeconds, _emaPeriods, _lullResetSeconds, _deadbandBps);
+        _setGuardianInternal(_guardianAddr);
+        _setCreatorFeeConfigInternal(_creatorAddr, _creatorFeeBps);
 
-        if (_emaPeriods < 2) revert InvalidConfig();
-        if (_emaPeriods > MAX_EMA_PERIODS) revert InvalidConfig();
-        emaPeriods = _emaPeriods;
+        uint8 cashTierIdx_ = _mustFindTierIdx(_feeTiers, _cashTier);
+        uint8 extremeTierIdx_ = _mustFindTierIdx(_feeTiers, _extremeTier);
+        _setFeeTiersAndRolesInternal(_feeTiers, _floorIdx, cashTierIdx_, extremeTierIdx_, _capIdx);
 
-        if (_deadbandBps > 5000) revert InvalidConfig();
-        deadbandBps = _deadbandBps;
-
-        if (_lullResetSeconds < _periodSeconds) revert InvalidConfig();
-        if (uint256(_lullResetSeconds) > uint256(_periodSeconds) * MAX_LULL_PERIODS) revert InvalidConfig();
-        lullResetSeconds = _lullResetSeconds;
-
-        if (_guardian == address(0)) revert InvalidConfig();
-        guardian = _guardian;
-        if (_creator == address(0)) revert InvalidConfig();
-        creator = _creator;
-
-        if (_creatorFeeBps > 10_000) revert InvalidConfig();
-        creatorFeeBps = _creatorFeeBps;
-
-        uint256 tierCount = _feeTiers.length;
-        if (tierCount == 0 || tierCount > MAX_FEE_TIER_COUNT) revert InvalidConfig();
-        if (tierCount <= uint256(_floorIdx) || tierCount <= uint256(_capIdx)) {
-            revert InvalidFeeIndex();
-        }
-        if (_floorIdx > _capIdx) revert InvalidConfig();
-        feeTierCount = uint16(tierCount);
-
-        uint24 prevTier;
-        uint8 cashTierIdx_;
-        uint8 extremeTierIdx_;
-        bool cashTierFound;
-        bool extremeTierFound;
-        for (uint256 i = 0; i < tierCount; ++i) {
-            uint24 tier = _feeTiers[i];
-            if (tier == 0) revert InvalidConfig();
-            if (i > 0 && tier <= prevTier) revert InvalidConfig();
-            _feeTiersByIdx.push(tier);
-            if (tier == _cashTier) {
-                // forge-lint: disable-next-line(unsafe-typecast)
-                cashTierIdx_ = uint8(i);
-                cashTierFound = true;
-            }
-            if (tier == _extremeTier) {
-                // forge-lint: disable-next-line(unsafe-typecast)
-                extremeTierIdx_ = uint8(i);
-                extremeTierFound = true;
-            }
-            prevTier = tier;
-        }
-        if (!cashTierFound || !extremeTierFound) revert TierNotFound();
-
-        if (_floorIdx > cashTierIdx_ || cashTierIdx_ > extremeTierIdx_ || extremeTierIdx_ > _capIdx) {
-            revert InvalidTierBounds();
-        }
-
-        if (_cashHoldPeriods == 0 || _cashHoldPeriods > MAX_HOLD_PERIODS) revert InvalidHoldPeriods();
-        if (_extremeHoldPeriods == 0 || _extremeHoldPeriods > MAX_HOLD_PERIODS) revert InvalidHoldPeriods();
-        if (_upExtremeConfirmPeriods == 0 || _upExtremeConfirmPeriods > MAX_UP_EXTREME_STREAK) {
-            revert InvalidConfirmPeriods();
-        }
-        if (_downExtremeConfirmPeriods == 0 || _downExtremeConfirmPeriods > MAX_DOWN_STREAK) {
-            revert InvalidConfirmPeriods();
-        }
-        if (_downCashConfirmPeriods == 0 || _downCashConfirmPeriods > MAX_DOWN_STREAK) {
-            revert InvalidConfirmPeriods();
-        }
-        if (_emergencyConfirmPeriods == 0 || _emergencyConfirmPeriods > MAX_EMERGENCY_STREAK) {
-            revert InvalidConfirmPeriods();
-        }
-
-        floorIdx = _floorIdx;
-        capIdx = _capIdx;
-        cashIdx = cashTierIdx_;
-        extremeIdx = extremeTierIdx_;
-        minCloseVolToCashUsd6 = _minCloseVolToCashUsd6;
-        upRToCashBps = _upRToCashBps;
-        cashHoldPeriods = _cashHoldPeriods;
-        minCloseVolToExtremeUsd6 = _minCloseVolToExtremeUsd6;
-        upRToExtremeBps = _upRToExtremeBps;
-        upExtremeConfirmPeriods = _upExtremeConfirmPeriods;
-        extremeHoldPeriods = _extremeHoldPeriods;
-        downRFromExtremeBps = _downRFromExtremeBps;
-        downExtremeConfirmPeriods = _downExtremeConfirmPeriods;
-        downRFromCashBps = _downRFromCashBps;
-        downCashConfirmPeriods = _downCashConfirmPeriods;
-        emergencyFloorCloseVolUsd6 = _emergencyFloorCloseVolUsd6;
-        emergencyConfirmPeriods = _emergencyConfirmPeriods;
+        ControllerParams memory p = ControllerParams({
+            minCloseVolToCashUsd6: _minCloseVolToCashUsd6,
+            upRToCashBps: _upRToCashBps,
+            cashHoldPeriods: _cashHoldPeriods,
+            minCloseVolToExtremeUsd6: _minCloseVolToExtremeUsd6,
+            upRToExtremeBps: _upRToExtremeBps,
+            upExtremeConfirmPeriods: _upExtremeConfirmPeriods,
+            extremeHoldPeriods: _extremeHoldPeriods,
+            downRFromExtremeBps: _downRFromExtremeBps,
+            downExtremeConfirmPeriods: _downExtremeConfirmPeriods,
+            downRFromCashBps: _downRFromCashBps,
+            downCashConfirmPeriods: _downCashConfirmPeriods,
+            emergencyFloorCloseVolUsd6: _emergencyFloorCloseVolUsd6,
+            emergencyConfirmPeriods: _emergencyConfirmPeriods
+        });
+        _setControllerParamsInternal(p);
 
         if (stableDecimals > 18) revert InvalidConfig();
 
@@ -364,6 +314,169 @@ contract VolumeDynamicFeeHook is BaseHook {
             _scaleIsMul = false;
             _stableScale = uint64(10 ** (stableDecimals - 6));
         }
+
+        emit GuardianUpdated(address(0), _guardianAddr);
+        emit CreatorFeeConfigUpdated(_creatorAddr, _creatorFeeBps);
+        emit FeeTiersUpdated(_feeTiers, _floorIdx, cashTierIdx_, extremeTierIdx_, _capIdx);
+        emit ControllerParamsUpdated(
+            p.minCloseVolToCashUsd6,
+            p.upRToCashBps,
+            p.cashHoldPeriods,
+            p.minCloseVolToExtremeUsd6,
+            p.upRToExtremeBps,
+            p.upExtremeConfirmPeriods,
+            p.extremeHoldPeriods,
+            p.downRFromExtremeBps,
+            p.downExtremeConfirmPeriods,
+            p.downRFromCashBps,
+            p.downCashConfirmPeriods,
+            p.emergencyFloorCloseVolUsd6,
+            p.emergencyConfirmPeriods
+        );
+        emit TimingParamsUpdated(_periodSeconds, _emaPeriods, _lullResetSeconds, _deadbandBps);
+    }
+
+    modifier onlyGuardian() {
+        if (msg.sender != _guardian && msg.sender != owner()) revert NotGuardian();
+        _;
+    }
+
+    modifier whenPaused() {
+        if (!isPaused()) revert RequiresPaused();
+        _;
+    }
+
+    function _transferOwnership(address newOwner) internal override {
+        address oldOwner = owner();
+        super._transferOwnership(newOwner);
+        emit OwnerUpdated(oldOwner, newOwner);
+    }
+
+    function _setGuardianInternal(address newGuardian) internal {
+        if (newGuardian == address(0)) revert InvalidConfig();
+        _guardian = newGuardian;
+    }
+
+    function _setCreatorFeeConfigInternal(address newCreator, uint16 newCreatorFeeBps) internal {
+        if (newCreator == address(0)) revert InvalidConfig();
+        if (newCreatorFeeBps > 10_000) revert InvalidConfig();
+        _creator = newCreator;
+        _config.creatorFeeBps = newCreatorFeeBps;
+    }
+
+    function _setTimingParamsInternal(
+        uint32 periodSeconds_,
+        uint8 emaPeriods_,
+        uint32 lullResetSeconds_,
+        uint16 deadbandBps_
+    ) internal {
+        if (periodSeconds_ == 0) revert InvalidConfig();
+        if (emaPeriods_ < 2 || emaPeriods_ > MAX_EMA_PERIODS) revert InvalidConfig();
+        if (deadbandBps_ > 5000) revert InvalidConfig();
+        if (lullResetSeconds_ < periodSeconds_) revert InvalidConfig();
+        if (uint256(lullResetSeconds_) > uint256(periodSeconds_) * MAX_LULL_PERIODS) revert InvalidConfig();
+
+        _config.periodSeconds = periodSeconds_;
+        _config.emaPeriods = emaPeriods_;
+        _config.lullResetSeconds = lullResetSeconds_;
+        _config.deadbandBps = deadbandBps_;
+    }
+
+    function _setControllerParamsInternal(ControllerParams memory p) internal {
+        if (p.cashHoldPeriods == 0 || p.cashHoldPeriods > MAX_HOLD_PERIODS) revert InvalidHoldPeriods();
+        if (p.extremeHoldPeriods == 0 || p.extremeHoldPeriods > MAX_HOLD_PERIODS) {
+            revert InvalidHoldPeriods();
+        }
+        if (p.upExtremeConfirmPeriods == 0 || p.upExtremeConfirmPeriods > MAX_UP_EXTREME_STREAK) {
+            revert InvalidConfirmPeriods();
+        }
+        if (p.downExtremeConfirmPeriods == 0 || p.downExtremeConfirmPeriods > MAX_DOWN_STREAK) {
+            revert InvalidConfirmPeriods();
+        }
+        if (p.downCashConfirmPeriods == 0 || p.downCashConfirmPeriods > MAX_DOWN_STREAK) {
+            revert InvalidConfirmPeriods();
+        }
+        if (p.emergencyConfirmPeriods == 0 || p.emergencyConfirmPeriods > MAX_EMERGENCY_STREAK) {
+            revert InvalidConfirmPeriods();
+        }
+
+        _config.minCloseVolToCashUsd6 = p.minCloseVolToCashUsd6;
+        _config.upRToCashBps = p.upRToCashBps;
+        _config.cashHoldPeriods = p.cashHoldPeriods;
+        _config.minCloseVolToExtremeUsd6 = p.minCloseVolToExtremeUsd6;
+        _config.upRToExtremeBps = p.upRToExtremeBps;
+        _config.upExtremeConfirmPeriods = p.upExtremeConfirmPeriods;
+        _config.extremeHoldPeriods = p.extremeHoldPeriods;
+        _config.downRFromExtremeBps = p.downRFromExtremeBps;
+        _config.downExtremeConfirmPeriods = p.downExtremeConfirmPeriods;
+        _config.downRFromCashBps = p.downRFromCashBps;
+        _config.downCashConfirmPeriods = p.downCashConfirmPeriods;
+        _config.emergencyFloorCloseVolUsd6 = p.emergencyFloorCloseVolUsd6;
+        _config.emergencyConfirmPeriods = p.emergencyConfirmPeriods;
+    }
+
+    function _mustFindTierIdx(uint24[] memory tiers, uint24 tier) internal pure returns (uint8 idx) {
+        uint256 len = tiers.length;
+        for (uint256 i = 0; i < len; ++i) {
+            if (tiers[i] == tier) {
+                // forge-lint: disable-next-line(unsafe-typecast)
+                return uint8(i);
+            }
+        }
+        revert TierNotFound();
+    }
+
+    function _setFeeTiersAndRolesInternal(
+        uint24[] memory tiers,
+        uint8 floorIdx_,
+        uint8 cashIdx_,
+        uint8 extremeIdx_,
+        uint8 capIdx_
+    ) internal {
+        uint256 len = tiers.length;
+        if (len == 0 || len > MAX_FEE_TIER_COUNT) revert InvalidConfig();
+        if (
+            len <= uint256(floorIdx_) || len <= uint256(cashIdx_) || len <= uint256(extremeIdx_)
+                || len <= uint256(capIdx_)
+        ) {
+            revert InvalidFeeIndex();
+        }
+        if (floorIdx_ > cashIdx_ || cashIdx_ > extremeIdx_ || extremeIdx_ > capIdx_) {
+            revert InvalidTierBounds();
+        }
+
+        delete _feeTiersByIdx;
+        uint24 prevTier;
+        for (uint256 i = 0; i < len; ++i) {
+            uint24 tier = tiers[i];
+            if (tier == 0 || tier > LPFeeLibrary.MAX_LP_FEE) revert InvalidConfig();
+            if (i > 0 && tier <= prevTier) revert InvalidConfig();
+            _feeTiersByIdx.push(tier);
+            prevTier = tier;
+        }
+
+        // forge-lint: disable-next-line(unsafe-typecast)
+        feeTierCount = uint16(len);
+        _config.floorIdx = floorIdx_;
+        _config.cashIdx = cashIdx_;
+        _config.extremeIdx = extremeIdx_;
+        _config.capIdx = capIdx_;
+    }
+
+    function _resetStateToFloor(bool pausedValue, uint8 reasonCode) internal {
+        (,, uint64 periodStart,,,,,,,) = _unpackState(_state);
+        bool initialized = periodStart != 0;
+        uint8 feeIdx = _config.floorIdx;
+        uint64 nextPeriodStart = initialized ? _now64() : uint64(0);
+
+        _state = _packState(0, 0, nextPeriodStart, feeIdx, DIR_NONE, pausedValue, 0, 0, 0, 0);
+
+        if (initialized) {
+            poolManager.updateDynamicLPFee(_poolKey(), _feeTier(feeIdx));
+            emit FeeUpdated(_feeTier(feeIdx), feeIdx, 0, 0);
+        }
+
+        emit StateReset(feeIdx, nextPeriodStart, pausedValue, reasonCode);
     }
 
     // -----------------------------------------------------------------------
@@ -382,7 +495,7 @@ contract VolumeDynamicFeeHook is BaseHook {
         returns (bytes4, BeforeSwapDelta, uint24)
     {
         _validateKey(key);
-        if (isPaused() || creatorFeeBps == 0 || params.amountSpecified >= 0) {
+        if (isPaused() || _config.creatorFeeBps == 0 || params.amountSpecified >= 0) {
             return (IHooks.beforeSwap.selector, BeforeSwapDeltaLibrary.ZERO_DELTA, 0);
         }
 
@@ -430,7 +543,7 @@ contract VolumeDynamicFeeHook is BaseHook {
 
         uint64 nowTs = _now64();
 
-        uint8 feeIdx = floorIdx;
+        uint8 feeIdx = _config.floorIdx;
 
         _state = _packState(0, 0, nowTs, feeIdx, DIR_NONE, isPaused(), 0, 0, 0, 0);
 
@@ -474,12 +587,12 @@ contract VolumeDynamicFeeHook is BaseHook {
         bool feeChanged;
         uint64 closeVolForEvent;
 
-        if (elapsed >= lullResetSeconds) {
+        if (elapsed >= _config.lullResetSeconds) {
             uint8 oldFeeIdx = feeIdx;
 
             emaVol = 0;
             lastDir = DIR_NONE;
-            feeIdx = floorIdx;
+            feeIdx = _config.floorIdx;
             periodStart = nowTs;
             holdRemaining = 0;
             upExtremeStreak = 0;
@@ -513,8 +626,8 @@ contract VolumeDynamicFeeHook is BaseHook {
             return (IHooks.afterSwap.selector, 0);
         }
 
-        if (elapsed >= periodSeconds) {
-            uint64 periods = elapsed / uint64(periodSeconds);
+        if (elapsed >= _config.periodSeconds) {
+            uint64 periods = elapsed / uint64(_config.periodSeconds);
             uint64 closeVol0 = periodVol;
             closeVolForEvent = closeVol0 <= DUST_CLOSE_VOL_USD6 ? uint64(0) : closeVol0;
 
@@ -621,12 +734,170 @@ contract VolumeDynamicFeeHook is BaseHook {
         return (pv, ev, ps, fi, ld);
     }
 
+    function floorIdx() public view returns (uint8) {
+        return _config.floorIdx;
+    }
+
+    function cashIdx() public view returns (uint8) {
+        return _config.cashIdx;
+    }
+
+    function extremeIdx() public view returns (uint8) {
+        return _config.extremeIdx;
+    }
+
+    function capIdx() public view returns (uint8) {
+        return _config.capIdx;
+    }
+
+    function minCloseVolToCashUsd6() public view returns (uint64) {
+        return _config.minCloseVolToCashUsd6;
+    }
+
+    function upRToCashBps() public view returns (uint16) {
+        return _config.upRToCashBps;
+    }
+
+    function cashHoldPeriods() public view returns (uint8) {
+        return _config.cashHoldPeriods;
+    }
+
+    function minCloseVolToExtremeUsd6() public view returns (uint64) {
+        return _config.minCloseVolToExtremeUsd6;
+    }
+
+    function upRToExtremeBps() public view returns (uint16) {
+        return _config.upRToExtremeBps;
+    }
+
+    function upExtremeConfirmPeriods() public view returns (uint8) {
+        return _config.upExtremeConfirmPeriods;
+    }
+
+    function extremeHoldPeriods() public view returns (uint8) {
+        return _config.extremeHoldPeriods;
+    }
+
+    function downRFromExtremeBps() public view returns (uint16) {
+        return _config.downRFromExtremeBps;
+    }
+
+    function downExtremeConfirmPeriods() public view returns (uint8) {
+        return _config.downExtremeConfirmPeriods;
+    }
+
+    function downRFromCashBps() public view returns (uint16) {
+        return _config.downRFromCashBps;
+    }
+
+    function downCashConfirmPeriods() public view returns (uint8) {
+        return _config.downCashConfirmPeriods;
+    }
+
+    function emergencyFloorCloseVolUsd6() public view returns (uint64) {
+        return _config.emergencyFloorCloseVolUsd6;
+    }
+
+    function emergencyConfirmPeriods() public view returns (uint8) {
+        return _config.emergencyConfirmPeriods;
+    }
+
+    function periodSeconds() public view returns (uint32) {
+        return _config.periodSeconds;
+    }
+
+    function emaPeriods() public view returns (uint8) {
+        return _config.emaPeriods;
+    }
+
+    function deadbandBps() public view returns (uint16) {
+        return _config.deadbandBps;
+    }
+
+    function lullResetSeconds() public view returns (uint32) {
+        return _config.lullResetSeconds;
+    }
+
+    function guardian() public view returns (address) {
+        return _guardian;
+    }
+
+    function creator() public view returns (address) {
+        return _creator;
+    }
+
+    function creatorFeeBps() public view returns (uint16) {
+        return _config.creatorFeeBps;
+    }
+
+    function getControllerParams() external view returns (ControllerParams memory p) {
+        p = ControllerParams({
+            minCloseVolToCashUsd6: _config.minCloseVolToCashUsd6,
+            upRToCashBps: _config.upRToCashBps,
+            cashHoldPeriods: _config.cashHoldPeriods,
+            minCloseVolToExtremeUsd6: _config.minCloseVolToExtremeUsd6,
+            upRToExtremeBps: _config.upRToExtremeBps,
+            upExtremeConfirmPeriods: _config.upExtremeConfirmPeriods,
+            extremeHoldPeriods: _config.extremeHoldPeriods,
+            downRFromExtremeBps: _config.downRFromExtremeBps,
+            downExtremeConfirmPeriods: _config.downExtremeConfirmPeriods,
+            downRFromCashBps: _config.downRFromCashBps,
+            downCashConfirmPeriods: _config.downCashConfirmPeriods,
+            emergencyFloorCloseVolUsd6: _config.emergencyFloorCloseVolUsd6,
+            emergencyConfirmPeriods: _config.emergencyConfirmPeriods
+        });
+    }
+
+    function getFeeTiersAndRoles()
+        external
+        view
+        returns (uint24[] memory tiers, uint8 floorIdx_, uint8 cashIdx_, uint8 extremeIdx_, uint8 capIdx_)
+    {
+        uint256 len = _feeTiersByIdx.length;
+        tiers = new uint24[](len);
+        for (uint256 i = 0; i < len; ++i) {
+            tiers[i] = _feeTiersByIdx[i];
+        }
+        floorIdx_ = _config.floorIdx;
+        cashIdx_ = _config.cashIdx;
+        extremeIdx_ = _config.extremeIdx;
+        capIdx_ = _config.capIdx;
+    }
+
+    function getStateDebug()
+        external
+        view
+        returns (
+            uint8 feeIdx,
+            uint8 holdRemaining,
+            uint8 upExtremeStreak,
+            uint8 downStreak,
+            uint8 emergencyStreak,
+            uint64 periodStart,
+            uint64 periodVol,
+            uint96 emaVol,
+            bool paused
+        )
+    {
+        (
+            periodVol,
+            emaVol,
+            periodStart,
+            feeIdx,,
+            paused,
+            holdRemaining,
+            upExtremeStreak,
+            downStreak,
+            emergencyStreak
+        ) = _unpackState(_state);
+    }
+
     function creatorFeesAccrued() external view returns (uint256 token0, uint256 token1) {
         return (_creatorFees0, _creatorFees1);
     }
 
     function claimCreatorFees(address to, uint256 amount0, uint256 amount1) external {
-        if (msg.sender != creator) revert NotCreator();
+        if (msg.sender != _creator) revert NotCreator();
         if (to == address(0)) revert InvalidRecipient();
         if (amount0 > _creatorFees0 || amount1 > _creatorFees1) revert ClaimTooLarge();
         if (amount0 > 0) {
@@ -643,7 +914,7 @@ contract VolumeDynamicFeeHook is BaseHook {
     }
 
     function claimAllCreatorFees(address to) external {
-        if (msg.sender != creator) revert NotCreator();
+        if (msg.sender != _creator) revert NotCreator();
         if (to == address(0)) revert InvalidRecipient();
         uint256 amount0 = _creatorFees0;
         uint256 amount1 = _creatorFees1;
@@ -661,119 +932,90 @@ contract VolumeDynamicFeeHook is BaseHook {
     }
 
     function rescueToken(Currency currency, uint256 amount) external {
-        if (msg.sender != guardian) revert NotGuardian();
+        if (msg.sender != _guardian) revert NotGuardian();
         if (currency == poolCurrency0 || currency == poolCurrency1) revert InvalidRescueCurrency();
 
-        currency.transfer(creator, amount);
-        emit RescueTransfer(Currency.unwrap(currency), amount, creator);
+        currency.transfer(_creator, amount);
+        emit RescueTransfer(Currency.unwrap(currency), amount, _creator);
     }
 
     // -----------------------------------------------------------------------
-    // Guardian controls
+    // Admin controls
     // -----------------------------------------------------------------------
 
-    function pause() external {
-        if (msg.sender != guardian) revert NotGuardian();
+    /*
+     * Mutable params summary:
+     * - always owner-mutable: guardian, creator fee address/percent
+     * - requires paused=true: fee tiers + role indices, controller thresholds/holds/confirms, timing/smoothing
+     * - state reset clears periodVol/ema/streaks/holds, sets feeIdx=floorIdx, and sets periodStart=block.timestamp if initialized
+     */
+    function setGuardian(address newGuardian) external onlyOwner {
+        address oldGuardian = _guardian;
+        _setGuardianInternal(newGuardian);
+        emit GuardianUpdated(oldGuardian, newGuardian);
+    }
+
+    function setCreatorFeeConfig(address newCreator, uint16 newCreatorFeeBps) external onlyOwner {
+        _setCreatorFeeConfigInternal(newCreator, newCreatorFeeBps);
+        emit CreatorFeeConfigUpdated(newCreator, newCreatorFeeBps);
+    }
+
+    function setFeeTiersAndRoles(
+        uint24[] calldata tiers,
+        uint8 floorIdx_,
+        uint8 cashIdx_,
+        uint8 extremeIdx_,
+        uint8 capIdx_
+    ) external onlyOwner whenPaused {
+        _setFeeTiersAndRolesInternal(tiers, floorIdx_, cashIdx_, extremeIdx_, capIdx_);
+        emit FeeTiersUpdated(tiers, floorIdx_, cashIdx_, extremeIdx_, capIdx_);
+        _resetStateToFloor(true, RESET_REASON_ADMIN_TIERS);
+    }
+
+    function setControllerParams(ControllerParams calldata p) external onlyOwner whenPaused {
+        _setControllerParamsInternal(p);
+        emit ControllerParamsUpdated(
+            p.minCloseVolToCashUsd6,
+            p.upRToCashBps,
+            p.cashHoldPeriods,
+            p.minCloseVolToExtremeUsd6,
+            p.upRToExtremeBps,
+            p.upExtremeConfirmPeriods,
+            p.extremeHoldPeriods,
+            p.downRFromExtremeBps,
+            p.downExtremeConfirmPeriods,
+            p.downRFromCashBps,
+            p.downCashConfirmPeriods,
+            p.emergencyFloorCloseVolUsd6,
+            p.emergencyConfirmPeriods
+        );
+    }
+
+    function setTimingParams(
+        uint32 periodSeconds_,
+        uint8 emaPeriods_,
+        uint32 lullResetSeconds_,
+        uint16 deadbandBps_
+    ) external onlyOwner whenPaused {
+        _setTimingParamsInternal(periodSeconds_, emaPeriods_, lullResetSeconds_, deadbandBps_);
+        emit TimingParamsUpdated(periodSeconds_, emaPeriods_, lullResetSeconds_, deadbandBps_);
+        _resetStateToFloor(true, RESET_REASON_ADMIN_TIMING);
+    }
+
+    function pause() external onlyGuardian {
         if (isPaused()) return;
-
-        (
-            uint64 periodVol,
-            uint96 emaVol,
-            uint64 periodStart,
-            uint8 feeIdx,
-            uint8 lastDir,
-            bool paused_,
-            uint8 holdRemaining,
-            uint8 upExtremeStreak,
-            uint8 downStreak,
-            uint8 emergencyStreak
-        ) = _unpackState(_state);
-        bool initialized = periodStart != 0;
-
-        // Reset state and force floor fee bucket.
-        periodVol = 0;
-        emaVol = 0;
-        periodStart = initialized ? _now64() : uint64(0);
-        feeIdx = floorIdx;
-        lastDir = DIR_NONE;
-        paused_ = true;
-        holdRemaining = 0;
-        upExtremeStreak = 0;
-        downStreak = 0;
-        emergencyStreak = 0;
-
-        _state = _packState(
-            periodVol,
-            emaVol,
-            periodStart,
-            feeIdx,
-            lastDir,
-            paused_,
-            holdRemaining,
-            upExtremeStreak,
-            downStreak,
-            emergencyStreak
-        );
-
-        // Apply floor fee immediately for initialized pools.
-        if (initialized) {
-            poolManager.updateDynamicLPFee(_poolKey(), _feeTier(feeIdx));
-            emit FeeUpdated(_feeTier(feeIdx), feeIdx, 0, 0);
-        }
-
-        emit Paused(_feeTier(floorIdx), floorIdx);
+        _resetStateToFloor(true, RESET_REASON_GUARDIAN_PAUSE);
+        emit Paused(_feeTier(_config.floorIdx), _config.floorIdx);
     }
 
-    function unpause() external {
-        if (msg.sender != guardian) revert NotGuardian();
+    function unpause() external onlyGuardian {
         if (!isPaused()) return;
-
-        (
-            uint64 periodVol,
-            uint96 emaVol,
-            uint64 periodStart,
-            uint8 feeIdx,
-            uint8 lastDir,
-            bool paused_,
-            uint8 holdRemaining,
-            uint8 upExtremeStreak,
-            uint8 downStreak,
-            uint8 emergencyStreak
-        ) = _unpackState(_state);
-        bool initialized = periodStart != 0;
-
-        // Reset state and return to floor fee bucket.
-        periodVol = 0;
-        emaVol = 0;
-        periodStart = initialized ? _now64() : uint64(0);
-        feeIdx = floorIdx;
-        lastDir = DIR_NONE;
-        paused_ = false;
-        holdRemaining = 0;
-        upExtremeStreak = 0;
-        downStreak = 0;
-        emergencyStreak = 0;
-
-        _state = _packState(
-            periodVol,
-            emaVol,
-            periodStart,
-            feeIdx,
-            lastDir,
-            paused_,
-            holdRemaining,
-            upExtremeStreak,
-            downStreak,
-            emergencyStreak
-        );
-
-        // Apply floor fee immediately for initialized pools.
-        if (initialized) {
-            poolManager.updateDynamicLPFee(_poolKey(), _feeTier(feeIdx));
-            emit FeeUpdated(_feeTier(feeIdx), feeIdx, 0, 0);
-        }
-
+        _resetStateToFloor(false, RESET_REASON_GUARDIAN_UNPAUSE);
         emit Unpaused();
+    }
+
+    function emergencyResetStateToFloor() external onlyGuardian whenPaused {
+        _resetStateToFloor(true, RESET_REASON_GUARDIAN_EMERGENCY);
     }
 
     function _poolKey() internal view returns (PoolKey memory key) {
@@ -835,7 +1077,7 @@ contract VolumeDynamicFeeHook is BaseHook {
             return uint96(closeVol);
         }
 
-        uint256 n = uint256(emaPeriods);
+        uint256 n = uint256(_config.emaPeriods);
         uint256 updated = (uint256(ema) * (n - 1) + uint256(closeVol)) / n;
         if (updated > type(uint96).max) return type(uint96).max;
         // forge-lint: disable-next-line(unsafe-typecast)
@@ -851,7 +1093,7 @@ contract VolumeDynamicFeeHook is BaseHook {
 
     function _computeCreatorFee(uint256 amountIn, uint24 feeBips) internal view returns (uint256) {
         uint256 lpFeeAmount = (amountIn * uint256(feeBips)) / FEE_SCALE;
-        return (lpFeeAmount * uint256(creatorFeeBps)) / BPS_SCALE;
+        return (lpFeeAmount * uint256(_config.creatorFeeBps)) / BPS_SCALE;
     }
 
     // Backward-compatible internal surface for existing test harnesses.
@@ -902,13 +1144,13 @@ contract VolumeDynamicFeeHook is BaseHook {
         }
 
         // Rule 2: emergency floor guard runs before all transitions.
-        if (closeVol < emergencyFloorCloseVolUsd6) {
+        if (closeVol < _config.emergencyFloorCloseVolUsd6) {
             newEmergencyStreak = _incrementStreak(newEmergencyStreak, MAX_EMERGENCY_STREAK);
         } else {
             newEmergencyStreak = 0;
         }
-        if (newEmergencyStreak >= emergencyConfirmPeriods && newFeeIdx != floorIdx) {
-            newFeeIdx = floorIdx;
+        if (newEmergencyStreak >= _config.emergencyConfirmPeriods && newFeeIdx != _config.floorIdx) {
+            newFeeIdx = _config.floorIdx;
             newHoldRemaining = 0;
             newUpExtremeStreak = 0;
             newDownStreak = 0;
@@ -927,12 +1169,12 @@ contract VolumeDynamicFeeHook is BaseHook {
         uint256 rBps = emaVol == 0 ? 0 : (uint256(closeVol) * BPS_SCALE) / uint256(emaVol);
 
         // Rule 3a: floor -> cash fast jump.
-        if (newFeeIdx == floorIdx) {
-            bool canJumpCash = !bootstrapV2 && emaVol != 0 && closeVol >= minCloseVolToCashUsd6
-                && rBps >= uint256(upRToCashBps);
-            if (canJumpCash && newFeeIdx != cashIdx) {
-                newFeeIdx = cashIdx;
-                newHoldRemaining = cashHoldPeriods;
+        if (newFeeIdx == _config.floorIdx) {
+            bool canJumpCash = !bootstrapV2 && emaVol != 0 && closeVol >= _config.minCloseVolToCashUsd6
+                && rBps >= uint256(_config.upRToCashBps);
+            if (canJumpCash && newFeeIdx != _config.cashIdx) {
+                newFeeIdx = _config.cashIdx;
+                newHoldRemaining = _config.cashHoldPeriods;
                 newUpExtremeStreak = 0;
                 newDownStreak = 0;
                 newEmergencyStreak = 0;
@@ -949,15 +1191,18 @@ contract VolumeDynamicFeeHook is BaseHook {
         }
 
         // Rule 3b: cash -> extreme jump after consecutive confirmations.
-        if (newFeeIdx == cashIdx) {
-            if (closeVol >= minCloseVolToExtremeUsd6 && rBps >= uint256(upRToExtremeBps)) {
+        if (newFeeIdx == _config.cashIdx) {
+            if (closeVol >= _config.minCloseVolToExtremeUsd6 && rBps >= uint256(_config.upRToExtremeBps)) {
                 newUpExtremeStreak = _incrementStreak(newUpExtremeStreak, MAX_UP_EXTREME_STREAK);
             } else {
                 newUpExtremeStreak = 0;
             }
-            if (!bootstrapV2 && newUpExtremeStreak >= upExtremeConfirmPeriods && newFeeIdx != extremeIdx) {
-                newFeeIdx = extremeIdx;
-                newHoldRemaining = extremeHoldPeriods;
+            if (
+                !bootstrapV2 && newUpExtremeStreak >= _config.upExtremeConfirmPeriods
+                    && newFeeIdx != _config.extremeIdx
+            ) {
+                newFeeIdx = _config.extremeIdx;
+                newHoldRemaining = _config.extremeHoldPeriods;
                 newUpExtremeStreak = 0;
                 newDownStreak = 0;
                 newEmergencyStreak = 0;
@@ -989,16 +1234,16 @@ contract VolumeDynamicFeeHook is BaseHook {
             );
         }
 
-        if (newFeeIdx == extremeIdx) {
-            if (rBps <= uint256(downRFromExtremeBps)) {
+        if (newFeeIdx == _config.extremeIdx) {
+            if (rBps <= uint256(_config.downRFromExtremeBps)) {
                 newDownStreak = _incrementStreak(newDownStreak, MAX_DOWN_STREAK);
             } else {
                 newDownStreak = 0;
             }
-            if (newDownStreak >= downExtremeConfirmPeriods) {
+            if (newDownStreak >= _config.downExtremeConfirmPeriods) {
                 newDownStreak = 0;
-                if (newFeeIdx != cashIdx) {
-                    newFeeIdx = cashIdx;
+                if (newFeeIdx != _config.cashIdx) {
+                    newFeeIdx = _config.cashIdx;
                     return (
                         newFeeIdx,
                         newHoldRemaining,
@@ -1010,16 +1255,16 @@ contract VolumeDynamicFeeHook is BaseHook {
                     );
                 }
             }
-        } else if (newFeeIdx == cashIdx) {
-            if (rBps <= uint256(downRFromCashBps)) {
+        } else if (newFeeIdx == _config.cashIdx) {
+            if (rBps <= uint256(_config.downRFromCashBps)) {
                 newDownStreak = _incrementStreak(newDownStreak, MAX_DOWN_STREAK);
             } else {
                 newDownStreak = 0;
             }
-            if (newDownStreak >= downCashConfirmPeriods) {
+            if (newDownStreak >= _config.downCashConfirmPeriods) {
                 newDownStreak = 0;
-                if (newFeeIdx != floorIdx) {
-                    newFeeIdx = floorIdx;
+                if (newFeeIdx != _config.floorIdx) {
+                    newFeeIdx = _config.floorIdx;
                     return (
                         newFeeIdx,
                         newHoldRemaining,
@@ -1036,7 +1281,7 @@ contract VolumeDynamicFeeHook is BaseHook {
         }
 
         if (bootstrapV2) {
-            reasonCode = REASON_BOOTSTRAP_V2;
+            reasonCode = REASON_EMA_BOOTSTRAP;
         }
     }
 
