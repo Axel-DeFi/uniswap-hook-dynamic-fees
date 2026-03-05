@@ -94,7 +94,7 @@ contract VolumeDynamicFeeHookFuzzTest is Test, VolumeDynamicFeeHookV2DeployHelpe
             LULL_RESET_SECONDS,
             address(this),
             address(this),
-            address(this),
+            V2_CREATOR_FEE_LIMIT_PERCENT,
             CREATOR_FEE_BPS
         );
 
@@ -118,7 +118,7 @@ contract VolumeDynamicFeeHookFuzzTest is Test, VolumeDynamicFeeHookV2DeployHelpe
             LULL_RESET_SECONDS,
             address(this),
             address(this),
-            address(this),
+            V2_CREATOR_FEE_LIMIT_PERCENT,
             CREATOR_FEE_BPS
         );
 

@@ -10,8 +10,6 @@ import {BalanceDelta, BalanceDeltaLibrary} from "@uniswap/v4-core/src/types/Bala
 import {SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {Hooks} from "@uniswap/v4-core/src/libraries/Hooks.sol";
 import {LPFeeLibrary} from "@uniswap/v4-core/src/libraries/LPFeeLibrary.sol";
-import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
-import {Ownable2Step} from "@openzeppelin/contracts/access/Ownable2Step.sol";
 import {
     BeforeSwapDelta,
     toBeforeSwapDelta,
@@ -29,7 +27,7 @@ import {
  */
 /// @title VolumeDynamicFeeHook
 /// @notice Single-pool Uniswap v4 hook that updates dynamic LP fees using stable-coin volume heuristics.
-contract VolumeDynamicFeeHook is BaseHook, Ownable2Step {
+contract VolumeDynamicFeeHook is BaseHook {
     using BalanceDeltaLibrary for BalanceDelta;
     using BeforeSwapDeltaLibrary for BeforeSwapDelta;
 
@@ -85,6 +83,7 @@ contract VolumeDynamicFeeHook is BaseHook, Ownable2Step {
     ControllerConfig private _config;
     address private _guardian;
     address private _creator;
+    uint16 public immutable creatorFeeLimitPercent;
 
     function feeTiers(uint256 idx) public view returns (uint24) {
         if (idx >= feeTierCount) revert InvalidFeeIndex();
@@ -176,7 +175,7 @@ contract VolumeDynamicFeeHook is BaseHook, Ownable2Step {
     event CreatorFeeAccrued(address indexed currency, uint256 amount, uint24 feeBips);
     event CreatorFeesClaimed(address indexed to, uint256 amount0, uint256 amount1);
     event RescueTransfer(address indexed currency, uint256 amount, address indexed recipient);
-    event OwnerUpdated(address indexed previousOwner, address indexed newOwner);
+    event CreatorUpdated(address indexed previousCreator, address indexed newCreator);
     event GuardianUpdated(address indexed previousGuardian, address indexed newGuardian);
     event FeeTiersUpdated(uint24[] tiers, uint8 floorIdx, uint8 cashIdx, uint8 extremeIdx, uint8 capIdx);
     event ControllerParamsUpdated(
@@ -213,6 +212,8 @@ contract VolumeDynamicFeeHook is BaseHook, Ownable2Step {
     error InvalidRescueCurrency();
     error InvalidRecipient();
     error ClaimTooLarge();
+    error CreatorFeeLimitExceeded(uint16 requestedBps, uint16 maxAllowedBps);
+    error CreatorFeePercentLimitExceeded(uint16 requestedPercent, uint16 maxAllowedPercent);
     error TierNotFound();
     error InvalidTierBounds();
     error InvalidHoldPeriods();
@@ -239,9 +240,9 @@ contract VolumeDynamicFeeHook is BaseHook, Ownable2Step {
         uint8 _emaPeriods,
         uint16 _deadbandBps,
         uint32 _lullResetSeconds,
-        address _owner,
         address _guardianAddr,
         address _creatorAddr,
+        uint16 _creatorFeeLimitPercent,
         uint16 _creatorFeeBps,
         uint24 _cashTier,
         uint64 _minCloseVolToCashUsd6,
@@ -258,8 +259,10 @@ contract VolumeDynamicFeeHook is BaseHook, Ownable2Step {
         uint8 _downCashConfirmPeriods,
         uint64 _emergencyFloorCloseVolUsd6,
         uint8 _emergencyConfirmPeriods
-    ) BaseHook(_poolManager) Ownable(_owner) {
+    ) BaseHook(_poolManager) {
         if (address(_poolManager) == address(0)) revert InvalidConfig();
+        if (_creatorFeeLimitPercent > 100) revert InvalidConfig();
+        creatorFeeLimitPercent = _creatorFeeLimitPercent;
 
         // enforce canonical ordering for determinism
         if (Currency.unwrap(_poolCurrency0) >= Currency.unwrap(_poolCurrency1)) revert InvalidConfig();
@@ -316,6 +319,7 @@ contract VolumeDynamicFeeHook is BaseHook, Ownable2Step {
         }
 
         emit GuardianUpdated(address(0), _guardianAddr);
+        emit CreatorUpdated(address(0), _creatorAddr);
         emit CreatorFeeConfigUpdated(_creatorAddr, _creatorFeeBps);
         emit FeeTiersUpdated(_feeTiers, _floorIdx, cashTierIdx_, extremeTierIdx_, _capIdx);
         emit ControllerParamsUpdated(
@@ -337,19 +341,18 @@ contract VolumeDynamicFeeHook is BaseHook, Ownable2Step {
     }
 
     modifier onlyGuardian() {
-        if (msg.sender != _guardian && msg.sender != owner()) revert NotGuardian();
+        if (msg.sender != _guardian && msg.sender != _creator) revert NotGuardian();
+        _;
+    }
+
+    modifier onlyCreator() {
+        if (msg.sender != _creator) revert NotCreator();
         _;
     }
 
     modifier whenPaused() {
         if (!isPaused()) revert RequiresPaused();
         _;
-    }
-
-    function _transferOwnership(address newOwner) internal override {
-        address oldOwner = owner();
-        super._transferOwnership(newOwner);
-        emit OwnerUpdated(oldOwner, newOwner);
     }
 
     function _setGuardianInternal(address newGuardian) internal {
@@ -359,9 +362,16 @@ contract VolumeDynamicFeeHook is BaseHook, Ownable2Step {
 
     function _setCreatorFeeConfigInternal(address newCreator, uint16 newCreatorFeeBps) internal {
         if (newCreator == address(0)) revert InvalidConfig();
-        if (newCreatorFeeBps > 10_000) revert InvalidConfig();
+        uint16 maxAllowedBps = _creatorFeeLimitBps();
+        if (newCreatorFeeBps > maxAllowedBps) {
+            revert CreatorFeeLimitExceeded(newCreatorFeeBps, maxAllowedBps);
+        }
         _creator = newCreator;
         _config.creatorFeeBps = newCreatorFeeBps;
+    }
+
+    function _creatorFeeLimitBps() internal view returns (uint16) {
+        return creatorFeeLimitPercent * 100;
     }
 
     function _setTimingParamsInternal(
@@ -945,19 +955,33 @@ contract VolumeDynamicFeeHook is BaseHook, Ownable2Step {
 
     /*
      * Mutable params summary:
-     * - always owner-mutable: guardian, creator fee address/percent
-     * - requires paused=true: fee tiers + role indices, controller thresholds/holds/confirms, timing/smoothing
+     * - always creator-mutable: guardian, creator fee address/percent
+     * - requires paused=true: fee tiers + role indices, timing/smoothing
+     * - hot-updatable (pause not required): controller thresholds/holds/confirms/emergency params
      * - state reset clears periodVol/ema/streaks/holds, sets feeIdx=floorIdx, and sets periodStart=block.timestamp if initialized
      */
-    function setGuardian(address newGuardian) external onlyOwner {
+    function setGuardian(address newGuardian) external onlyCreator {
         address oldGuardian = _guardian;
         _setGuardianInternal(newGuardian);
         emit GuardianUpdated(oldGuardian, newGuardian);
     }
 
-    function setCreatorFeeConfig(address newCreator, uint16 newCreatorFeeBps) external onlyOwner {
+    function setCreatorFeeConfig(address newCreator, uint16 newCreatorFeeBps) external onlyCreator {
+        address oldCreator = _creator;
         _setCreatorFeeConfigInternal(newCreator, newCreatorFeeBps);
+        if (oldCreator != newCreator) {
+            emit CreatorUpdated(oldCreator, newCreator);
+        }
         emit CreatorFeeConfigUpdated(newCreator, newCreatorFeeBps);
+    }
+
+    function setCreatorFeePercent(uint16 newCreatorFeePercent) external onlyCreator {
+        if (newCreatorFeePercent > creatorFeeLimitPercent) {
+            revert CreatorFeePercentLimitExceeded(newCreatorFeePercent, creatorFeeLimitPercent);
+        }
+        uint16 newCreatorFeeBps = newCreatorFeePercent * 100;
+        _config.creatorFeeBps = newCreatorFeeBps;
+        emit CreatorFeeConfigUpdated(_creator, newCreatorFeeBps);
     }
 
     function setFeeTiersAndRoles(
@@ -966,13 +990,13 @@ contract VolumeDynamicFeeHook is BaseHook, Ownable2Step {
         uint8 cashIdx_,
         uint8 extremeIdx_,
         uint8 capIdx_
-    ) external onlyOwner whenPaused {
+    ) external onlyCreator whenPaused {
         _setFeeTiersAndRolesInternal(tiers, floorIdx_, cashIdx_, extremeIdx_, capIdx_);
         emit FeeTiersUpdated(tiers, floorIdx_, cashIdx_, extremeIdx_, capIdx_);
         _resetStateToFloor(true, RESET_REASON_ADMIN_TIERS);
     }
 
-    function setControllerParams(ControllerParams calldata p) external onlyOwner whenPaused {
+    function setControllerParams(ControllerParams calldata p) external onlyCreator {
         _setControllerParamsInternal(p);
         emit ControllerParamsUpdated(
             p.minCloseVolToCashUsd6,
@@ -996,7 +1020,7 @@ contract VolumeDynamicFeeHook is BaseHook, Ownable2Step {
         uint8 emaPeriods_,
         uint32 lullResetSeconds_,
         uint16 deadbandBps_
-    ) external onlyOwner whenPaused {
+    ) external onlyCreator whenPaused {
         _setTimingParamsInternal(periodSeconds_, emaPeriods_, lullResetSeconds_, deadbandBps_);
         emit TimingParamsUpdated(periodSeconds_, emaPeriods_, lullResetSeconds_, deadbandBps_);
         _resetStateToFloor(true, RESET_REASON_ADMIN_TIMING);

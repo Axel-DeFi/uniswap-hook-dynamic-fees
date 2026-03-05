@@ -149,9 +149,9 @@ abstract contract VolumeDynamicFeeHookInvariantBase is
             EMA_PERIODS,
             DEADBAND_BPS,
             LULL_RESET_SECONDS,
-            address(this),
             address(handler),
             address(handler),
+            V2_CREATOR_FEE_LIMIT_PERCENT,
             CREATOR_FEE_BPS
         );
 
@@ -173,9 +173,9 @@ abstract contract VolumeDynamicFeeHookInvariantBase is
             EMA_PERIODS,
             DEADBAND_BPS,
             LULL_RESET_SECONDS,
-            address(this),
             address(handler),
             address(handler),
+            V2_CREATOR_FEE_LIMIT_PERCENT,
             CREATOR_FEE_BPS
         );
 

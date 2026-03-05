@@ -14,15 +14,16 @@ abstract contract VolumeDynamicFeeHookV2DeployHelper {
     uint64 internal constant V2_MIN_CLOSEVOL_TO_EXTREME_USD6 = 4_000 * 1e6;
     uint16 internal constant V2_UP_R_TO_EXTREME_BPS = 40_000;
     uint8 internal constant V2_UP_EXTREME_CONFIRM_PERIODS = 2;
-    uint8 internal constant V2_EXTREME_HOLD_PERIODS = 6;
+    uint8 internal constant V2_EXTREME_HOLD_PERIODS = 4;
 
-    uint16 internal constant V2_DOWN_R_FROM_EXTREME_BPS = 12_000;
-    uint8 internal constant V2_DOWN_EXTREME_CONFIRM_PERIODS = 3;
+    uint16 internal constant V2_DOWN_R_FROM_EXTREME_BPS = 13_000;
+    uint8 internal constant V2_DOWN_EXTREME_CONFIRM_PERIODS = 2;
     uint16 internal constant V2_DOWN_R_FROM_CASH_BPS = 10_500;
     uint8 internal constant V2_DOWN_CASH_CONFIRM_PERIODS = 3;
 
     uint64 internal constant V2_EMERGENCY_FLOOR_CLOSEVOL_USD6 = 600 * 1e6;
-    uint8 internal constant V2_EMERGENCY_CONFIRM_PERIODS = 2;
+    uint8 internal constant V2_EMERGENCY_CONFIRM_PERIODS = 3;
+    uint16 internal constant V2_CREATOR_FEE_LIMIT_PERCENT = 10;
 
     uint24 internal constant V2_DEFAULT_CASH_TIER = 2_500;
     uint24 internal constant V2_DEFAULT_EXTREME_TIER = 9_000;
@@ -67,9 +68,9 @@ abstract contract VolumeDynamicFeeHookV2DeployHelper {
         uint8 emaPeriods,
         uint16 deadbandBps,
         uint32 lullResetSeconds,
-        address owner,
         address guardian,
         address creator,
+        uint16 creatorFeeLimitPercent,
         uint16 creatorFeeBps
     ) internal pure returns (bytes memory) {
         return abi.encode(
@@ -86,9 +87,9 @@ abstract contract VolumeDynamicFeeHookV2DeployHelper {
             emaPeriods,
             deadbandBps,
             lullResetSeconds,
-            owner,
             guardian,
             creator,
+            creatorFeeLimitPercent,
             creatorFeeBps,
             _resolveCashTier(feeTiers),
             V2_MIN_CLOSEVOL_TO_CASH_USD6,
@@ -122,9 +123,9 @@ abstract contract VolumeDynamicFeeHookV2DeployHelper {
         uint8 emaPeriods,
         uint16 deadbandBps,
         uint32 lullResetSeconds,
-        address owner,
         address guardian,
         address creator,
+        uint16 creatorFeeLimitPercent,
         uint16 creatorFeeBps
     ) internal returns (VolumeDynamicFeeHook hook) {
         hook = new VolumeDynamicFeeHook(
@@ -141,9 +142,9 @@ abstract contract VolumeDynamicFeeHookV2DeployHelper {
             emaPeriods,
             deadbandBps,
             lullResetSeconds,
-            owner,
             guardian,
             creator,
+            creatorFeeLimitPercent,
             creatorFeeBps,
             _resolveCashTier(feeTiers),
             V2_MIN_CLOSEVOL_TO_CASH_USD6,
@@ -178,9 +179,9 @@ abstract contract VolumeDynamicFeeHookV2DeployHelper {
         uint8 emaPeriods,
         uint16 deadbandBps,
         uint32 lullResetSeconds,
-        address owner,
         address guardian,
         address creator,
+        uint16 creatorFeeLimitPercent,
         uint16 creatorFeeBps
     ) internal returns (VolumeDynamicFeeHook hook) {
         hook = new VolumeDynamicFeeHook{salt: salt}(
@@ -197,9 +198,9 @@ abstract contract VolumeDynamicFeeHookV2DeployHelper {
             emaPeriods,
             deadbandBps,
             lullResetSeconds,
-            owner,
             guardian,
             creator,
+            creatorFeeLimitPercent,
             creatorFeeBps,
             _resolveCashTier(feeTiers),
             V2_MIN_CLOSEVOL_TO_CASH_USD6,

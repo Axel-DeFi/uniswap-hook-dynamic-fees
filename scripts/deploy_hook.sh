@@ -19,13 +19,13 @@ set -euo pipefail
 #   FEE_TIERS (comma-separated fee levels in percent, for example 0.009,0.04,0.09)
 #   PERIOD_SECONDS, EMA_PERIODS, DEADBAND_BPS, LULL_RESET_SECONDS
 #   CREATOR_FEE_PERCENT
+#   CREATOR_FEE_LIMIT
 #   CASH_TIER, EXTREME_TIER
 #   MIN_CLOSEVOL_TO_CASH_USD6, UP_R_TO_CASH_BPS, CASH_HOLD_PERIODS
 #   MIN_CLOSEVOL_TO_EXTREME_USD6, UP_R_TO_EXTREME_BPS, UP_EXTREME_CONFIRM_PERIODS, EXTREME_HOLD_PERIODS
 #   DOWN_R_FROM_EXTREME_BPS, DOWN_EXTREME_CONFIRM_PERIODS, DOWN_R_FROM_CASH_BPS, DOWN_CASH_CONFIRM_PERIODS
 #   EMERGENCY_FLOOR_CLOSEVOL_USD6, EMERGENCY_CONFIRM_PERIODS
 # Optional:
-#   OWNER (defaults to deployer signer)
 #   CREATOR_FEE_ADDRESS (defaults to GUARDIAN)
 #
 # Guardian behavior:
@@ -140,7 +140,7 @@ required=(
   POOL_MANAGER VOLATILE STABLE STABLE_DECIMALS TICK_SPACING
   FLOOR_TIER CAP_TIER FEE_TIERS
   PERIOD_SECONDS EMA_PERIODS DEADBAND_BPS LULL_RESET_SECONDS
-  CREATOR_FEE_PERCENT
+  CREATOR_FEE_PERCENT CREATOR_FEE_LIMIT
   CASH_TIER EXTREME_TIER
   MIN_CLOSEVOL_TO_CASH_USD6 UP_R_TO_CASH_BPS CASH_HOLD_PERIODS
   MIN_CLOSEVOL_TO_EXTREME_USD6 UP_R_TO_EXTREME_BPS UP_EXTREME_CONFIRM_PERIODS EXTREME_HOLD_PERIODS
@@ -311,6 +311,18 @@ if (( CREATOR_FEE_PERCENT > 100 )); then
   echo "ERROR: CREATOR_FEE_PERCENT=${CREATOR_FEE_PERCENT} out of range [0..100]" >&2
   exit 1
 fi
+if ! [[ "${CREATOR_FEE_LIMIT}" =~ ^[0-9]+$ ]]; then
+  echo "ERROR: CREATOR_FEE_LIMIT must be an integer in [0..100]" >&2
+  exit 1
+fi
+if (( CREATOR_FEE_LIMIT > 100 )); then
+  echo "ERROR: CREATOR_FEE_LIMIT=${CREATOR_FEE_LIMIT} out of range [0..100]" >&2
+  exit 1
+fi
+if (( CREATOR_FEE_PERCENT > CREATOR_FEE_LIMIT )); then
+  echo "ERROR: CREATOR_FEE_PERCENT=${CREATOR_FEE_PERCENT} exceeds CREATOR_FEE_LIMIT=${CREATOR_FEE_LIMIT}" >&2
+  exit 1
+fi
 CREATOR_FEE_BPS=$((CREATOR_FEE_PERCENT * 100))
 export CREATOR_FEE_BPS
 
@@ -342,12 +354,6 @@ if [[ -n "${CREATOR:-}" && "${CREATOR}" != "${CREATOR_FEE_ADDRESS}" ]]; then
 fi
 CREATOR="${CREATOR_FEE_ADDRESS}"
 export CREATOR
-
-if [[ -z "${OWNER:-}" ]]; then
-  OWNER="${DEPLOYER_ADDR}"
-  echo "==> OWNER not set; defaulting to deployer: ${OWNER}"
-fi
-export OWNER
 
 # Optional safety: enforce contract-based guardian (e.g. multisig) in strict mode.
 GUARDIAN_CODE="$(cast code "${GUARDIAN}" --rpc-url "${RPC_URL}" 2>/dev/null || true)"
@@ -385,7 +391,7 @@ export DEPLOY_JSON_PATH="${OUT_PATH}"
 read -r POOL_CURRENCY0 POOL_CURRENCY1 <<< "$(sort_pool_tokens "${VOLATILE}" "${STABLE}")"
 FEE_TIERS_ARG="[$(IFS=,; echo "${FEE_TIER_PIPS[*]}")]"
 CONSTRUCTOR_ARGS_HEX="$(cast abi-encode \
-  "constructor(address,address,address,int24,address,uint8,uint8,uint8,uint24[],uint32,uint8,uint16,uint32,address,address,address,uint16,uint24,uint64,uint16,uint8,uint24,uint64,uint16,uint8,uint8,uint16,uint8,uint16,uint8,uint64,uint8)" \
+  "constructor(address,address,address,int24,address,uint8,uint8,uint8,uint24[],uint32,uint8,uint16,uint32,address,address,uint16,uint16,uint24,uint64,uint16,uint8,uint24,uint64,uint16,uint8,uint8,uint16,uint8,uint16,uint8,uint64,uint8)" \
   "${POOL_MANAGER}" \
   "${POOL_CURRENCY0}" \
   "${POOL_CURRENCY1}" \
@@ -399,9 +405,9 @@ CONSTRUCTOR_ARGS_HEX="$(cast abi-encode \
   "${EMA_PERIODS}" \
   "${DEADBAND_BPS}" \
   "${LULL_RESET_SECONDS}" \
-  "${OWNER}" \
   "${GUARDIAN}" \
   "${CREATOR}" \
+  "${CREATOR_FEE_LIMIT}" \
   "${CREATOR_FEE_BPS}" \
   "${CASH_TIER_PIPS}" \
   "${MIN_CLOSEVOL_TO_CASH_USD6}" \
@@ -465,25 +471,25 @@ PY
 
 echo "==> Hook deployed at ${HOOK_ADDRESS}"
 
-if [[ "${OWNER,,}" != "${DEPLOYER_ADDR,,}" ]]; then
-  echo "WARN: OWNER=${OWNER} differs from signer ${DEPLOYER_ADDR}; skipping post-deploy on-chain setter calls."
-  echo "      Run pause/setter/unpause from the OWNER account to finish configuration."
+if [[ "${CREATOR,,}" != "${DEPLOYER_ADDR,,}" ]]; then
+  echo "WARN: CREATOR=${CREATOR} differs from signer ${DEPLOYER_ADDR}; skipping post-deploy on-chain setter calls."
+  echo "      Run pause/setter/unpause from the CREATOR account to finish configuration."
   echo "==> Wrote ${OUT_PATH}"
   exit 0
 fi
 
 CONTROLLER_PARAMS_TUPLE="(${MIN_CLOSEVOL_TO_CASH_USD6},${UP_R_TO_CASH_BPS},${CASH_HOLD_PERIODS},${MIN_CLOSEVOL_TO_EXTREME_USD6},${UP_R_TO_EXTREME_BPS},${UP_EXTREME_CONFIRM_PERIODS},${EXTREME_HOLD_PERIODS},${DOWN_R_FROM_EXTREME_BPS},${DOWN_EXTREME_CONFIRM_PERIODS},${DOWN_R_FROM_CASH_BPS},${DOWN_CASH_CONFIRM_PERIODS},${EMERGENCY_FLOOR_CLOSEVOL_USD6},${EMERGENCY_CONFIRM_PERIODS})"
 
-echo "==> On-chain config: pause -> tiers+roles -> controller params -> timing params -> creator fee config -> unpause"
+echo "==> On-chain config: pause -> tiers+roles -> timing params -> controller params -> creator fee config -> unpause"
 cast send "${HOOK_ADDRESS}" "pause()" --rpc-url "${RPC_URL}" --private-key "${PRIVATE_KEY}" >/dev/null
 cast send "${HOOK_ADDRESS}" "setFeeTiersAndRoles(uint24[],uint8,uint8,uint8,uint8)" \
   "${FEE_TIERS_ARG}" "${FLOOR_IDX}" "${CASH_IDX}" "${EXTREME_IDX}" "${CAP_IDX}" \
   --rpc-url "${RPC_URL}" --private-key "${PRIVATE_KEY}" >/dev/null
-cast send "${HOOK_ADDRESS}" "setControllerParams((uint64,uint16,uint8,uint64,uint16,uint8,uint8,uint16,uint8,uint16,uint8,uint64,uint8))" \
-  "${CONTROLLER_PARAMS_TUPLE}" --rpc-url "${RPC_URL}" --private-key "${PRIVATE_KEY}" >/dev/null
 cast send "${HOOK_ADDRESS}" "setTimingParams(uint32,uint8,uint32,uint16)" \
   "${PERIOD_SECONDS}" "${EMA_PERIODS}" "${LULL_RESET_SECONDS}" "${DEADBAND_BPS}" \
   --rpc-url "${RPC_URL}" --private-key "${PRIVATE_KEY}" >/dev/null
+cast send "${HOOK_ADDRESS}" "setControllerParams((uint64,uint16,uint8,uint64,uint16,uint8,uint8,uint16,uint8,uint16,uint8,uint64,uint8))" \
+  "${CONTROLLER_PARAMS_TUPLE}" --rpc-url "${RPC_URL}" --private-key "${PRIVATE_KEY}" >/dev/null
 cast send "${HOOK_ADDRESS}" "setCreatorFeeConfig(address,uint16)" \
   "${CREATOR}" "${CREATOR_FEE_BPS}" --rpc-url "${RPC_URL}" --private-key "${PRIVATE_KEY}" >/dev/null
 cast send "${HOOK_ADDRESS}" "unpause()" --rpc-url "${RPC_URL}" --private-key "${PRIVATE_KEY}" >/dev/null

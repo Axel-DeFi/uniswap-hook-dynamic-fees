@@ -32,9 +32,9 @@ contract VolumeDynamicFeeHookHarness is VolumeDynamicFeeHook {
         uint8 _emaPeriods,
         uint16 _deadbandBps,
         uint32 _lullResetSeconds,
-        address _owner,
         address _guardian,
         address _creator,
+        uint16 _creatorFeeLimitPercent,
         uint16 _creatorFeeBps,
         uint24 _cashTier,
         uint64 _minCloseVolToCashUsd6,
@@ -66,9 +66,9 @@ contract VolumeDynamicFeeHookHarness is VolumeDynamicFeeHook {
             _emaPeriods,
             _deadbandBps,
             _lullResetSeconds,
-            _owner,
             _guardian,
             _creator,
+            _creatorFeeLimitPercent,
             _creatorFeeBps,
             _cashTier,
             _minCloseVolToCashUsd6,
@@ -126,9 +126,9 @@ contract VolumeDynamicFeeHookConfigAndEdgesTest is Test, VolumeDynamicFeeHookV2D
         uint8 emaPeriods;
         uint16 deadbandBps;
         uint32 lullResetSeconds;
-        address owner;
         address guardian;
         address creator;
+        uint16 creatorFeeLimitPercent;
         uint16 creatorFeeBps;
     }
 
@@ -163,9 +163,9 @@ contract VolumeDynamicFeeHookConfigAndEdgesTest is Test, VolumeDynamicFeeHookV2D
             emaPeriods: 8,
             deadbandBps: 500,
             lullResetSeconds: LULL_RESET_SECONDS,
-            owner: address(this),
             guardian: address(this),
             creator: address(this),
+            creatorFeeLimitPercent: V2_CREATOR_FEE_LIMIT_PERCENT,
             creatorFeeBps: 1000
         });
     }
@@ -195,9 +195,9 @@ contract VolumeDynamicFeeHookConfigAndEdgesTest is Test, VolumeDynamicFeeHookV2D
             cfg.emaPeriods,
             cfg.deadbandBps,
             cfg.lullResetSeconds,
-            cfg.owner,
             cfg.guardian,
             cfg.creator,
+            cfg.creatorFeeLimitPercent,
             cfg.creatorFeeBps,
             _resolveCashTier(cfg.feeTiers),
             V2_MIN_CLOSEVOL_TO_CASH_USD6,
@@ -274,9 +274,9 @@ contract VolumeDynamicFeeHookConfigAndEdgesTest is Test, VolumeDynamicFeeHookV2D
             cfg.emaPeriods,
             cfg.deadbandBps,
             cfg.lullResetSeconds,
-            cfg.owner,
             cfg.guardian,
             cfg.creator,
+            cfg.creatorFeeLimitPercent,
             cfg.creatorFeeBps,
             _resolveCashTier(cfg.feeTiers),
             V2_MIN_CLOSEVOL_TO_CASH_USD6,
@@ -376,9 +376,22 @@ contract VolumeDynamicFeeHookConfigAndEdgesTest is Test, VolumeDynamicFeeHookV2D
         _deploy(cfg);
     }
 
-    function test_constructor_reverts_on_creatorFeeBps_gt_10000() public {
+    function test_constructor_reverts_on_creatorFeeBps_gt_creatorFeeLimit() public {
         DeployCfg memory cfg = _defaultCfg();
-        cfg.creatorFeeBps = 10_001;
+        cfg.creatorFeeBps = cfg.creatorFeeLimitPercent * 100 + 1;
+        uint16 maxAllowedBps = cfg.creatorFeeLimitPercent * 100;
+
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                VolumeDynamicFeeHook.CreatorFeeLimitExceeded.selector, cfg.creatorFeeBps, maxAllowedBps
+            )
+        );
+        _deploy(cfg);
+    }
+
+    function test_constructor_reverts_on_creatorFeeLimitPercent_gt_100() public {
+        DeployCfg memory cfg = _defaultCfg();
+        cfg.creatorFeeLimitPercent = 101;
 
         vm.expectRevert(VolumeDynamicFeeHook.InvalidConfig.selector);
         _deploy(cfg);

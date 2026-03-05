@@ -4,7 +4,6 @@ pragma solidity ^0.8.26;
 import {Test} from "forge-std/Test.sol";
 
 import {BaseHook} from "@uniswap/v4-hooks-public/src/base/BaseHook.sol";
-import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
@@ -32,9 +31,9 @@ contract VolumeDynamicFeeHookAdminHarness is VolumeDynamicFeeHook {
         uint8 _emaPeriods,
         uint16 _deadbandBps,
         uint32 _lullResetSeconds,
-        address _owner,
         address _guardian,
         address _creator,
+        uint16 _creatorFeeLimitPercent,
         uint16 _creatorFeeBps,
         uint24 _cashTier,
         uint64 _minCloseVolToCashUsd6,
@@ -66,9 +65,9 @@ contract VolumeDynamicFeeHookAdminHarness is VolumeDynamicFeeHook {
             _emaPeriods,
             _deadbandBps,
             _lullResetSeconds,
-            _owner,
             _guardian,
             _creator,
+            _creatorFeeLimitPercent,
             _creatorFeeBps,
             _cashTier,
             _minCloseVolToCashUsd6,
@@ -99,7 +98,7 @@ contract VolumeDynamicFeeHookAdminTest is Test, VolumeDynamicFeeHookV2DeployHelp
     address internal constant TOKEN0 = address(0x0000000000000000000000000000000000001111);
     address internal constant TOKEN1 = address(0x0000000000000000000000000000000000002222);
 
-    address internal owner = address(this);
+    address internal creator = address(this);
     address internal guardian = address(0xBEEF);
     address internal outsider = address(0xCAFE);
 
@@ -112,7 +111,7 @@ contract VolumeDynamicFeeHookAdminTest is Test, VolumeDynamicFeeHookV2DeployHelp
         manager = new MockPoolManager();
 
         uint24[] memory tiers = _defaultFeeTiersV2();
-        hook = _deployHarness(tiers, 0, 2, owner, guardian, owner, 1_000);
+        hook = _deployHarness(tiers, 0, 2, guardian, creator, 1_000);
         key = _poolKey(address(hook));
 
         manager.callAfterInitialize(hook, key);
@@ -154,7 +153,6 @@ contract VolumeDynamicFeeHookAdminTest is Test, VolumeDynamicFeeHookV2DeployHelp
         uint24[] memory tiers,
         uint8 floorIdx,
         uint8 capIdx,
-        address owner_,
         address guardian_,
         address creator_,
         uint16 creatorFeeBps_
@@ -173,9 +171,9 @@ contract VolumeDynamicFeeHookAdminTest is Test, VolumeDynamicFeeHookV2DeployHelp
             EMA_PERIODS,
             DEADBAND_BPS,
             LULL_RESET_SECONDS,
-            owner_,
             guardian_,
             creator_,
+            V2_CREATOR_FEE_LIMIT_PERCENT,
             creatorFeeBps_,
             _resolveCashTier(tiers),
             V2_MIN_CLOSEVOL_TO_CASH_USD6,
@@ -195,24 +193,24 @@ contract VolumeDynamicFeeHookAdminTest is Test, VolumeDynamicFeeHookV2DeployHelp
         );
     }
 
-    function test_onlyOwner_can_call_admin_setters() public {
+    function test_onlyCreator_can_call_admin_setters() public {
         VolumeDynamicFeeHook.ControllerParams memory p = _defaultControllerParams();
         uint24[] memory tiers = _defaultFeeTiersV2();
 
         vm.startPrank(outsider);
-        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, outsider));
+        vm.expectRevert(VolumeDynamicFeeHook.NotCreator.selector);
         hook.setGuardian(address(0x1234));
 
-        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, outsider));
+        vm.expectRevert(VolumeDynamicFeeHook.NotCreator.selector);
         hook.setCreatorFeeConfig(address(0x1234), 500);
 
-        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, outsider));
+        vm.expectRevert(VolumeDynamicFeeHook.NotCreator.selector);
         hook.setControllerParams(p);
 
-        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, outsider));
+        vm.expectRevert(VolumeDynamicFeeHook.NotCreator.selector);
         hook.setTimingParams(PERIOD_SECONDS, EMA_PERIODS, LULL_RESET_SECONDS, DEADBAND_BPS);
 
-        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, outsider));
+        vm.expectRevert(VolumeDynamicFeeHook.NotCreator.selector);
         hook.setFeeTiersAndRoles(tiers, 0, 1, 2, 2);
         vm.stopPrank();
     }
@@ -234,7 +232,7 @@ contract VolumeDynamicFeeHookAdminTest is Test, VolumeDynamicFeeHookV2DeployHelp
         assertFalse(hook.isPaused());
 
         vm.prank(guardian);
-        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, guardian));
+        vm.expectRevert(VolumeDynamicFeeHook.NotCreator.selector);
         hook.setGuardian(address(0x1234));
     }
 
@@ -244,11 +242,10 @@ contract VolumeDynamicFeeHookAdminTest is Test, VolumeDynamicFeeHookV2DeployHelp
         hook.emergencyResetStateToFloor();
     }
 
-    function test_setters_require_paused_when_configured_for_safety() public {
+    function test_setters_pause_gating_matches_registry() public {
         VolumeDynamicFeeHook.ControllerParams memory p = _defaultControllerParams();
         uint24[] memory tiers = _defaultFeeTiersV2();
 
-        vm.expectRevert(VolumeDynamicFeeHook.RequiresPaused.selector);
         hook.setControllerParams(p);
 
         vm.expectRevert(VolumeDynamicFeeHook.RequiresPaused.selector);
@@ -278,9 +275,6 @@ contract VolumeDynamicFeeHookAdminTest is Test, VolumeDynamicFeeHookV2DeployHelp
     }
 
     function test_setControllerParams_validation_reverts_on_invalid_periods() public {
-        vm.prank(guardian);
-        hook.pause();
-
         VolumeDynamicFeeHook.ControllerParams memory p = _defaultControllerParams();
         p.cashHoldPeriods = 0;
         vm.expectRevert(VolumeDynamicFeeHook.InvalidHoldPeriods.selector);
@@ -344,7 +338,7 @@ contract VolumeDynamicFeeHookAdminTest is Test, VolumeDynamicFeeHookV2DeployHelp
         assertEq(manager.takeCount(), 1);
         assertGt(accrued0Before, 0);
 
-        hook.setCreatorFeeConfig(owner, 0);
+        hook.setCreatorFeeConfig(creator, 0);
 
         vm.prank(address(manager));
         hook.beforeSwap(address(this), key, params, "");
@@ -353,19 +347,35 @@ contract VolumeDynamicFeeHookAdminTest is Test, VolumeDynamicFeeHookV2DeployHelp
         assertEq(accrued0After, accrued0Before);
     }
 
+    function test_setCreatorFeePercent_reverts_above_limit() public {
+        uint16 limitPercent = hook.creatorFeeLimitPercent();
+        uint16 requested = limitPercent + 1;
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                VolumeDynamicFeeHook.CreatorFeePercentLimitExceeded.selector, requested, limitPercent
+            )
+        );
+        hook.setCreatorFeePercent(requested);
+    }
+
+    function test_setCreatorFeePercent_updates_creator_fee_bps() public {
+        hook.setCreatorFeePercent(3);
+        assertEq(hook.creatorFeeBps(), 300);
+    }
+
     function test_integration_configure_onchain_before_initialize_then_fee_moves() public {
         uint24[] memory tiers = new uint24[](3);
         tiers[0] = 400;
         tiers[1] = 1500;
         tiers[2] = 9000;
 
-        VolumeDynamicFeeHookAdminHarness h = _deployHarness(tiers, 0, 2, owner, guardian, owner, 0);
+        VolumeDynamicFeeHookAdminHarness h = _deployHarness(tiers, 0, 2, guardian, creator, 0);
         PoolKey memory k = _poolKey(address(h));
 
         vm.prank(guardian);
         h.pause();
 
-        vm.prank(owner);
+        vm.prank(creator);
         h.setFeeTiersAndRoles(tiers, 0, 1, 2, 2);
 
         VolumeDynamicFeeHook.ControllerParams memory p = _defaultControllerParams();
@@ -377,10 +387,10 @@ contract VolumeDynamicFeeHookAdminTest is Test, VolumeDynamicFeeHookV2DeployHelp
         p.cashHoldPeriods = 2;
         p.extremeHoldPeriods = 2;
 
-        vm.prank(owner);
+        vm.prank(creator);
         h.setControllerParams(p);
 
-        vm.prank(owner);
+        vm.prank(creator);
         h.setTimingParams(PERIOD_SECONDS, EMA_PERIODS, LULL_RESET_SECONDS, DEADBAND_BPS);
 
         vm.prank(guardian);
