@@ -50,6 +50,18 @@ if [[ $# -eq 0 ]]; then
 fi
 
 lower() { printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]'; }
+sort_pool_tokens() {
+  local a b al bl
+  a="${1:?}"
+  b="${2:?}"
+  al="$(printf '%s' "$a" | tr '[:upper:]' '[:lower:]')"
+  bl="$(printf '%s' "$b" | tr '[:upper:]' '[:lower:]')"
+  if [[ "$al" < "$bl" ]]; then
+    printf '%s %s\n' "$a" "$b"
+  else
+    printf '%s %s\n' "$b" "$a"
+  fi
+}
 
 CHAIN=""
 RPC_URL_CLI=""
@@ -285,6 +297,33 @@ fi
 OUT_PATH="./scripts/out/deploy.${CHAIN}.json"
 mkdir -p ./scripts/out
 export DEPLOY_JSON_PATH="${OUT_PATH}"
+
+# Pre-encode constructor args in bash to avoid IR stack issues in script-level abi.encode.
+read -r POOL_CURRENCY0 POOL_CURRENCY1 <<< "$(sort_pool_tokens "${VOLATILE}" "${STABLE}")"
+FEE_TIERS_ARG="[$(IFS=,; echo "${FEE_TIER_PIPS[*]}")]"
+CONSTRUCTOR_ARGS_HEX="$(cast abi-encode \
+  "constructor(address,address,address,int24,address,uint8,uint8,uint8,uint24[],uint32,uint8,uint16,uint32,address,address,uint16)" \
+  "${POOL_MANAGER}" \
+  "${POOL_CURRENCY0}" \
+  "${POOL_CURRENCY1}" \
+  "${TICK_SPACING}" \
+  "${STABLE}" \
+  "${STABLE_DECIMALS}" \
+  "${FLOOR_IDX}" \
+  "${CAP_IDX}" \
+  "${FEE_TIERS_ARG}" \
+  "${PERIOD_SECONDS}" \
+  "${EMA_PERIODS}" \
+  "${DEADBAND_BPS}" \
+  "${LULL_RESET_SECONDS}" \
+  "${GUARDIAN}" \
+  "${CREATOR}" \
+  "${CREATOR_FEE_BPS}")"
+if [[ -z "${CONSTRUCTOR_ARGS_HEX}" || "${CONSTRUCTOR_ARGS_HEX}" == "0x" ]]; then
+  echo "ERROR: failed to encode constructor args" >&2
+  exit 1
+fi
+export CONSTRUCTOR_ARGS_HEX
 
 COMMON_ARGS=(--rpc-url "${RPC_URL}" --private-key "${PRIVATE_KEY}")
 if [[ "$VERIFY" -eq 1 ]]; then
