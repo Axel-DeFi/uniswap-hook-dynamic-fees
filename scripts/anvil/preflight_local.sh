@@ -77,6 +77,9 @@ BASE_EMERGENCY_CONFIRM_PERIODS=""
 
 SC_REASON=""
 SC_KEYS=""
+SC_FEE_BEFORE=""
+SC_FEE_AFTER=""
+SC_EXPECTED_FLOOR=""
 
 cleanup() {
   if [[ -n "${ANVIL_PID}" ]]; then
@@ -121,6 +124,31 @@ refresh_metrics() {
   SC_KEYS="feeTier=${fee} rBps=${r} closeVol=${close} holdRemaining=${hold}"
 }
 
+safe_current_fee_bips() {
+  local fee
+  fee="$(cast_call_single "${HOOK_ADDRESS}" "currentFeeBips()(uint24)" || true)"
+  if [[ "${fee}" =~ ^[0-9]+$ ]]; then
+    printf '%s\n' "${fee}"
+  else
+    printf 'n/a\n'
+  fi
+}
+
+safe_expected_floor_bips() {
+  local floor_idx floor_fee
+  floor_idx="$(cast_call_single "${HOOK_ADDRESS}" "floorIdx()(uint8)" || true)"
+  if ! [[ "${floor_idx}" =~ ^[0-9]+$ ]]; then
+    printf 'n/a\n'
+    return 0
+  fi
+  floor_fee="$(cast_call_single "${HOOK_ADDRESS}" "feeTiers(uint256)(uint24)" "${floor_idx}" || true)"
+  if [[ "${floor_fee}" =~ ^[0-9]+$ ]]; then
+    printf '%s\n' "${floor_fee}"
+  else
+    printf 'n/a\n'
+  fi
+}
+
 record_scenario() {
   local id="$1"
   local status="$2"
@@ -150,20 +178,36 @@ scenario_field_by_id() {
 run_scenario() {
   local id="$1"
   local fn="$2"
+  local status reason metrics
 
   SC_REASON=""
   SC_KEYS=""
+  SC_FEE_BEFORE="$(safe_current_fee_bips)"
+  SC_EXPECTED_FLOOR="$(safe_expected_floor_bips)"
 
   log "==> ${id}"
+  log "${id}: fee_before=${SC_FEE_BEFORE} expected_floor=${SC_EXPECTED_FLOOR}"
   if "${fn}"; then
+    status="PASS"
+    reason="${SC_REASON:-ok}"
     PASS_COUNT=$((PASS_COUNT + 1))
-    record_scenario "${id}" "PASS" "${SC_REASON:-ok}" "${SC_KEYS}"
-    log "${id}: PASS - ${SC_REASON:-ok} | ${SC_KEYS}"
   else
+    status="FAIL"
+    reason="${SC_REASON:-failed}"
     FAIL_COUNT=$((FAIL_COUNT + 1))
-    record_scenario "${id}" "FAIL" "${SC_REASON:-failed}" "${SC_KEYS}"
-    log "${id}: FAIL - ${SC_REASON:-failed} | ${SC_KEYS}"
   fi
+
+  SC_FEE_AFTER="$(safe_current_fee_bips)"
+  log "${id}: fee_after=${SC_FEE_AFTER} expected_floor=${SC_EXPECTED_FLOOR}"
+
+  metrics="${SC_KEYS}"
+  if [[ -z "${metrics}" ]]; then
+    metrics="feeBefore=${SC_FEE_BEFORE} feeAfter=${SC_FEE_AFTER} expectedFloor=${SC_EXPECTED_FLOOR}"
+  else
+    metrics="${metrics} feeBefore=${SC_FEE_BEFORE} feeAfter=${SC_FEE_AFTER} expectedFloor=${SC_EXPECTED_FLOOR}"
+  fi
+  record_scenario "${id}" "${status}" "${reason}" "${metrics}"
+  log "${id}: ${status} - ${reason} | ${metrics}"
 }
 
 backup_config() {
