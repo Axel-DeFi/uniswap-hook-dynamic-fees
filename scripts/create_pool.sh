@@ -26,6 +26,17 @@ set -euo pipefail
 #   - or loaded from ./scripts/out/deploy.<chain>.json (local -> deploy.local.json)
 
 lower() { printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]'; }
+percent_to_pips() {
+  local pct="$1"
+  awk -v pct="${pct}" '
+    BEGIN {
+      if (pct !~ /^[0-9]+([.][0-9]+)?$/) exit 1;
+      v = pct * 10000;
+      p = int(v + 0.5);
+      if (p < 1 || p > 1000000) exit 1;
+      print p;
+    }' 2>/dev/null
+}
 
 CHAIN="local"
 RPC_URL_CLI=""
@@ -213,3 +224,18 @@ forge script scripts/foundry/CreatePool.s.sol:CreatePool \
   --rpc-url "$RPC_URL" \
   --private-key "$PRIVATE_KEY" \
   --broadcast
+
+if [[ -n "${FLOOR_TIER:-}" ]]; then
+  floor_tier_pips="$(percent_to_pips "$(printf '%s' "${FLOOR_TIER}" | tr -d '[:space:]')" || true)"
+  if [[ -n "${floor_tier_pips}" ]]; then
+    current_fee="$(cast call "${HOOK_ADDRESS}" "currentFeeBips()(uint24)" --rpc-url "${RPC_URL}" 2>/dev/null || true)"
+    if [[ -z "${current_fee}" ]]; then
+      echo "WARN: unable to read currentFeeBips() after initialize (HOOK_ADDRESS=${HOOK_ADDRESS})" >&2
+    elif [[ "${current_fee}" != "${floor_tier_pips}" ]]; then
+      echo "ERROR: initial fee mismatch: currentFeeBips=${current_fee}, expected floor=${floor_tier_pips}" >&2
+      exit 1
+    else
+      echo "==> Verified initial fee is floor tier (${current_fee})"
+    fi
+  fi
+fi

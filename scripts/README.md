@@ -33,6 +33,7 @@ Scripts will automatically:
 Secrets should live in `./.env` (repo root). Typical variables:
 
 - `DEFAULT_PRIVATE_KEY` — deployer key (used by configs via `PRIVATE_KEY=${DEFAULT_PRIVATE_KEY:-}`)
+- `DEFAULT_OWNER` — optional owner address override for hook admin
 - `DEFAULT_GUARDIAN` — guardian address (optional)
 - `REQUIRE_GUARDIAN_CONTRACT=1` — optional strict mode to require contract guardian (recommended for production)
 
@@ -44,7 +45,8 @@ Secrets should live in `./.env` (repo root). Typical variables:
 - `CREATOR_FEE_ADDRESS` — optional payout recipient for creator fees (defaults to `GUARDIAN`)
 
 Note:
-- Fee tiers are network-configurable with arbitrary count and passed to the hook constructor on deploy.
+- Fee tiers and controller/timing params are mutable on-chain via owner setters.
+- `deploy_hook.sh` now applies config values through setters immediately after deployment (pause -> configure -> unpause).
 - Floor tier is used as start fee and pause fee.
 
 ## Unified test runner
@@ -79,6 +81,11 @@ This runs the Foundry script:
 
 Outputs:
 - `./scripts/out/deploy.<chain>.json` (contains the deployed hook address)
+
+Post-deploy actions in the same script:
+- pauses the hook,
+- applies fee tiers/roles + controller params + timing params + creator fee config via on-chain setters,
+- unpauses the hook.
 
 ### Create + initialize pool
 
