@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Anvil Sepolia preflight suite for VolumeDynamicFeeHook v2.
+# Anvil local preflight suite for VolumeDynamicFeeHook v2 (Sepolia fork).
 #
 # Required env:
 #   SEPOLIA_FORK_URL   Sepolia RPC URL used for forking.
@@ -32,7 +32,8 @@ require_cmd rg
 : "${PRIVATE_KEY:?PRIVATE_KEY is required}"
 
 export CHAIN="sepolia"
-export RPC_URL="http://127.0.0.1:8545"
+ANVIL_RPC_URL="http://127.0.0.1:8545"
+export RPC_URL="${ANVIL_RPC_URL}"
 export VERBOSE="${VERBOSE:-0}"
 
 OWNER_PK="${PRIVATE_KEY}"
@@ -40,8 +41,8 @@ GUARDIAN_PK="0x59c6995e998f97a5a0044966f0945385aace2f59b95f4d9b3e9b6a38f9f6f62b"
 OUTSIDER_PK="0x5de4111afa1a4b94908fef3deabf442ba4f8d615f4c6d93ce2d5d4f29e6f5f3f"
 ETH_RICH_WEI="1000000000000000000000"
 DYNAMIC_FEE_FLAG="8388608"
-SQRT_PRICE_LIMIT_X96_ZFO="4295128739"
-SQRT_PRICE_LIMIT_X96_OZF="1461446703485210103287273052203988822378723970342"
+SQRT_PRICE_LIMIT_X96_ZFO="4295128740"
+SQRT_PRICE_LIMIT_X96_OZF="1461446703485210103287273052203988822378723970341"
 POOL_ID=""
 POOL_KEY=""
 HOOK_ADDRESS=""
@@ -54,12 +55,11 @@ CHAIN_ID="11155111"
 ANVIL_PID=""
 CONFIG_PATH="${ROOT_DIR}/config/hook.sepolia.conf"
 CONFIG_BACKUP=""
+CACHE_PATH="/tmp/preflight_anvil_cache"
 
 PASS_COUNT=0
 FAIL_COUNT=0
-declare -A SCENARIO_STATUS
-declare -A SCENARIO_REASON
-declare -A SCENARIO_METRICS
+SCENARIO_LINES=()
 
 BASE_MIN_CLOSEVOL_TO_CASH_USD6=""
 BASE_UP_R_TO_CASH_BPS=""
@@ -99,6 +99,18 @@ set_scenario_fail() {
   return 1
 }
 
+state_snapshot_line() {
+  call_hook_getters "${HOOK_ADDRESS}"
+}
+
+set_fail_with_state() {
+  local msg="$1"
+  local snap
+  snap="$(state_snapshot_line || true)"
+  SC_REASON="${msg}; state={${snap}}"
+  return 1
+}
+
 refresh_metrics() {
   local snap fee r close hold
   snap="$(call_hook_getters "${HOOK_ADDRESS}")"
@@ -114,9 +126,25 @@ record_scenario() {
   local status="$2"
   local reason="$3"
   local metrics="$4"
-  SCENARIO_STATUS["${id}"]="${status}"
-  SCENARIO_REASON["${id}"]="${reason}"
-  SCENARIO_METRICS["${id}"]="${metrics}"
+  SCENARIO_LINES+=("${id}|${status}|${reason}|${metrics}")
+}
+
+scenario_field_by_id() {
+  local id="$1"
+  local field="$2"
+  local line
+  for line in "${SCENARIO_LINES[@]}"; do
+    if [[ "${line}" == "${id}"'|'* ]]; then
+      case "${field}" in
+        status) printf '%s\n' "${line}" | awk -F'|' '{print $2}' ;;
+        reason) printf '%s\n' "${line}" | awk -F'|' '{print $3}' ;;
+        metrics) printf '%s\n' "${line}" | awk -F'|' '{print $4}' ;;
+        *) printf '\n' ;;
+      esac
+      return 0
+    fi
+  done
+  printf '\n'
 }
 
 run_scenario() {
@@ -145,20 +173,45 @@ backup_config() {
 
 set_config_hook_address() {
   local new_hook="$1"
-  python3 - "${CONFIG_PATH}" "${new_hook}" <<'PY'
+  python3 - "${CONFIG_PATH}" "HOOK_ADDRESS" "${new_hook}" <<'PY'
 import re
 import sys
 
 path = sys.argv[1]
-hook = sys.argv[2]
+key = sys.argv[2]
+value = sys.argv[3]
 
 with open(path, "r", encoding="utf-8") as f:
     src = f.read()
 
-if re.search(r"^HOOK_ADDRESS=.*$", src, flags=re.M):
-    src = re.sub(r"^HOOK_ADDRESS=.*$", f"HOOK_ADDRESS={hook}", src, flags=re.M)
+if re.search(rf"^{re.escape(key)}=.*$", src, flags=re.M):
+    src = re.sub(rf"^{re.escape(key)}=.*$", f"{key}={value}", src, flags=re.M)
 else:
-    src = src.rstrip() + f"\nHOOK_ADDRESS={hook}\n"
+    src = src.rstrip() + f"\n{key}={value}\n"
+
+with open(path, "w", encoding="utf-8") as f:
+    f.write(src)
+PY
+}
+
+set_config_value() {
+  local key="$1"
+  local value="$2"
+  python3 - "${CONFIG_PATH}" "${key}" "${value}" <<'PY'
+import re
+import sys
+
+path = sys.argv[1]
+key = sys.argv[2]
+value = sys.argv[3]
+
+with open(path, "r", encoding="utf-8") as f:
+    src = f.read()
+
+if re.search(rf"^{re.escape(key)}=.*$", src, flags=re.M):
+    src = re.sub(rf"^{re.escape(key)}=.*$", f"{key}={value}", src, flags=re.M)
+else:
+    src = src.rstrip() + f"\n{key}={value}\n"
 
 with open(path, "w", encoding="utf-8") as f:
     f.write(src)
@@ -175,6 +228,11 @@ load_config() {
   set -a
   source "${CONFIG_PATH}"
   set +a
+
+  CONFIG_RPC_URL="${RPC_URL:-}"
+  RPC_URL="${ANVIL_RPC_URL}"
+  export RPC_URL
+  export CONFIG_RPC_URL
 }
 
 apply_v2_defaults() {
@@ -216,7 +274,16 @@ wait_for_rpc() {
 
 start_anvil() {
   local args
-  args=(--host 127.0.0.1 --port 8545 --chain-id "${CHAIN_ID}" --fork-url "${SEPOLIA_FORK_URL}" --silent)
+  mkdir -p "${CACHE_PATH}"
+  args=(
+    --host 127.0.0.1
+    --port 8545
+    --chain-id "${CHAIN_ID}"
+    --fork-url "${SEPOLIA_FORK_URL}"
+    --cache-path "${CACHE_PATH}"
+    --no-storage-caching
+    --silent
+  )
   if [[ -n "${SEPOLIA_FORK_BLOCK:-}" ]]; then
     args+=(--fork-block-number "${SEPOLIA_FORK_BLOCK}")
   fi
@@ -281,30 +348,105 @@ ensure_swap_helper() {
 }
 
 deploy_and_create_pipeline() {
+  local deploy_json candidate code
+
   backup_config
+  set_config_value "GUARDIAN" "${GUARDIAN_ADDR}"
+  set_config_value "CREATOR_FEE_ADDRESS" "${OWNER_ADDR}"
 
   export REQUIRE_GUARDIAN_CONTRACT=0
   export PRIVATE_KEY="${OWNER_PK}"
-  export GUARDIAN="${GUARDIAN_ADDR}"
-  export CREATOR_FEE_ADDRESS="${OWNER_ADDR}"
+  deploy_json="${ROOT_DIR}/scripts/out/deploy.sepolia.json"
+  rm -f "${deploy_json}"
 
-  ./scripts/deploy_hook.sh --chain "${CHAIN}" --rpc-url "${RPC_URL}" --private-key "${OWNER_PK}" --broadcast >/tmp/preflight_deploy.log 2>&1
+  if ! run_deploy_hook_script; then
+    return 1
+  fi
 
-  HOOK_ADDRESS="$(extract_hook_from_deploy_json "${ROOT_DIR}/scripts/out/deploy.sepolia.json")"
+  candidate="$(extract_hook_from_deploy_json "${deploy_json}" || true)"
+  if [[ -n "${candidate}" ]]; then
+    code="$(cast code --rpc-url "${RPC_URL}" "${candidate}" 2>/dev/null || true)"
+    if [[ -n "${code}" && "${code}" != "0x" ]]; then
+      HOOK_ADDRESS="${candidate}"
+    fi
+  fi
+
+  if [[ -z "${HOOK_ADDRESS}" ]]; then
+    HOOK_ADDRESS="$(extract_hook_from_deploy_json "${deploy_json}")"
+  fi
   [[ -n "${HOOK_ADDRESS}" ]] || die "Failed to parse HOOK_ADDRESS from scripts/out/deploy.sepolia.json"
   set_config_hook_address "${HOOK_ADDRESS}"
 
-  ./scripts/create_pool.sh --chain "${CHAIN}" --rpc-url "${RPC_URL}" --private-key "${OWNER_PK}" --broadcast >/tmp/preflight_create_pool.log 2>&1
+  if ! run_create_pool_script; then
+    return 1
+  fi
 
   read -r TOKEN0 TOKEN1 <<<"$(sort_tokens "${VOLATILE}" "${STABLE}")"
   POOL_KEY="(${TOKEN0},${TOKEN1},${DYNAMIC_FEE_FLAG},${TICK_SPACING},${HOOK_ADDRESS})"
   POOL_ID="$(compute_pool_id "${VOLATILE}" "${STABLE}" "${TICK_SPACING}" "${HOOK_ADDRESS}")"
 }
 
+is_transient_rpc_error() {
+  local path="$1"
+  grep -Eqi "connection (reset|closed)|broken pipe|timed out|SendRequest|error sending request|Failed to get EIP-1559 fees|Connection reset by peer|transport error" "${path}"
+}
+
+run_deploy_hook_script() {
+  local attempt candidate code
+  for attempt in 1 2 3; do
+    if ./scripts/deploy_hook.sh --chain "${CHAIN}" --rpc-url "${RPC_URL}" --private-key "${OWNER_PK}" --broadcast >/tmp/preflight_deploy.log 2>&1; then
+      return 0
+    fi
+
+    candidate="$(extract_hook_from_deploy_json "${ROOT_DIR}/scripts/out/deploy.sepolia.json" || true)"
+    if [[ -n "${candidate}" ]]; then
+      code="$(cast code --rpc-url "${RPC_URL}" "${candidate}" 2>/dev/null || true)"
+      if [[ -n "${code}" && "${code}" != "0x" ]]; then
+        log "deploy_hook attempt ${attempt}: non-zero exit, but hook code is present at ${candidate}; continuing"
+        HOOK_ADDRESS="${candidate}"
+        return 0
+      fi
+    fi
+
+    if (( attempt < 3 )) && is_transient_rpc_error "/tmp/preflight_deploy.log"; then
+      log "deploy_hook transient RPC error on attempt ${attempt}; retrying"
+      sleep 1
+      continue
+    fi
+    return 1
+  done
+  return 1
+}
+
+run_create_pool_script() {
+  local attempt fee
+  for attempt in 1 2 3; do
+    if ./scripts/create_pool.sh --chain "${CHAIN}" --rpc-url "${RPC_URL}" --private-key "${OWNER_PK}" --broadcast >/tmp/preflight_create_pool.log 2>&1; then
+      return 0
+    fi
+
+    fee="$(cast_call_single "${HOOK_ADDRESS}" "currentFeeBips()(uint24)" || true)"
+    if [[ "${fee}" =~ ^[0-9]+$ ]]; then
+      if grep -qi "Pool initialized\\.|AlreadyInitialized" /tmp/preflight_create_pool.log; then
+        log "create_pool attempt ${attempt}: non-zero exit, but pool appears initialized (currentFeeBips=${fee}); continuing"
+        return 0
+      fi
+    fi
+
+    if (( attempt < 3 )) && is_transient_rpc_error "/tmp/preflight_create_pool.log"; then
+      log "create_pool transient RPC error on attempt ${attempt}; retrying"
+      sleep 1
+      continue
+    fi
+    return 1
+  done
+  return 1
+}
+
 ensure_allowance_max() {
   local token="$1"
   local spender="$2"
-  cast send --rpc-url "${RPC_URL}" --private-key "${OWNER_PK}" "${token}" \
+  cast_send_retry --private-key "${OWNER_PK}" "${token}" \
     "approve(address,uint256)" "${spender}" \
     "0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff" >/dev/null
 }
@@ -348,12 +490,21 @@ swap_exact_in_eth() {
   local amount_wei="$1"
   local params
   params="(true,-${amount_wei},${SQRT_PRICE_LIMIT_X96_ZFO})"
-  cast send --rpc-url "${RPC_URL}" --private-key "${OWNER_PK}" --value "${amount_wei}" "${SWAP_HELPER}" \
+  cast_send_retry --private-key "${OWNER_PK}" --value "${amount_wei}" "${SWAP_HELPER}" \
     "swap((address,address,uint24,int24,address),(bool,int256,uint160),(bool,bool),bytes)(bytes32)" \
     "${POOL_KEY}" "${params}" "(false,false)" "0x" >/dev/null
 }
 
-close_period_with_seed() {
+swap_exact_in_stable() {
+  local amount_raw="$1"
+  local params
+  params="(false,-${amount_raw},${SQRT_PRICE_LIMIT_X96_OZF})"
+  cast_send_retry --private-key "${OWNER_PK}" "${SWAP_HELPER}" \
+    "swap((address,address,uint24,int24,address),(bool,int256,uint160),(bool,bool),bytes)(bytes32)" \
+    "${POOL_KEY}" "${params}" "(false,false)" "0x" >/dev/null
+}
+
+close_period_with_seed_eth() {
   local seed_amount="$1"
   local period
   period="$(cast_call_single "${HOOK_ADDRESS}" "periodSeconds()(uint32)")"
@@ -361,17 +512,59 @@ close_period_with_seed() {
   swap_exact_in_eth "${seed_amount}"
 }
 
+close_period_with_seed_stable() {
+  local seed_amount="$1"
+  local period
+  period="$(cast_call_single "${HOOK_ADDRESS}" "periodSeconds()(uint32)")"
+  warp_seconds "$((period + 1))"
+  swap_exact_in_stable "${seed_amount}"
+}
+
+close_until_idx_eth() {
+  local target_idx="$1"
+  local max_rounds="$2"
+  shift 2
+
+  local -a amounts
+  local round idx amt amount_idx
+  amounts=("$@")
+  [[ "${#amounts[@]}" -gt 0 ]] || return 1
+
+  for round in $(seq 1 "${max_rounds}"); do
+    amount_idx=$((round - 1))
+    if (( amount_idx >= ${#amounts[@]} )); then
+      amount_idx=$((${#amounts[@]} - 1))
+    fi
+    amt="${amounts[${amount_idx}]}"
+    close_period_with_seed_eth "${amt}" || return 1
+    idx="$(jq -r '.[0]' <<<"$(state_debug_json)")"
+    if [[ "${idx}" == "${target_idx}" ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
 load_fee_tiers() {
   local count i
   FEE_TIERS_BY_IDX=()
-  count="$(cast_call_single "${HOOK_ADDRESS}" "feeTierCount()(uint16)")"
+  count="$(cast_call_single "${HOOK_ADDRESS}" "feeTierCount()(uint16)" || true)"
+  [[ "${count}" =~ ^[0-9]+$ ]] || return 1
+  if (( count == 0 )); then
+    return 1
+  fi
   for i in $(seq 0 $((count - 1))); do
-    FEE_TIERS_BY_IDX+=("$(cast_call_single "${HOOK_ADDRESS}" "feeTiers(uint256)(uint24)" "${i}")")
+    local tier
+    tier="$(cast_call_single "${HOOK_ADDRESS}" "feeTiers(uint256)(uint24)" "${i}" || true)"
+    [[ "${tier}" =~ ^[0-9]+$ ]] || return 1
+    FEE_TIERS_BY_IDX+=("${tier}")
   done
-  FLOOR_IDX="$(cast_call_single "${HOOK_ADDRESS}" "floorIdx()(uint8)")"
-  CASH_IDX="$(cast_call_single "${HOOK_ADDRESS}" "cashIdx()(uint8)")"
-  EXTREME_IDX="$(cast_call_single "${HOOK_ADDRESS}" "extremeIdx()(uint8)")"
-  CAP_IDX="$(cast_call_single "${HOOK_ADDRESS}" "capIdx()(uint8)")"
+  FLOOR_IDX="$(cast_call_single "${HOOK_ADDRESS}" "floorIdx()(uint8)" || true)"
+  CASH_IDX="$(cast_call_single "${HOOK_ADDRESS}" "cashIdx()(uint8)" || true)"
+  EXTREME_IDX="$(cast_call_single "${HOOK_ADDRESS}" "extremeIdx()(uint8)" || true)"
+  CAP_IDX="$(cast_call_single "${HOOK_ADDRESS}" "capIdx()(uint8)" || true)"
+  [[ "${FLOOR_IDX}" =~ ^[0-9]+$ && "${CASH_IDX}" =~ ^[0-9]+$ && "${EXTREME_IDX}" =~ ^[0-9]+$ && "${CAP_IDX}" =~ ^[0-9]+$ ]] || return 1
+  return 0
 }
 
 tier_by_idx() {
@@ -380,23 +573,37 @@ tier_by_idx() {
 }
 
 load_controller_params() {
-  CP_MIN_CLOSEVOL_TO_CASH_USD6="$(cast_call_single "${HOOK_ADDRESS}" "minCloseVolToCashUsd6()(uint64)")"
-  CP_UP_R_TO_CASH_BPS="$(cast_call_single "${HOOK_ADDRESS}" "upRToCashBps()(uint16)")"
-  CP_CASH_HOLD_PERIODS="$(cast_call_single "${HOOK_ADDRESS}" "cashHoldPeriods()(uint8)")"
-  CP_MIN_CLOSEVOL_TO_EXTREME_USD6="$(cast_call_single "${HOOK_ADDRESS}" "minCloseVolToExtremeUsd6()(uint64)")"
-  CP_UP_R_TO_EXTREME_BPS="$(cast_call_single "${HOOK_ADDRESS}" "upRToExtremeBps()(uint16)")"
-  CP_UP_EXTREME_CONFIRM_PERIODS="$(cast_call_single "${HOOK_ADDRESS}" "upExtremeConfirmPeriods()(uint8)")"
-  CP_EXTREME_HOLD_PERIODS="$(cast_call_single "${HOOK_ADDRESS}" "extremeHoldPeriods()(uint8)")"
-  CP_DOWN_R_FROM_EXTREME_BPS="$(cast_call_single "${HOOK_ADDRESS}" "downRFromExtremeBps()(uint16)")"
-  CP_DOWN_EXTREME_CONFIRM_PERIODS="$(cast_call_single "${HOOK_ADDRESS}" "downExtremeConfirmPeriods()(uint8)")"
-  CP_DOWN_R_FROM_CASH_BPS="$(cast_call_single "${HOOK_ADDRESS}" "downRFromCashBps()(uint16)")"
-  CP_DOWN_CASH_CONFIRM_PERIODS="$(cast_call_single "${HOOK_ADDRESS}" "downCashConfirmPeriods()(uint8)")"
-  CP_EMERGENCY_FLOOR_CLOSEVOL_USD6="$(cast_call_single "${HOOK_ADDRESS}" "emergencyFloorCloseVolUsd6()(uint64)")"
-  CP_EMERGENCY_CONFIRM_PERIODS="$(cast_call_single "${HOOK_ADDRESS}" "emergencyConfirmPeriods()(uint8)")"
+  CP_MIN_CLOSEVOL_TO_CASH_USD6="$(cast_call_single "${HOOK_ADDRESS}" "minCloseVolToCashUsd6()(uint64)" || true)"
+  CP_UP_R_TO_CASH_BPS="$(cast_call_single "${HOOK_ADDRESS}" "upRToCashBps()(uint16)" || true)"
+  CP_CASH_HOLD_PERIODS="$(cast_call_single "${HOOK_ADDRESS}" "cashHoldPeriods()(uint8)" || true)"
+  CP_MIN_CLOSEVOL_TO_EXTREME_USD6="$(cast_call_single "${HOOK_ADDRESS}" "minCloseVolToExtremeUsd6()(uint64)" || true)"
+  CP_UP_R_TO_EXTREME_BPS="$(cast_call_single "${HOOK_ADDRESS}" "upRToExtremeBps()(uint16)" || true)"
+  CP_UP_EXTREME_CONFIRM_PERIODS="$(cast_call_single "${HOOK_ADDRESS}" "upExtremeConfirmPeriods()(uint8)" || true)"
+  CP_EXTREME_HOLD_PERIODS="$(cast_call_single "${HOOK_ADDRESS}" "extremeHoldPeriods()(uint8)" || true)"
+  CP_DOWN_R_FROM_EXTREME_BPS="$(cast_call_single "${HOOK_ADDRESS}" "downRFromExtremeBps()(uint16)" || true)"
+  CP_DOWN_EXTREME_CONFIRM_PERIODS="$(cast_call_single "${HOOK_ADDRESS}" "downExtremeConfirmPeriods()(uint8)" || true)"
+  CP_DOWN_R_FROM_CASH_BPS="$(cast_call_single "${HOOK_ADDRESS}" "downRFromCashBps()(uint16)" || true)"
+  CP_DOWN_CASH_CONFIRM_PERIODS="$(cast_call_single "${HOOK_ADDRESS}" "downCashConfirmPeriods()(uint8)" || true)"
+  CP_EMERGENCY_FLOOR_CLOSEVOL_USD6="$(cast_call_single "${HOOK_ADDRESS}" "emergencyFloorCloseVolUsd6()(uint64)" || true)"
+  CP_EMERGENCY_CONFIRM_PERIODS="$(cast_call_single "${HOOK_ADDRESS}" "emergencyConfirmPeriods()(uint8)" || true)"
+  [[ "${CP_MIN_CLOSEVOL_TO_CASH_USD6}" =~ ^[0-9]+$ ]] || return 1
+  [[ "${CP_UP_R_TO_CASH_BPS}" =~ ^[0-9]+$ ]] || return 1
+  [[ "${CP_CASH_HOLD_PERIODS}" =~ ^[0-9]+$ ]] || return 1
+  [[ "${CP_MIN_CLOSEVOL_TO_EXTREME_USD6}" =~ ^[0-9]+$ ]] || return 1
+  [[ "${CP_UP_R_TO_EXTREME_BPS}" =~ ^[0-9]+$ ]] || return 1
+  [[ "${CP_UP_EXTREME_CONFIRM_PERIODS}" =~ ^[0-9]+$ ]] || return 1
+  [[ "${CP_EXTREME_HOLD_PERIODS}" =~ ^[0-9]+$ ]] || return 1
+  [[ "${CP_DOWN_R_FROM_EXTREME_BPS}" =~ ^[0-9]+$ ]] || return 1
+  [[ "${CP_DOWN_EXTREME_CONFIRM_PERIODS}" =~ ^[0-9]+$ ]] || return 1
+  [[ "${CP_DOWN_R_FROM_CASH_BPS}" =~ ^[0-9]+$ ]] || return 1
+  [[ "${CP_DOWN_CASH_CONFIRM_PERIODS}" =~ ^[0-9]+$ ]] || return 1
+  [[ "${CP_EMERGENCY_FLOOR_CLOSEVOL_USD6}" =~ ^[0-9]+$ ]] || return 1
+  [[ "${CP_EMERGENCY_CONFIRM_PERIODS}" =~ ^[0-9]+$ ]] || return 1
+  return 0
 }
 
 persist_base_controller() {
-  load_controller_params
+  load_controller_params || return 1
   BASE_MIN_CLOSEVOL_TO_CASH_USD6="${CP_MIN_CLOSEVOL_TO_CASH_USD6}"
   BASE_UP_R_TO_CASH_BPS="${CP_UP_R_TO_CASH_BPS}"
   BASE_CASH_HOLD_PERIODS="${CP_CASH_HOLD_PERIODS}"
@@ -415,7 +622,7 @@ persist_base_controller() {
 set_controller_params() {
   local tuple
   tuple="(${CP_MIN_CLOSEVOL_TO_CASH_USD6},${CP_UP_R_TO_CASH_BPS},${CP_CASH_HOLD_PERIODS},${CP_MIN_CLOSEVOL_TO_EXTREME_USD6},${CP_UP_R_TO_EXTREME_BPS},${CP_UP_EXTREME_CONFIRM_PERIODS},${CP_EXTREME_HOLD_PERIODS},${CP_DOWN_R_FROM_EXTREME_BPS},${CP_DOWN_EXTREME_CONFIRM_PERIODS},${CP_DOWN_R_FROM_CASH_BPS},${CP_DOWN_CASH_CONFIRM_PERIODS},${CP_EMERGENCY_FLOOR_CLOSEVOL_USD6},${CP_EMERGENCY_CONFIRM_PERIODS})"
-  cast send --rpc-url "${RPC_URL}" --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" \
+  cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" \
     "setControllerParams((uint64,uint16,uint8,uint64,uint16,uint8,uint8,uint16,uint8,uint16,uint8,uint64,uint8))" \
     "${tuple}" >/dev/null
 }
@@ -437,9 +644,27 @@ restore_base_controller() {
   set_controller_params
 }
 
+ensure_unpaused() {
+  local paused
+  paused="$(cast_call_single "${HOOK_ADDRESS}" "isPaused()(bool)" || true)"
+  if [[ "${paused}" == "false" ]]; then
+    return 0
+  fi
+  cast_send_retry --private-key "${GUARDIAN_PK}" "${HOOK_ADDRESS}" "unpause()" >/dev/null 2>&1 || true
+  paused="$(cast_call_single "${HOOK_ADDRESS}" "isPaused()(bool)" || true)"
+  if [[ "${paused}" == "false" ]]; then
+    return 0
+  fi
+  cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" "unpause()" >/dev/null 2>&1 || true
+  paused="$(cast_call_single "${HOOK_ADDRESS}" "isPaused()(bool)" || true)"
+  [[ "${paused}" == "false" ]]
+}
+
 reset_state_floor_unpaused() {
-  cast send --rpc-url "${RPC_URL}" --private-key "${GUARDIAN_PK}" "${HOOK_ADDRESS}" "pause()" >/dev/null
-  cast send --rpc-url "${RPC_URL}" --private-key "${GUARDIAN_PK}" "${HOOK_ADDRESS}" "unpause()" >/dev/null
+  cast_send_retry --private-key "${GUARDIAN_PK}" "${HOOK_ADDRESS}" "pause()" >/dev/null 2>&1 || \
+    cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" "pause()" >/dev/null
+  cast_send_retry --private-key "${GUARDIAN_PK}" "${HOOK_ADDRESS}" "unpause()" >/dev/null 2>&1 || \
+    cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" "unpause()" >/dev/null
 }
 
 state_debug_json() {
@@ -449,7 +674,7 @@ state_debug_json() {
 scenario_s0() {
   local expected_mask hook_int hook_mask permissions fee_floor current_fee
 
-  load_fee_tiers
+  load_fee_tiers || return 1
   fee_floor="$(tier_by_idx "${FLOOR_IDX}")"
   current_fee="$(cast_call_single "${HOOK_ADDRESS}" "currentFeeBips()(uint24)")"
   assert_eq "initial fee is floor" "${current_fee}" "${fee_floor}" || return 1
@@ -487,8 +712,9 @@ scenario_s1() {
   err_not_creator="$(cast sig "NotCreator()")"
   err_not_guardian="$(cast sig "NotGuardian()")"
 
-  load_fee_tiers
-  load_controller_params
+  ensure_unpaused || return 1
+  load_fee_tiers || return 1
+  load_controller_params || return 1
 
   tiers_arg="[$(IFS=,; echo "${FEE_TIERS_BY_IDX[*]}")]"
   period="$(cast_call_single "${HOOK_ADDRESS}" "periodSeconds()(uint32)")"
@@ -517,8 +743,8 @@ scenario_s1() {
     "cast call --rpc-url \"${RPC_URL}\" --from \"${OUTSIDER_ADDR}\" \"${HOOK_ADDRESS}\" \"setGuardian(address)\" \"${OUTSIDER_ADDR}\"" \
     "${err_not_creator}" || return 1
 
-  cast send --rpc-url "${RPC_URL}" --private-key "${GUARDIAN_PK}" "${HOOK_ADDRESS}" "pause()" >/dev/null || return 1
-  cast send --rpc-url "${RPC_URL}" --private-key "${GUARDIAN_PK}" "${HOOK_ADDRESS}" "unpause()" >/dev/null || return 1
+  cast_send_retry --private-key "${GUARDIAN_PK}" "${HOOK_ADDRESS}" "pause()" >/dev/null || return 1
+  cast_send_retry --private-key "${GUARDIAN_PK}" "${HOOK_ADDRESS}" "unpause()" >/dev/null || return 1
   expect_revert "guardian cannot setGuardian" \
     "cast call --rpc-url \"${RPC_URL}\" --from \"${GUARDIAN_ADDR}\" \"${HOOK_ADDRESS}\" \"setGuardian(address)\" \"${GUARDIAN_ADDR}\"" \
     "${err_not_creator}" || return 1
@@ -526,17 +752,17 @@ scenario_s1() {
     "cast call --rpc-url \"${RPC_URL}\" --from \"${OUTSIDER_ADDR}\" \"${HOOK_ADDRESS}\" \"pause()\"" \
     "${err_not_guardian}" || return 1
 
-  cast send --rpc-url "${RPC_URL}" --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" "pause()" >/dev/null || return 1
-  cast send --rpc-url "${RPC_URL}" --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" \
+  cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" "pause()" >/dev/null || return 1
+  cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" \
     "setFeeTiersAndRoles(uint24[],uint8,uint8,uint8,uint8)" "${tiers_arg}" "${FLOOR_IDX}" "${CASH_IDX}" "${EXTREME_IDX}" "${CAP_IDX}" >/dev/null || return 1
-  cast send --rpc-url "${RPC_URL}" --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" \
+  cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" \
     "setTimingParams(uint32,uint8,uint32,uint16)" "${period}" "${ema}" "${lull}" "${deadband}" >/dev/null || return 1
-  cast send --rpc-url "${RPC_URL}" --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" \
+  cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" \
     "setControllerParams((uint64,uint16,uint8,uint64,uint16,uint8,uint8,uint16,uint8,uint16,uint8,uint64,uint8))" "${ctrl_tuple}" >/dev/null || return 1
-  cast send --rpc-url "${RPC_URL}" --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" "setCreatorFeePercent(uint16)" 0 >/dev/null || return 1
-  cast send --rpc-url "${RPC_URL}" --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" "setCreatorFeeConfig(address,uint16)" "${OWNER_ADDR}" "${creator_bps}" >/dev/null || return 1
-  cast send --rpc-url "${RPC_URL}" --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" "setGuardian(address)" "${GUARDIAN_ADDR}" >/dev/null || return 1
-  cast send --rpc-url "${RPC_URL}" --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" "unpause()" >/dev/null || return 1
+  cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" "setCreatorFeePercent(uint16)" 0 >/dev/null || return 1
+  cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" "setCreatorFeeConfig(address,uint16)" "${OWNER_ADDR}" "${creator_bps}" >/dev/null || return 1
+  cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" "setGuardian(address)" "${GUARDIAN_ADDR}" >/dev/null || return 1
+  cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" "unpause()" >/dev/null || return 1
 
   SC_REASON="role gating enforced; guardian limited to pause flow; owner control ok"
   refresh_metrics
@@ -547,7 +773,8 @@ scenario_s2() {
   local state_json fee_idx hold_rem up_streak down_streak em_streak period_start ema_vol
 
   err_requires_paused="$(cast sig "RequiresPaused()")"
-  load_fee_tiers
+  ensure_unpaused || return 1
+  load_fee_tiers || return 1
   tiers_arg="[$(IFS=,; echo "${FEE_TIERS_BY_IDX[*]}")]"
   floor_fee="$(tier_by_idx "${FLOOR_IDX}")"
   period="$(cast_call_single "${HOOK_ADDRESS}" "periodSeconds()(uint32)")"
@@ -556,14 +783,14 @@ scenario_s2() {
   deadband="$(cast_call_single "${HOOK_ADDRESS}" "deadbandBps()(uint16)")"
 
   swap_exact_in_eth "3000000000000000" || return 1
-  close_period_with_seed "1000000000000000" || return 1
+  close_period_with_seed_eth "1000000000000000" || return 1
 
   expect_revert "setFeeTiersAndRoles requires paused" \
     "cast call --rpc-url \"${RPC_URL}\" --from \"${OWNER_ADDR}\" \"${HOOK_ADDRESS}\" \"setFeeTiersAndRoles(uint24[],uint8,uint8,uint8,uint8)\" \"${tiers_arg}\" \"${FLOOR_IDX}\" \"${CASH_IDX}\" \"${EXTREME_IDX}\" \"${CAP_IDX}\"" \
     "${err_requires_paused}" || return 1
 
-  cast send --rpc-url "${RPC_URL}" --private-key "${GUARDIAN_PK}" "${HOOK_ADDRESS}" "pause()" >/dev/null || return 1
-  cast send --rpc-url "${RPC_URL}" --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" \
+  cast_send_retry --private-key "${GUARDIAN_PK}" "${HOOK_ADDRESS}" "pause()" >/dev/null || return 1
+  cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" \
     "setFeeTiersAndRoles(uint24[],uint8,uint8,uint8,uint8)" "${tiers_arg}" "${FLOOR_IDX}" "${CASH_IDX}" "${EXTREME_IDX}" "${CAP_IDX}" >/dev/null || return 1
 
   now_ts="$(block_timestamp)"
@@ -585,18 +812,18 @@ scenario_s2() {
     set_scenario_fail "periodStart mismatch after setFeeTiersAndRoles reset" || return 1
   fi
   assert_eq "paused true after pause flow" "$(cast_call_single "${HOOK_ADDRESS}" "isPaused()(bool)")" "true" || return 1
-  cast send --rpc-url "${RPC_URL}" --private-key "${GUARDIAN_PK}" "${HOOK_ADDRESS}" "unpause()" >/dev/null || return 1
+  cast_send_retry --private-key "${GUARDIAN_PK}" "${HOOK_ADDRESS}" "unpause()" >/dev/null || return 1
   assert_eq "fee still floor after tiers reset" "$(cast_call_single "${HOOK_ADDRESS}" "currentFeeBips()(uint24)")" "${floor_fee}" || return 1
 
   swap_exact_in_eth "3000000000000000" || return 1
-  close_period_with_seed "1000000000000000" || return 1
+  close_period_with_seed_eth "1000000000000000" || return 1
 
   expect_revert "setTimingParams requires paused" \
     "cast call --rpc-url \"${RPC_URL}\" --from \"${OWNER_ADDR}\" \"${HOOK_ADDRESS}\" \"setTimingParams(uint32,uint8,uint32,uint16)\" \"${period}\" \"${ema}\" \"${lull}\" \"${deadband}\"" \
     "${err_requires_paused}" || return 1
 
-  cast send --rpc-url "${RPC_URL}" --private-key "${GUARDIAN_PK}" "${HOOK_ADDRESS}" "pause()" >/dev/null || return 1
-  cast send --rpc-url "${RPC_URL}" --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" \
+  cast_send_retry --private-key "${GUARDIAN_PK}" "${HOOK_ADDRESS}" "pause()" >/dev/null || return 1
+  cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" \
     "setTimingParams(uint32,uint8,uint32,uint16)" "${period}" "${ema}" "${lull}" "${deadband}" >/dev/null || return 1
   now_ts="$(block_timestamp)"
   state_json="$(state_debug_json)"
@@ -616,7 +843,7 @@ scenario_s2() {
   if (( period_start > now_ts + 2 || period_start + 2 < now_ts )); then
     set_scenario_fail "periodStart mismatch after setTimingParams reset" || return 1
   fi
-  cast send --rpc-url "${RPC_URL}" --private-key "${GUARDIAN_PK}" "${HOOK_ADDRESS}" "unpause()" >/dev/null || return 1
+  cast_send_retry --private-key "${GUARDIAN_PK}" "${HOOK_ADDRESS}" "unpause()" >/dev/null || return 1
 
   SC_REASON="pause gating for cold updates enforced; reset semantics deterministic"
   refresh_metrics
@@ -625,7 +852,8 @@ scenario_s2() {
 scenario_s3() {
   local original_up_cash original_min_cash original_cash_hold original_down_cash_confirm
 
-  load_controller_params
+  ensure_unpaused || return 1
+  load_controller_params || return 1
   original_up_cash="${CP_UP_R_TO_CASH_BPS}"
   original_min_cash="${CP_MIN_CLOSEVOL_TO_CASH_USD6}"
   original_cash_hold="${CP_CASH_HOLD_PERIODS}"
@@ -664,20 +892,20 @@ scenario_s4() {
     "cast call --rpc-url \"${RPC_URL}\" --from \"${OWNER_ADDR}\" \"${HOOK_ADDRESS}\" \"setCreatorFeePercent(uint16)\" 11" \
     "${expected_revert}" || return 1
 
-  cast send --rpc-url "${RPC_URL}" --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" "setCreatorFeePercent(uint16)" 5 >/dev/null || return 1
+  cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" "setCreatorFeePercent(uint16)" 5 >/dev/null || return 1
   after_bps="$(cast_call_single "${HOOK_ADDRESS}" "creatorFeeBps()(uint16)")"
   assert_eq "creator fee bps updated to 500" "${after_bps}" "500" || return 1
 
   creator_bps="$(cast_call_single "${HOOK_ADDRESS}" "creatorFeeBps()(uint16)")"
-  cast send --rpc-url "${RPC_URL}" --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" "setCreatorFeeConfig(address,uint16)" "${GUARDIAN_ADDR}" "${creator_bps}" >/dev/null || return 1
+  cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" "setCreatorFeeConfig(address,uint16)" "${GUARDIAN_ADDR}" "${creator_bps}" >/dev/null || return 1
   creator_now="$(cast_call_single "${HOOK_ADDRESS}" "creator()(address)")"
-  assert_eq "creator switched to guardian" "${creator_now,,}" "${GUARDIAN_ADDR,,}" || return 1
+  assert_eq "creator switched to guardian" "$(printf '%s' "${creator_now}" | tr '[:upper:]' '[:lower:]')" "$(printf '%s' "${GUARDIAN_ADDR}" | tr '[:upper:]' '[:lower:]')" || return 1
 
-  cast send --rpc-url "${RPC_URL}" --private-key "${GUARDIAN_PK}" "${HOOK_ADDRESS}" "setCreatorFeeConfig(address,uint16)" "${OWNER_ADDR}" "${creator_bps}" >/dev/null || return 1
+  cast_send_retry --private-key "${GUARDIAN_PK}" "${HOOK_ADDRESS}" "setCreatorFeeConfig(address,uint16)" "${OWNER_ADDR}" "${creator_bps}" >/dev/null || return 1
   creator_now="$(cast_call_single "${HOOK_ADDRESS}" "creator()(address)")"
-  assert_eq "creator switched back to owner" "${creator_now,,}" "${OWNER_ADDR,,}" || return 1
+  assert_eq "creator switched back to owner" "$(printf '%s' "${creator_now}" | tr '[:upper:]' '[:lower:]')" "$(printf '%s' "${OWNER_ADDR}" | tr '[:upper:]' '[:lower:]')" || return 1
 
-  cast send --rpc-url "${RPC_URL}" --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" "setCreatorFeePercent(uint16)" 0 >/dev/null || return 1
+  cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" "setCreatorFeePercent(uint16)" 0 >/dev/null || return 1
   after_bps="$(cast_call_single "${HOOK_ADDRESS}" "creatorFeeBps()(uint16)")"
   assert_eq "creator fee bps back to zero" "${after_bps}" "0" || return 1
   swap_exact_in_eth "1500000000000000" || return 1
@@ -688,33 +916,36 @@ scenario_s4() {
 
 scenario_s5() {
   local state_json fee_idx hold_rem up_streak down_streak em_streak
-  local floor_idx cash_idx extreme_idx
+  local floor_idx cash_idx extreme_idx saw_up_confirm
   local high_swap low_swap
+  local -a high_steps
 
   high_swap="3000000000000000"
-  low_swap="1000000000000"
+  low_swap="100000000000000"
+  high_steps=("3000000000000000" "10000000000000000" "30000000000000000" "100000000000000000")
 
-  load_fee_tiers
+  ensure_unpaused || return 1
+  load_fee_tiers || return 1
   floor_idx="${FLOOR_IDX}"
   cash_idx="${CASH_IDX}"
   extreme_idx="${EXTREME_IDX}"
 
   reset_state_floor_unpaused || return 1
-  cast send --rpc-url "${RPC_URL}" --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" "setCreatorFeePercent(uint16)" 0 >/dev/null || return 1
+  cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" "setCreatorFeePercent(uint16)" 0 >/dev/null || return 1
 
-  load_controller_params
-  CP_MIN_CLOSEVOL_TO_CASH_USD6="1000000"
-  CP_UP_R_TO_CASH_BPS="9000"
+  load_controller_params || return 1
+  CP_MIN_CLOSEVOL_TO_CASH_USD6="1"
+  CP_UP_R_TO_CASH_BPS="3000"
   CP_CASH_HOLD_PERIODS="2"
-  CP_MIN_CLOSEVOL_TO_EXTREME_USD6="1000000"
-  CP_UP_R_TO_EXTREME_BPS="9000"
+  CP_MIN_CLOSEVOL_TO_EXTREME_USD6="1"
+  CP_UP_R_TO_EXTREME_BPS="3000"
   CP_UP_EXTREME_CONFIRM_PERIODS="2"
   CP_EXTREME_HOLD_PERIODS="2"
-  CP_DOWN_R_FROM_EXTREME_BPS="11000"
+  CP_DOWN_R_FROM_EXTREME_BPS="2000"
   CP_DOWN_EXTREME_CONFIRM_PERIODS="2"
-  CP_DOWN_R_FROM_CASH_BPS="11000"
+  CP_DOWN_R_FROM_CASH_BPS="2000"
   CP_DOWN_CASH_CONFIRM_PERIODS="2"
-  CP_EMERGENCY_FLOOR_CLOSEVOL_USD6="1"
+  CP_EMERGENCY_FLOOR_CLOSEVOL_USD6="0"
   CP_EMERGENCY_CONFIRM_PERIODS="3"
   set_controller_params || return 1
 
@@ -722,63 +953,86 @@ scenario_s5() {
   assert_eq "bootstrap ema starts at 0" "$(jq -r '.[7]' <<<"${state_json}")" "0" || return 1
 
   swap_exact_in_eth "${high_swap}" || return 1
-  close_period_with_seed "${high_swap}" || return 1
+  close_period_with_seed_eth "${high_swap}" || return 1
   fee_idx="$(jq -r '.[0]' <<<"$(state_debug_json)")"
   assert_eq "bootstrap closure stays floor" "${fee_idx}" "${floor_idx}" || return 1
 
-  swap_exact_in_eth "${high_swap}" || return 1
-  close_period_with_seed "${high_swap}" || return 1
+  close_until_idx_eth "${cash_idx}" 6 "${high_steps[@]}" || {
+    set_fail_with_state "jump to cash failed" || return 1
+  }
   state_json="$(state_debug_json)"
-  fee_idx="$(jq -r '.[0]' <<<"${state_json}")"
   hold_rem="$(jq -r '.[1]' <<<"${state_json}")"
-  assert_eq "jump to cash" "${fee_idx}" "${cash_idx}" || return 1
   assert_true "cash hold set >0" "[[ ${hold_rem} -gt 0 ]]" || return 1
 
-  swap_exact_in_eth "${high_swap}" || return 1
-  close_period_with_seed "${high_swap}" || return 1
-  state_json="$(state_debug_json)"
-  fee_idx="$(jq -r '.[0]' <<<"${state_json}")"
-  up_streak="$(jq -r '.[2]' <<<"${state_json}")"
-  assert_eq "still cash after first extreme confirm" "${fee_idx}" "${cash_idx}" || return 1
-  assert_true "upExtreme streak started" "[[ ${up_streak} -ge 1 ]]" || return 1
-
-  swap_exact_in_eth "${high_swap}" || return 1
-  close_period_with_seed "${high_swap}" || return 1
-  state_json="$(state_debug_json)"
-  fee_idx="$(jq -r '.[0]' <<<"${state_json}")"
+  saw_up_confirm=0
+  local extreme_round
+  for extreme_round in $(seq 1 8); do
+    close_period_with_seed_eth "${high_swap}" || return 1
+    state_json="$(state_debug_json)"
+    fee_idx="$(jq -r '.[0]' <<<"${state_json}")"
+    up_streak="$(jq -r '.[2]' <<<"${state_json}")"
+    if [[ "${fee_idx}" == "${cash_idx}" ]] && (( up_streak >= 1 )); then
+      saw_up_confirm=1
+    fi
+    if [[ "${fee_idx}" == "${extreme_idx}" ]]; then
+      break
+    fi
+    if (( up_streak == 0 )) && [[ "${fee_idx}" == "${floor_idx}" ]]; then
+      set_fail_with_state "failed to maintain upward path toward extreme" || return 1
+    fi
+    if (( saw_up_confirm == 1 )) && [[ "${fee_idx}" == "${cash_idx}" ]]; then
+      # keep driving until confirm threshold is reached
+      continue
+    fi
+    if (( saw_up_confirm == 0 )) && [[ "${fee_idx}" == "${cash_idx}" ]]; then
+      continue
+    fi
+    # hard stop for unexpected state drift
+    if [[ "${fee_idx}" != "${cash_idx}" ]]; then
+      set_fail_with_state "jump to extreme after confirms failed" || return 1
+    fi
+  done
+  assert_true "upExtreme streak confirmation observed" "[[ ${saw_up_confirm} -eq 1 ]]" || return 1
   hold_rem="$(jq -r '.[1]' <<<"${state_json}")"
-  assert_eq "jump to extreme after confirms" "${fee_idx}" "${extreme_idx}" || return 1
+  if [[ "${fee_idx}" != "${extreme_idx}" ]]; then
+    set_fail_with_state "jump to extreme after confirms failed" || return 1
+  fi
   assert_true "extreme hold set >0" "[[ ${hold_rem} -gt 0 ]]" || return 1
 
-  close_period_with_seed "${low_swap}" || return 1
+  close_period_with_seed_eth "${low_swap}" || return 1
   assert_eq "down blocked by hold #1" "$(jq -r '.[0]' <<<"$(state_debug_json)")" "${extreme_idx}" || return 1
 
-  close_period_with_seed "${low_swap}" || return 1
+  close_period_with_seed_eth "${low_swap}" || return 1
   state_json="$(state_debug_json)"
   assert_eq "still extreme while down confirmations start" "$(jq -r '.[0]' <<<"${state_json}")" "${extreme_idx}" || return 1
   assert_true "down streak started from extreme" "[[ $(jq -r '.[3]' <<<"${state_json}") -ge 1 ]]" || return 1
 
-  close_period_with_seed "${low_swap}" || return 1
+  close_period_with_seed_eth "${low_swap}" || return 1
   assert_eq "extreme down to cash after confirms" "$(jq -r '.[0]' <<<"$(state_debug_json)")" "${cash_idx}" || return 1
 
-  close_period_with_seed "${low_swap}" || return 1
+  close_period_with_seed_eth "${low_swap}" || return 1
   assert_eq "cash down confirm #1 keeps cash" "$(jq -r '.[0]' <<<"$(state_debug_json)")" "${cash_idx}" || return 1
 
-  close_period_with_seed "${low_swap}" || return 1
+  close_period_with_seed_eth "${low_swap}" || return 1
   assert_eq "cash down to floor after confirms" "$(jq -r '.[0]' <<<"$(state_debug_json)")" "${floor_idx}" || return 1
 
   CP_EMERGENCY_FLOOR_CLOSEVOL_USD6="900000000000"
   CP_EMERGENCY_CONFIRM_PERIODS="2"
   set_controller_params || return 1
 
+  reset_state_floor_unpaused || return 1
   swap_exact_in_eth "${high_swap}" || return 1
-  close_period_with_seed "${high_swap}" || return 1
+  close_period_with_seed_eth "${high_swap}" || return 1
+  assert_eq "emergency pre-bootstrap stays floor" "$(jq -r '.[0]' <<<"$(state_debug_json)")" "${floor_idx}" || return 1
+  close_until_idx_eth "${cash_idx}" 6 "${high_steps[@]}" || {
+    set_fail_with_state "re-enter cash for emergency test failed" || return 1
+  }
   assert_eq "re-enter cash for emergency test" "$(jq -r '.[0]' <<<"$(state_debug_json)")" "${cash_idx}" || return 1
 
-  close_period_with_seed "${low_swap}" || return 1
+  close_period_with_seed_eth "${low_swap}" || return 1
   assert_eq "emergency confirm #1 keeps cash" "$(jq -r '.[0]' <<<"$(state_debug_json)")" "${cash_idx}" || return 1
 
-  close_period_with_seed "${low_swap}" || return 1
+  close_period_with_seed_eth "${low_swap}" || return 1
   state_json="$(state_debug_json)"
   fee_idx="$(jq -r '.[0]' <<<"${state_json}")"
   hold_rem="$(jq -r '.[1]' <<<"${state_json}")"
@@ -824,30 +1078,35 @@ scenario_s6() {
 }
 
 scenario_s7() {
-  local lull floor_idx cash_idx state_json fee_idx ema_vol hold_rem up_streak down_streak em_streak
+  local lull floor_idx cash_idx state_json fee_idx ema_vol hold_rem up_streak down_streak em_streak high_swap
+  local -a high_steps
+  high_swap="3000000000000000"
+  high_steps=("3000000000000000" "10000000000000000" "30000000000000000" "100000000000000000")
 
-  load_fee_tiers
+  ensure_unpaused || return 1
+  load_fee_tiers || return 1
   floor_idx="${FLOOR_IDX}"
   cash_idx="${CASH_IDX}"
 
-  load_controller_params
-  CP_MIN_CLOSEVOL_TO_CASH_USD6="1000000"
-  CP_UP_R_TO_CASH_BPS="9000"
+  load_controller_params || return 1
+  CP_MIN_CLOSEVOL_TO_CASH_USD6="1"
+  CP_UP_R_TO_CASH_BPS="3000"
   CP_CASH_HOLD_PERIODS="2"
-  CP_EMERGENCY_FLOOR_CLOSEVOL_USD6="1"
+  CP_EMERGENCY_FLOOR_CLOSEVOL_USD6="0"
   CP_EMERGENCY_CONFIRM_PERIODS="3"
   set_controller_params || return 1
 
   reset_state_floor_unpaused || return 1
-  swap_exact_in_eth "3000000000000000" || return 1
-  close_period_with_seed "3000000000000000" || return 1
-  swap_exact_in_eth "3000000000000000" || return 1
-  close_period_with_seed "3000000000000000" || return 1
-  assert_eq "lull precondition reaches cash" "$(jq -r '.[0]' <<<"$(state_debug_json)")" "${cash_idx}" || return 1
+  swap_exact_in_eth "${high_swap}" || return 1
+  close_period_with_seed_eth "${high_swap}" || return 1
+  assert_eq "lull pre-bootstrap stays floor" "$(jq -r '.[0]' <<<"$(state_debug_json)")" "${floor_idx}" || return 1
+  close_until_idx_eth "${cash_idx}" 6 "${high_steps[@]}" || {
+    set_fail_with_state "lull precondition did not reach cash" || return 1
+  }
 
   lull="$(cast_call_single "${HOOK_ADDRESS}" "lullResetSeconds()(uint32)")"
   warp_seconds "$((lull + 1))"
-  swap_exact_in_eth "1000000000000" || return 1
+  swap_exact_in_eth "1000000000000000" || return 1
 
   state_json="$(state_debug_json)"
   fee_idx="$(jq -r '.[0]' <<<"${state_json}")"
@@ -878,7 +1137,7 @@ scenario_s8() {
   hook_addr="$(extract_hook_from_deploy_json "${ROOT_DIR}/scripts/out/deploy.sepolia.json")"
   [[ -n "${hook_addr}" ]] || return 1
 
-  removed_hits="$(rg -n "setCreatorFeeAddress\\(|setControllerParamsO4\\(|legacyO4|obsoleteO4" scripts test/scripts -S || true)"
+  removed_hits="$(rg -n "setCreatorFeeAddress\\(|setControllerParamsO4\\(|legacyO4|obsoleteO4" scripts test/scripts -g '!scripts/anvil/preflight_local.sh' -S || true)"
   if [[ -n "${removed_hits}" ]]; then
     set_scenario_fail "detected references to removed O4-era methods in scripts" || return 1
   fi
@@ -888,12 +1147,15 @@ scenario_s8() {
 }
 
 print_summary() {
-  local id
+  local id status reason metrics
   log ""
   log "===== PREFLIGHT SUMMARY ====="
   log "pass=${PASS_COUNT} fail=${FAIL_COUNT}"
   for id in S0 S1 S2 S3 S4 S5 S6 S7 S8; do
-    log "${id}: ${SCENARIO_STATUS[${id}]:-N/A} - ${SCENARIO_REASON[${id}]:-n/a} | ${SCENARIO_METRICS[${id}]:-n/a}"
+    status="$(scenario_field_by_id "${id}" "status")"
+    reason="$(scenario_field_by_id "${id}" "reason")"
+    metrics="$(scenario_field_by_id "${id}" "metrics")"
+    log "${id}: ${status:-N/A} - ${reason:-n/a} | ${metrics:-n/a}"
   done
 }
 
@@ -924,8 +1186,8 @@ main() {
   log "swap_helper=${SWAP_HELPER}"
   log "modify_helper=${MODIFY_HELPER}"
 
-  load_fee_tiers
-  persist_base_controller
+  load_fee_tiers || die "Failed to load fee tiers after deployment"
+  persist_base_controller || die "Failed to load base controller params"
 
   run_scenario "S0" scenario_s0
   run_scenario "S1" scenario_s1

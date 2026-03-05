@@ -78,12 +78,14 @@ assert_true() {
 
 normalize_expected_revert() {
   local expect="$1"
+  local lowered
   if [[ -z "${expect}" ]]; then
     printf ''
     return 0
   fi
   if [[ "${expect}" =~ ^0x[0-9a-fA-F]{8}$ ]]; then
-    printf '%s' "${expect,,}"
+    lowered="$(printf '%s' "${expect}" | tr '[:upper:]' '[:lower:]')"
+    printf '%s' "${lowered}"
     return 0
   fi
   if [[ "${expect}" == *"("*")"* ]]; then
@@ -98,60 +100,124 @@ extract_first_hex() {
   grep -Eo '0x[0-9a-fA-F]{8,}' <<<"${text}" | head -n 1 | tr '[:upper:]' '[:lower:]'
 }
 
+is_transient_rpc_output() {
+  local out="$1"
+  grep -Eqi "connection (closed|reset)|broken pipe|SendRequest|error sending request|transport error|Connection reset by peer|timed out" <<<"${out}"
+}
+
 expect_revert() {
   local name="${1:?name is required}"
   local cmd="${2:?command is required}"
   local expected="${3:-}"
-  local normalized out rc first_hex
+  local normalized out rc first_hex attempt
 
   normalized="$(normalize_expected_revert "${expected}")"
-  set +e
-  out="$(eval "${cmd}" 2>&1)"
-  rc=$?
-  set -e
 
-  debug "expect_revert output [${name}]: ${out}"
+  for attempt in 1 2 3; do
+    set +e
+    out="$(eval "${cmd}" 2>&1)"
+    rc=$?
+    set -e
 
-  if [[ "${rc}" -eq 0 ]]; then
-    printf 'EXPECT_REVERT failed [%s]: command succeeded\n' "${name}" >&2
-    return 1
-  fi
+    debug "expect_revert output [${name}]: ${out}"
 
-  if [[ -z "${normalized}" ]]; then
-    return 0
-  fi
+    if [[ "${rc}" -eq 0 ]]; then
+      printf 'EXPECT_REVERT failed [%s]: command succeeded\n' "${name}" >&2
+      return 1
+    fi
 
-  if [[ "${normalized}" =~ ^0x[0-9a-f]{8}$ ]]; then
-    first_hex="$(extract_first_hex "${out}")"
-    if [[ -n "${first_hex}" && "${first_hex:0:10}" == "${normalized}" ]]; then
+    if [[ -z "${normalized}" ]]; then
       return 0
     fi
+
+    if [[ "${normalized}" =~ ^0x[0-9a-f]{8}$ ]]; then
+      first_hex="$(extract_first_hex "${out}")"
+      if [[ -n "${first_hex}" && "${first_hex:0:10}" == "${normalized}" ]]; then
+        return 0
+      fi
+      if grep -qi -- "${normalized}" <<<"${out}"; then
+        return 0
+      fi
+      if (( attempt < 3 )) && is_transient_rpc_output "${out}"; then
+        sleep 0.2
+        continue
+      fi
+      printf 'EXPECT_REVERT failed [%s]: expected selector=%s output=%s\n' "${name}" "${normalized}" "${out}" >&2
+      return 1
+    fi
+
     if grep -qi -- "${normalized}" <<<"${out}"; then
       return 0
     fi
-    printf 'EXPECT_REVERT failed [%s]: expected selector=%s output=%s\n' "${name}" "${normalized}" "${out}" >&2
+    if (( attempt < 3 )) && is_transient_rpc_output "${out}"; then
+      sleep 0.2
+      continue
+    fi
+    printf 'EXPECT_REVERT failed [%s]: expected text=%s output=%s\n' "${name}" "${normalized}" "${out}" >&2
     return 1
-  fi
+  done
 
-  if grep -qi -- "${normalized}" <<<"${out}"; then
-    return 0
-  fi
-  printf 'EXPECT_REVERT failed [%s]: expected text=%s output=%s\n' "${name}" "${normalized}" "${out}" >&2
+  printf 'EXPECT_REVERT failed [%s]: transient rpc errors persisted\n' "${name}" >&2
   return 1
 }
 
 cast_call_single() {
   local to="${1:?to is required}"
   local sig="${2:?signature is required}"
+  local out rc token attempt
   shift 2
-  cast call --rpc-url "${RPC_URL}" "${to}" "${sig}" "$@" | awk '{print $1}'
+  for attempt in 1 2 3; do
+    set +e
+    out="$(cast call --rpc-url "${RPC_URL}" "${to}" "${sig}" "$@" 2>&1)"
+    rc=$?
+    set -e
+    if [[ "${rc}" -eq 0 ]]; then
+      token="$(awk '{print $1}' <<<"${out}")"
+      if [[ -n "${token}" ]]; then
+        printf '%s\n' "${token}"
+        return 0
+      fi
+    fi
+    sleep 0.2
+  done
+  return 1
 }
 
 cast_call_json() {
   local to="${1:?to is required}"
   local sig="${2:?signature is required}"
+  local out rc attempt
   shift 2
-  cast call --rpc-url "${RPC_URL}" --json "${to}" "${sig}" "$@"
+  for attempt in 1 2 3; do
+    set +e
+    out="$(cast call --rpc-url "${RPC_URL}" --json "${to}" "${sig}" "$@" 2>&1)"
+    rc=$?
+    set -e
+    if [[ "${rc}" -eq 0 ]]; then
+      if jq -e . >/dev/null 2>&1 <<<"${out}"; then
+        printf '%s\n' "${out}"
+        return 0
+      fi
+    fi
+    sleep 0.2
+  done
+  return 1
+}
+
+cast_send_retry() {
+  local out rc attempt
+  for attempt in 1 2 3; do
+    set +e
+    out="$(cast send --rpc-url "${RPC_URL}" "$@" 2>&1)"
+    rc=$?
+    set -e
+    if [[ "${rc}" -eq 0 ]]; then
+      printf '%s\n' "${out}"
+      return 0
+    fi
+    sleep 0.3
+  done
+  return 1
 }
 
 extract_hook_from_deploy_json() {

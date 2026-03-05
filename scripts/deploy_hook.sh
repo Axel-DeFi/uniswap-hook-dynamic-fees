@@ -471,7 +471,7 @@ PY
 
 echo "==> Hook deployed at ${HOOK_ADDRESS}"
 
-if [[ "${CREATOR,,}" != "${DEPLOYER_ADDR,,}" ]]; then
+if [[ "$(lower "${CREATOR}")" != "$(lower "${DEPLOYER_ADDR}")" ]]; then
   echo "WARN: CREATOR=${CREATOR} differs from signer ${DEPLOYER_ADDR}; skipping post-deploy on-chain setter calls."
   echo "      Run pause/setter/unpause from the CREATOR account to finish configuration."
   echo "==> Wrote ${OUT_PATH}"
