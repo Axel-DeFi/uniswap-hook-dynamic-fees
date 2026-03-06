@@ -381,7 +381,7 @@ get_fee_tier() {
 
 get_state_debug() {
   local hook="${1:-${HOOK_ADDRESS:-}}"
-  local state_json fee_idx hold_remaining up_streak down_streak emergency_streak period_start period_vol ema_vol rbps
+  local state_json fee_idx hold_remaining up_streak down_streak emergency_streak period_start period_vol ema_vol paused rbps
   [[ -n "${hook}" ]] || return 1
 
   state_json="$(cast_call_json "${hook}" "getStateDebug()(uint8,uint8,uint8,uint8,uint8,uint64,uint64,uint96,bool)")" || return 1
@@ -393,28 +393,23 @@ get_state_debug() {
   period_start="$(jq -r '.[5]' <<<"${state_json}")"
   period_vol="$(jq -r '.[6]' <<<"${state_json}")"
   ema_vol="$(jq -r '.[7]' <<<"${state_json}")"
+  paused="$(jq -r '.[8]' <<<"${state_json}")"
 
   rbps="0"
   if [[ "${ema_vol}" =~ ^[0-9]+$ && "${period_vol}" =~ ^[0-9]+$ && "${ema_vol}" != "0" ]]; then
-    rbps="$(python3 - <<'PY' "${period_vol}" "${ema_vol}"
-import sys
-pv = int(sys.argv[1])
-ev = int(sys.argv[2])
-print((pv * 10000) // ev if ev > 0 else 0)
-PY
-)"
+    rbps="$(( (period_vol * 10000) / ema_vol ))"
   fi
 
-  printf 'feeIdx=%s rBps=%s closeVol=%s holdRemaining=%s emaVol=%s periodStart=%s upStreak=%s downStreak=%s emergencyStreak=%s\n' \
+  printf 'feeIdx=%s rBps=%s closeVol=%s holdRemaining=%s emaVol=%s periodStart=%s paused=%s upStreak=%s downStreak=%s emergencyStreak=%s\n' \
     "${fee_idx}" "${rbps}" "${period_vol}" "${hold_remaining}" "${ema_vol}" "${period_start}" \
-    "${up_streak}" "${down_streak}" "${emergency_streak}"
+    "${paused}" "${up_streak}" "${down_streak}" "${emergency_streak}"
 }
 
 checkpoint() {
   local label="${1:?checkpoint label is required}"
   local expected_fee="${2:-}"
   local hook="${HOOK_ADDRESS:-}"
-  local fee state rbps close_vol hold_remaining line
+  local fee state rbps close_vol hold_remaining fee_idx ema_vol paused line
 
   [[ -n "${hook}" ]] || return 1
 
@@ -423,15 +418,21 @@ checkpoint() {
   rbps="$(line_kv_get "${state}" "rBps")"
   close_vol="$(line_kv_get "${state}" "closeVol")"
   hold_remaining="$(line_kv_get "${state}" "holdRemaining")"
+  fee_idx="$(line_kv_get "${state}" "feeIdx")"
+  ema_vol="$(line_kv_get "${state}" "emaVol")"
+  paused="$(line_kv_get "${state}" "paused")"
 
   [[ -n "${rbps}" ]] || rbps="n/a"
   [[ -n "${close_vol}" ]] || close_vol="n/a"
   [[ -n "${hold_remaining}" ]] || hold_remaining="n/a"
+  [[ -n "${fee_idx}" ]] || fee_idx="n/a"
+  [[ -n "${ema_vol}" ]] || ema_vol="n/a"
+  [[ -n "${paused}" ]] || paused="n/a"
 
   if [[ -n "${expected_fee}" ]]; then
-    line="checkpoint=${label} feeTier=${fee} expectedFee=${expected_fee} rBps=${rbps} closeVol=${close_vol} holdRemaining=${hold_remaining}"
+    line="checkpoint=${label} feeTier=${fee} expectedFee=${expected_fee} feeIdx=${fee_idx} rBps=${rbps} closeVol=${close_vol} emaVol=${ema_vol} holdRemaining=${hold_remaining} paused=${paused}"
   else
-    line="checkpoint=${label} feeTier=${fee} expectedFee=- rBps=${rbps} closeVol=${close_vol} holdRemaining=${hold_remaining}"
+    line="checkpoint=${label} feeTier=${fee} expectedFee=- feeIdx=${fee_idx} rBps=${rbps} closeVol=${close_vol} emaVol=${ema_vol} holdRemaining=${hold_remaining} paused=${paused}"
   fi
 
   if [[ "${VERBOSE}" == "1" ]]; then
@@ -500,14 +501,8 @@ call_hook_getters() {
   ema_vol="$(jq -r '.[7]' <<<"${state_json}")"
 
   rbps="0"
-  if [[ "${ema_vol}" != "0" ]]; then
-    rbps="$(python3 - <<'PY' "${period_vol}" "${ema_vol}"
-import sys
-pv = int(sys.argv[1])
-ev = int(sys.argv[2])
-print((pv * 10000) // ev if ev > 0 else 0)
-PY
-)"
+  if [[ "${ema_vol}" =~ ^[0-9]+$ && "${period_vol}" =~ ^[0-9]+$ && "${ema_vol}" != "0" ]]; then
+    rbps="$(( (period_vol * 10000) / ema_vol ))"
   fi
 
   printf 'fee_idx=%s hold_remaining=%s up_extreme_streak=%s down_streak=%s emergency_streak=%s period_start=%s period_vol=%s ema_vol=%s r_bps=%s current_fee_bips=%s paused=%s floor_idx=%s cash_idx=%s extreme_idx=%s cap_idx=%s period_seconds=%s ema_periods=%s lull_reset_seconds=%s deadband_bps=%s min_closevol_cash=%s up_r_cash=%s cash_hold=%s min_closevol_extreme=%s up_r_extreme=%s up_extreme_confirm=%s extreme_hold=%s down_r_extreme=%s down_extreme_confirm=%s down_r_cash=%s down_cash_confirm=%s emergency_floor=%s emergency_confirm=%s creator_fee_bps=%s\n' \
@@ -517,4 +512,160 @@ PY
     "${lull_reset}" "${deadband}" "${min_cash}" "${up_cash}" "${hold_cash}" "${min_ext}" "${up_ext}" \
     "${up_ext_conf}" "${hold_ext}" "${down_ext}" "${down_ext_conf}" "${down_cash}" "${down_cash_conf}" \
     "${em_floor}" "${em_conf}" "${creator_bps}"
+}
+
+abi_function_entries() {
+  forge inspect --json VolumeDynamicFeeHook abi \
+    | jq -r '.[] | select(.type=="function") | "\(.name)(\(.inputs|map(.type)|join(",")))|\(.stateMutability)"'
+}
+
+abi_function_signatures() {
+  abi_function_entries | cut -d'|' -f1
+}
+
+source_custom_errors() {
+  local src_path="${1:-src/VolumeDynamicFeeHook.sol}"
+  python3 - "${src_path}" <<'PY'
+import re
+import sys
+
+path = sys.argv[1]
+pattern = re.compile(r'^\s*error\s+([A-Za-z0-9_]+)\(([^)]*)\)\s*;', re.M)
+
+with open(path, "r", encoding="utf-8") as f:
+    src = f.read()
+
+for m in pattern.finditer(src):
+    name = m.group(1)
+    params = m.group(2).strip()
+    if not params:
+        print(f"{name}()")
+        continue
+    types = []
+    for raw in params.split(","):
+        item = raw.strip()
+        if not item:
+            continue
+        token = item.split()[0]
+        types.append(token)
+    print(f"{name}({','.join(types)})")
+PY
+}
+
+source_reason_constants() {
+  local src_path="${1:-src/VolumeDynamicFeeHook.sol}"
+  python3 - "${src_path}" <<'PY'
+import re
+import sys
+
+path = sys.argv[1]
+pattern = re.compile(r'^\s*uint8\s+public\s+constant\s+(REASON_[A-Z0-9_]+)\s*=\s*([0-9]+)\s*;', re.M)
+
+with open(path, "r", encoding="utf-8") as f:
+    src = f.read()
+
+for name, value in pattern.findall(src):
+    print(f"{name}={value}")
+PY
+}
+
+tx_hash_from_send_output() {
+  local out="${1:-}"
+  local tx cand
+
+  tx="$(awk '/transactionHash/ {print $2}' <<<"${out}" | tail -n 1 | tr '[:upper:]' '[:lower:]')"
+  if [[ "${tx}" =~ ^0x[0-9a-f]{64}$ ]]; then
+    printf '%s\n' "${tx}"
+    return 0
+  fi
+
+  tx=""
+  while IFS= read -r cand; do
+    [[ -n "${cand}" ]] || continue
+    cand="$(printf '%s' "${cand}" | tr '[:upper:]' '[:lower:]')"
+    if cast receipt --rpc-url "${RPC_URL}" "${cand}" >/dev/null 2>&1; then
+      printf '%s\n' "${cand}"
+      return 0
+    fi
+    if [[ -z "${tx}" ]]; then
+      tx="${cand}"
+    fi
+  done < <(grep -Eo '0x[0-9a-fA-F]{64}' <<<"${out}")
+
+  printf '%s\n' "${tx}"
+}
+
+cast_send_txhash() {
+  local out tx
+  out="$(cast_send_retry "$@")" || return 1
+  tx="$(tx_hash_from_send_output "${out}")"
+  if [[ -z "${tx}" ]]; then
+    debug "cast_send_txhash could not parse tx hash from output: ${out}"
+    return 1
+  fi
+  printf '%s\n' "${tx}"
+}
+
+period_closed_topic0() {
+  cast keccak "PeriodClosed(uint24,uint8,uint24,uint8,uint64,uint96,uint64,uint8)"
+}
+
+period_closed_events_from_tx() {
+  local tx_hash="${1:?tx hash is required}"
+  local topic0="${2:-}"
+  local receipt_json
+
+  if [[ -z "${topic0}" ]]; then
+    topic0="$(period_closed_topic0)"
+  fi
+
+  receipt_json="$(cast receipt --rpc-url "${RPC_URL}" --json "${tx_hash}")" || return 1
+  python3 - "${topic0}" "${receipt_json}" <<'PY'
+import json
+import sys
+
+topic0 = sys.argv[1].lower()
+receipt = json.loads(sys.argv[2])
+
+for idx, log in enumerate(receipt.get("logs", [])):
+    topics = [str(t).lower() for t in log.get("topics", [])]
+    if not topics or topics[0] != topic0:
+        continue
+
+    data = str(log.get("data", "0x"))
+    if not data.startswith("0x"):
+        continue
+    payload = data[2:]
+    if len(payload) < 64 * 8:
+        continue
+
+    words = [int(payload[i * 64:(i + 1) * 64], 16) for i in range(8)]
+    print(
+        "logIndex={idx} fromFee={from_fee} fromFeeIdx={from_idx} toFee={to_fee} toFeeIdx={to_idx} "
+        "closeVol={close_vol} emaVol={ema_vol} lpFees={lp_fees} reason={reason}".format(
+            idx=idx,
+            from_fee=words[0],
+            from_idx=words[1],
+            to_fee=words[2],
+            to_idx=words[3],
+            close_vol=words[4],
+            ema_vol=words[5],
+            lp_fees=words[6],
+            reason=words[7],
+        )
+    )
+PY
+}
+
+last_period_closed_reason_from_tx() {
+  local tx_hash="${1:?tx hash is required}"
+  local events last_line reason
+  events="$(period_closed_events_from_tx "${tx_hash}" || true)"
+  last_line="$(tail -n 1 <<<"${events}")"
+  reason="$(line_kv_get "${last_line}" "reason")"
+  if [[ "${reason}" =~ ^[0-9]+$ ]]; then
+    printf '%s\n' "${reason}"
+    return 0
+  fi
+  return 1
 }

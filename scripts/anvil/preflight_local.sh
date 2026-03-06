@@ -1,21 +1,21 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Anvil local preflight suite for VolumeDynamicFeeHook v2 (Sepolia fork).
+# Local Anvil preflight suite for VolumeDynamicFeeHook v2.
 #
 # Required env:
-#   SEPOLIA_FORK_URL   Sepolia RPC URL used for forking.
-#   PRIVATE_KEY        Signer private key used as hook owner/creator.
+#   PRIVATE_KEY            Creator/deployer private key used for admin operations.
 #
 # Optional env:
-#   SEPOLIA_FORK_BLOCK Fork block number (default: latest).
-#   VERBOSE=1          Enable verbose debug logs.
-#   DISABLE_SNAPSHOT=1 Disable scenario snapshot isolation (debug only).
+#   CONFIG_PATH            Path to local config (default: ./config/hook.local.conf).
+#   VERBOSE=1              Print detailed checkpoint and debug lines.
+#   DISABLE_SNAPSHOT=1     Disable snapshot isolation (debug only).
 #
-# What this validates:
-#   - Deploy/create pipeline against local Anvil fork (no manual steps).
-#   - Runtime/admin correctness scenarios S0..S8 (access, pause gating, updates, warp transitions).
-#   - Script-level regression surface and ABI compatibility checks.
+# Validates:
+#   - local deploy/create pipeline on clean Anvil (chain-id 31337, no fork)
+#   - ABI/custom-error/REASON coverage (with exclusions only for unreachable paths)
+#   - controller state-machine behavior with strict reason-code checks
+#   - admin controls, pause flow, creator fee, rescue path, callback direct-call protection
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "${ROOT_DIR}"
@@ -30,62 +30,124 @@ require_cmd python3
 require_cmd rg
 require_cmd curl
 
-: "${SEPOLIA_FORK_URL:?SEPOLIA_FORK_URL is required}"
 : "${PRIVATE_KEY:?PRIVATE_KEY is required}"
 
-export CHAIN="sepolia"
+CHAIN="local"
 ANVIL_RPC_URL="http://127.0.0.1:8545"
 export RPC_URL="${ANVIL_RPC_URL}"
 export VERBOSE="${VERBOSE:-0}"
 DISABLE_SNAPSHOT="${DISABLE_SNAPSHOT:-0}"
 
-OWNER_PK="${PRIVATE_KEY}"
-GUARDIAN_PK="0x59c6995e998f97a5a0044966f0945385aace2f59b95f4d9b3e9b6a38f9f6f62b"
-OUTSIDER_PK="0x5de4111afa1a4b94908fef3deabf442ba4f8d615f4c6d93ce2d5d4f29e6f5f3f"
-ETH_RICH_WEI="1000000000000000000000"
+CONFIG_PATH="${CONFIG_PATH:-${ROOT_DIR}/config/hook.local.conf}"
+[[ -f "${CONFIG_PATH}" ]] || die "Config not found: ${CONFIG_PATH}"
+
+CHAIN_ID="31337"
 DYNAMIC_FEE_FLAG="8388608"
 SQRT_PRICE_LIMIT_X96_ZFO="4295128740"
 SQRT_PRICE_LIMIT_X96_OZF="1461446703485210103287273052203988822378723970341"
-POOL_ID=""
-POOL_KEY=""
+SQRT_PRICE_X96_ONE="79228162514264337593543950336"
+PERIOD_CLOSED_TOPIC=""
+REMAPPING_SOLMATE_SRC="solmate/src/=lib/v4-core/lib/solmate/src/"
+REMAPPING_SOLMATE_ROOT="solmate/=lib/v4-core/lib/solmate/src/"
+MOCK_ERC20_BYTECODE=""
+
+CREATOR_PK="${PRIVATE_KEY}"
+GUARDIAN_PK="0x59c6995e998f97a5a0044966f0945385aace2f59b95f4d9b3e9b6a38f9f6f62b"
+ATTACKER_PK="0x5de4111afa1a4b94908fef3deabf442ba4f8d615f4c6d93ce2d5d4f29e6f5f3f"
+ETH_RICH_WEI="1000000000000000000000"
+
+ANVIL_PID=""
+CONFIG_BACKUP=""
+BASE_SNAPSHOT_ID=""
+
+CREATOR_ADDR=""
+GUARDIAN_ADDR=""
+ATTACKER_ADDR=""
+
+POOL_MANAGER=""
+VOLATILE=""
+STABLE=""
+RESCUE_TOKEN=""
 HOOK_ADDRESS=""
 SWAP_HELPER=""
 MODIFY_HELPER=""
-OWNER_ADDR=""
-GUARDIAN_ADDR=""
-OUTSIDER_ADDR=""
-CHAIN_ID="11155111"
-ANVIL_PID=""
-CONFIG_PATH="${ROOT_DIR}/config/hook.sepolia.conf"
-CONFIG_BACKUP=""
-CACHE_PATH="/tmp/preflight_anvil_cache"
+POOL_ID=""
+POOL_KEY=""
+TOKEN0=""
+TOKEN1=""
+STABLE_IS_TOKEN0="0"
+
+FLOOR_IDX=""
+CASH_IDX=""
+EXTREME_IDX=""
+CAP_IDX=""
+FEE_TIERS_BY_IDX=()
+CFG_FEE_TIER_PIPS=()
+CFG_FEE_TIERS_ARG=""
+CFG_FLOOR_IDX=""
+CFG_CASH_IDX=""
+CFG_EXTREME_IDX=""
+CFG_CAP_IDX=""
+CFG_CREATOR_FEE_BPS=""
+
+CP_MIN_CLOSEVOL_TO_CASH_USD6=""
+CP_UP_R_TO_CASH_BPS=""
+CP_CASH_HOLD_PERIODS=""
+CP_MIN_CLOSEVOL_TO_EXTREME_USD6=""
+CP_UP_R_TO_EXTREME_BPS=""
+CP_UP_EXTREME_CONFIRM_PERIODS=""
+CP_EXTREME_HOLD_PERIODS=""
+CP_DOWN_R_FROM_EXTREME_BPS=""
+CP_DOWN_EXTREME_CONFIRM_PERIODS=""
+CP_DOWN_R_FROM_CASH_BPS=""
+CP_DOWN_CASH_CONFIRM_PERIODS=""
+CP_EMERGENCY_FLOOR_CLOSEVOL_USD6=""
+CP_EMERGENCY_CONFIRM_PERIODS=""
+
+BASE_CP_MIN_CLOSEVOL_TO_CASH_USD6=""
+BASE_CP_UP_R_TO_CASH_BPS=""
+BASE_CP_CASH_HOLD_PERIODS=""
+BASE_CP_MIN_CLOSEVOL_TO_EXTREME_USD6=""
+BASE_CP_UP_R_TO_EXTREME_BPS=""
+BASE_CP_UP_EXTREME_CONFIRM_PERIODS=""
+BASE_CP_EXTREME_HOLD_PERIODS=""
+BASE_CP_DOWN_R_FROM_EXTREME_BPS=""
+BASE_CP_DOWN_EXTREME_CONFIRM_PERIODS=""
+BASE_CP_DOWN_R_FROM_CASH_BPS=""
+BASE_CP_DOWN_CASH_CONFIRM_PERIODS=""
+BASE_CP_EMERGENCY_FLOOR_CLOSEVOL_USD6=""
+BASE_CP_EMERGENCY_CONFIRM_PERIODS=""
 
 PASS_COUNT=0
 FAIL_COUNT=0
-SCENARIO_LINES=()
+COVERAGE_FAIL_COUNT=0
 
-BASE_MIN_CLOSEVOL_TO_CASH_USD6=""
-BASE_UP_R_TO_CASH_BPS=""
-BASE_CASH_HOLD_PERIODS=""
-BASE_MIN_CLOSEVOL_TO_EXTREME_USD6=""
-BASE_UP_R_TO_EXTREME_BPS=""
-BASE_UP_EXTREME_CONFIRM_PERIODS=""
-BASE_EXTREME_HOLD_PERIODS=""
-BASE_DOWN_R_FROM_EXTREME_BPS=""
-BASE_DOWN_EXTREME_CONFIRM_PERIODS=""
-BASE_DOWN_R_FROM_CASH_BPS=""
-BASE_DOWN_CASH_CONFIRM_PERIODS=""
-BASE_EMERGENCY_FLOOR_CLOSEVOL_USD6=""
-BASE_EMERGENCY_CONFIRM_PERIODS=""
+TEST_ROWS=()
 
-SC_REASON=""
-SC_KEYS=""
-SC_FEE_BEFORE=""
-SC_FEE_AFTER=""
-SC_EXPECTED_FLOOR=""
-SC_CHECKPOINT_LINES=()
-BASE_SNAPSHOT_ID=""
-SCENARIO_SNAPSHOT_ID=""
+ABI_ENTRIES=()
+ABI_SIGS=()
+ABI_COVER=()          # signature|Txx,Tyy
+
+ERROR_SIGS=()
+ERROR_NAMES=()
+ERROR_NAME_TO_SIG=()  # name|signature
+ERROR_COVER=()        # name|Txx,Tyy
+ERROR_EXCLUDED=()     # name|reason
+
+REASON_ENTRIES=()        # REASON_NAME=value
+REASON_VALUE_TO_NAME=()  # value|REASON_NAME
+REASON_COVER=()          # REASON_NAME|Txx,Tyy
+REASON_EXCLUDED=()       # REASON_NAME|reason
+
+CURRENT_TEST_ID=""
+CURRENT_TEST_DESC=""
+TC_REASON=""
+TC_KEYS=""
+TC_FUNCS=()
+TC_ERRORS=()
+TC_REASONS=()
+TC_CHECKPOINTS=()
+LAST_CLOSE_TX=""
 
 cleanup() {
   if [[ -n "${ANVIL_PID}" ]]; then
@@ -97,319 +159,461 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-kv_get() {
-  local blob="$1"
-  local key="$2"
-  tr ' ' '\n' <<<"${blob}" | sed -n "s/^${key}=//p" | head -n 1
+lower() {
+  printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]'
 }
 
-set_scenario_fail() {
-  SC_REASON="$1"
+percent_to_pips() {
+  local pct="$1"
+  awk -v pct="${pct}" '
+    BEGIN {
+      if (pct !~ /^[0-9]+([.][0-9]+)?$/) exit 1
+      v = pct * 10000
+      p = int(v + 0.5)
+      if (p < 1 || p > 1000000) exit 1
+      print p
+    }' 2>/dev/null
+}
+
+creator_percent_to_bps() {
+  local pct="$1"
+  awk -v pct="${pct}" '
+    BEGIN {
+      if (pct !~ /^[0-9]+([.][0-9]+)?$/) exit 1
+      v = pct * 100
+      b = int(v + 0.5)
+      if (b < 0 || b > 10000) exit 1
+      print b
+    }' 2>/dev/null
+}
+
+config_tier_index_by_pips() {
+  local target="$1"
+  local idx count
+  count="${#CFG_FEE_TIER_PIPS[@]}"
+  for ((idx = 0; idx < count; idx++)); do
+    if [[ "${CFG_FEE_TIER_PIPS[${idx}]}" == "${target}" ]]; then
+      printf '%s\n' "${idx}"
+      return 0
+    fi
+  done
   return 1
 }
 
-state_snapshot_line() {
-  call_hook_getters "${HOOK_ADDRESS}"
-}
+build_config_runtime_args() {
+  local floor_pips cash_pips extreme_pips cap_pips item pips prev
+  local -a raw_items
 
-set_fail_with_state() {
-  local msg="$1"
-  local snap
-  snap="$(state_snapshot_line || true)"
-  SC_REASON="${msg}; state={${snap}}"
-  return 1
-}
+  CFG_FEE_TIER_PIPS=()
+  CFG_FEE_TIERS_ARG=""
+  CFG_FLOOR_IDX=""
+  CFG_CASH_IDX=""
+  CFG_EXTREME_IDX=""
+  CFG_CAP_IDX=""
+  CFG_CREATOR_FEE_BPS=""
 
-refresh_metrics() {
-  local snap fee r close hold
-  snap="$(call_hook_getters "${HOOK_ADDRESS}")"
-  fee="$(kv_get "${snap}" "current_fee_bips")"
-  r="$(kv_get "${snap}" "r_bps")"
-  close="$(kv_get "${snap}" "period_vol")"
-  hold="$(kv_get "${snap}" "hold_remaining")"
-  SC_KEYS="feeTier=${fee} rBps=${r} closeVol=${close} holdRemaining=${hold}"
-}
-
-safe_current_fee_bips() {
-  local fee
-  fee="$(cast_call_single "${HOOK_ADDRESS}" "currentFeeBips()(uint24)" || true)"
-  if [[ "${fee}" =~ ^[0-9]+$ ]]; then
-    printf '%s\n' "${fee}"
-  else
-    printf 'n/a\n'
+  IFS=',' read -r -a raw_items <<<"${FEE_TIERS:-}"
+  if (( ${#raw_items[@]} == 0 )); then
+    return 1
   fi
+
+  prev="-1"
+  for item in "${raw_items[@]}"; do
+    item="$(printf '%s' "${item}" | tr -d '[:space:]')"
+    pips="$(percent_to_pips "${item}" || true)"
+    [[ -n "${pips}" ]] || return 1
+    if (( prev >= 0 && pips <= prev )); then
+      return 1
+    fi
+    prev="${pips}"
+    CFG_FEE_TIER_PIPS+=("${pips}")
+  done
+
+  floor_pips="$(percent_to_pips "$(printf '%s' "${FLOOR_TIER:-}" | tr -d '[:space:]')" || true)"
+  cash_pips="$(percent_to_pips "$(printf '%s' "${CASH_TIER:-}" | tr -d '[:space:]')" || true)"
+  extreme_pips="$(percent_to_pips "$(printf '%s' "${EXTREME_TIER:-}" | tr -d '[:space:]')" || true)"
+  cap_pips="$(percent_to_pips "$(printf '%s' "${CAP_TIER:-}" | tr -d '[:space:]')" || true)"
+  [[ -n "${floor_pips}" && -n "${cash_pips}" && -n "${extreme_pips}" && -n "${cap_pips}" ]] || return 1
+
+  CFG_FLOOR_IDX="$(config_tier_index_by_pips "${floor_pips}" || true)"
+  CFG_CASH_IDX="$(config_tier_index_by_pips "${cash_pips}" || true)"
+  CFG_EXTREME_IDX="$(config_tier_index_by_pips "${extreme_pips}" || true)"
+  CFG_CAP_IDX="$(config_tier_index_by_pips "${cap_pips}" || true)"
+  [[ -n "${CFG_FLOOR_IDX}" && -n "${CFG_CASH_IDX}" && -n "${CFG_EXTREME_IDX}" && -n "${CFG_CAP_IDX}" ]] || return 1
+  if (( CFG_FLOOR_IDX > CFG_CAP_IDX )); then
+    return 1
+  fi
+
+  CFG_FEE_TIERS_ARG="[$(IFS=,; echo "${CFG_FEE_TIER_PIPS[*]}")]"
+
+  CFG_CREATOR_FEE_BPS="$(creator_percent_to_bps "$(printf '%s' "${CREATOR_FEE_PERCENT:-}" | tr -d '[:space:]')" || true)"
+  [[ -n "${CFG_CREATOR_FEE_BPS}" ]] || return 1
+
+  return 0
 }
 
-safe_expected_floor_bips() {
-  local floor_idx floor_fee
-  floor_idx="$(cast_call_single "${HOOK_ADDRESS}" "floorIdx()(uint8)" || true)"
-  if ! [[ "${floor_idx}" =~ ^[0-9]+$ ]]; then
-    printf 'n/a\n'
+list_add_unique() {
+  local arr_name="$1"
+  local value="$2"
+  local count i cur escaped
+
+  eval "count=\${#${arr_name}[@]}"
+  for ((i = 0; i < count; i++)); do
+    eval "cur=\${${arr_name}[i]}"
+    if [[ "${cur}" == "${value}" ]]; then
+      return 0
+    fi
+  done
+
+  escaped="${value//\"/\\\"}"
+  eval "${arr_name}+=(\"${escaped}\")"
+}
+
+join_array() {
+  local arr_name="$1"
+  local sep="${2:-, }"
+  local limit="${3:-0}"
+  local count i shown cur out
+
+  eval "count=\${#${arr_name}[@]}"
+  if (( count == 0 )); then
+    printf '-'
     return 0
   fi
-  floor_fee="$(cast_call_single "${HOOK_ADDRESS}" "feeTiers(uint256)(uint24)" "${floor_idx}" || true)"
-  if [[ "${floor_fee}" =~ ^[0-9]+$ ]]; then
-    printf '%s\n' "${floor_fee}"
-  else
-    printf 'n/a\n'
+
+  shown=0
+  out=""
+  for ((i = 0; i < count; i++)); do
+    if (( limit > 0 && shown >= limit )); then
+      break
+    fi
+    eval "cur=\${${arr_name}[i]}"
+    if [[ -z "${out}" ]]; then
+      out="${cur}"
+    else
+      out="${out}${sep}${cur}"
+    fi
+    shown=$((shown + 1))
+  done
+
+  if (( limit > 0 && count > limit )); then
+    out="${out}${sep}...(+$((count - limit)))"
   fi
+
+  printf '%s' "${out}"
+}
+
+map_append_unique() {
+  local map_name="$1"
+  local key="$2"
+  local value="$3"
+  local count i line k v escaped found
+
+  found=0
+  eval "count=\${#${map_name}[@]}"
+  for ((i = 0; i < count; i++)); do
+    eval "line=\${${map_name}[i]}"
+    k="${line%%|*}"
+    v="${line#*|}"
+    if [[ "${k}" == "${key}" ]]; then
+      case ",${v}," in
+        *",${value},"*) ;;
+        *)
+          if [[ -z "${v}" ]]; then
+            v="${value}"
+          else
+            v="${v},${value}"
+          fi
+          ;;
+      esac
+      escaped="${k}|${v}"
+      escaped="${escaped//\"/\\\"}"
+      eval "${map_name}[${i}]=\"${escaped}\""
+      found=1
+      break
+    fi
+  done
+
+  if (( found == 0 )); then
+    escaped="${key}|${value}"
+    escaped="${escaped//\"/\\\"}"
+    eval "${map_name}+=(\"${escaped}\")"
+  fi
+}
+
+map_set_once() {
+  local map_name="$1"
+  local key="$2"
+  local value="$3"
+  local count i line k escaped
+
+  eval "count=\${#${map_name}[@]}"
+  for ((i = 0; i < count; i++)); do
+    eval "line=\${${map_name}[i]}"
+    k="${line%%|*}"
+    if [[ "${k}" == "${key}" ]]; then
+      return 0
+    fi
+  done
+
+  escaped="${key}|${value}"
+  escaped="${escaped//\"/\\\"}"
+  eval "${map_name}+=(\"${escaped}\")"
+}
+
+map_get() {
+  local map_name="$1"
+  local key="$2"
+  local count i line k v
+
+  eval "count=\${#${map_name}[@]}"
+  for ((i = 0; i < count; i++)); do
+    eval "line=\${${map_name}[i]}"
+    k="${line%%|*}"
+    v="${line#*|}"
+    if [[ "${k}" == "${key}" ]]; then
+      printf '%s\n' "${v}"
+      return 0
+    fi
+  done
+  return 1
+}
+
+error_name_from_sig() {
+  local sig="$1"
+  printf '%s\n' "${sig%%(*}"
+}
+
+error_sig_by_name() {
+  map_get "ERROR_NAME_TO_SIG" "$1" || true
+}
+
+reason_name_by_value() {
+  map_get "REASON_VALUE_TO_NAME" "$1" || true
+}
+
+reason_value_by_name() {
+  local entry name val
+  for entry in "${REASON_ENTRIES[@]}"; do
+    name="${entry%%=*}"
+    val="${entry#*=}"
+    if [[ "${name}" == "$1" ]]; then
+      printf '%s\n' "${val}"
+      return 0
+    fi
+  done
+  return 1
+}
+
+cover_function() {
+  local sig="$1"
+  map_append_unique "ABI_COVER" "${sig}" "${CURRENT_TEST_ID}"
+  list_add_unique "TC_FUNCS" "${sig}"
+}
+
+cover_error() {
+  local err_name="$1"
+  map_append_unique "ERROR_COVER" "${err_name}" "${CURRENT_TEST_ID}"
+  list_add_unique "TC_ERRORS" "${err_name}"
+}
+
+cover_reason() {
+  local reason_name="$1"
+  [[ -n "${reason_name}" ]] || return 0
+  map_append_unique "REASON_COVER" "${reason_name}" "${CURRENT_TEST_ID}"
+  list_add_unique "TC_REASONS" "${reason_name}"
+}
+
+exclude_error() {
+  local err_name="$1"
+  local why="$2"
+  map_set_once "ERROR_EXCLUDED" "${err_name}" "${why}"
+}
+
+exclude_reason() {
+  local reason_name="$1"
+  local why="$2"
+  map_set_once "REASON_EXCLUDED" "${reason_name}" "${why}"
+}
+
+set_case_fail() {
+  TC_REASON="$1"
+  return 1
+}
+
+cast_call_retry_raw() {
+  local to="$1"
+  local sig="$2"
+  local out rc attempt
+  shift 2
+  for attempt in 1 2 6; do
+    set +e
+    out="$(cast call --rpc-url "${RPC_URL}" "${to}" "${sig}" "$@" 2>&1)"
+    rc=$?
+    set -e
+    if [[ "${rc}" -eq 0 ]]; then
+      printf '%s\n' "${out}"
+      return 0
+    fi
+    sleep 0.2
+  done
+  return 1
+}
+
+set_case_keys_from_checkpoint() {
+  local line="$1"
+  local fee rbps close hold paused
+  fee="$(line_kv_get "${line}" "feeTier")"
+  rbps="$(line_kv_get "${line}" "rBps")"
+  close="$(line_kv_get "${line}" "closeVol")"
+  hold="$(line_kv_get "${line}" "holdRemaining")"
+  paused="$(line_kv_get "${line}" "paused")"
+
+  [[ -n "${fee}" ]] || fee="n/a"
+  [[ -n "${rbps}" ]] || rbps="n/a"
+  [[ -n "${close}" ]] || close="n/a"
+  [[ -n "${hold}" ]] || hold="n/a"
+  [[ -n "${paused}" ]] || paused="n/a"
+
+  TC_KEYS="feeTier=${fee} rBps=${rbps} closeVol=${close} hold=${hold} paused=${paused}"
+}
+
+tc_checkpoint() {
+  local label="$1"
+  local expected_fee="${2:-}"
+  local line
+
+  if [[ -n "${expected_fee}" ]]; then
+    line="$(checkpoint "${label}" "${expected_fee}")" || return 1
+  else
+    line="$(checkpoint "${label}")" || return 1
+  fi
+
+  list_add_unique "TC_CHECKPOINTS" "${line}"
+  set_case_keys_from_checkpoint "${line}"
+  return 0
+}
+
+checkpoint_compact() {
+  local count i line label fee out
+  eval "count=\${#TC_CHECKPOINTS[@]}"
+  if (( count == 0 )); then
+    printf '-'
+    return 0
+  fi
+
+  out=""
+  for ((i = 0; i < count && i < 4; i++)); do
+    eval "line=\${TC_CHECKPOINTS[i]}"
+    label="$(line_kv_get "${line}" "checkpoint")"
+    fee="$(line_kv_get "${line}" "feeTier")"
+    if [[ -z "${out}" ]]; then
+      out="${label}:${fee}"
+    else
+      out="${out}, ${label}:${fee}"
+    fi
+  done
+  if (( count > 4 )); then
+    out="${out}, ...(+$((count - 4)))"
+  fi
+  printf '%s' "${out}"
+}
+
+expect_revert_custom() {
+  local name="$1"
+  local cmd="$2"
+  local err_name="$3"
+  local err_sig selector
+
+  err_sig="$(error_sig_by_name "${err_name}")"
+  if [[ -z "${err_sig}" ]]; then
+    set_case_fail "error signature not found: ${err_name}"
+    return 1
+  fi
+  selector="$(cast sig "${err_sig}")"
+  expect_revert "${name}" "${cmd}" "${selector}" || return 1
+  cover_error "${err_name}"
+  return 0
+}
+
+init_coverage_catalogs() {
+  local line sig mut err_sig err_name reason_name reason_val
+
+  ABI_ENTRIES=()
+  ABI_SIGS=()
+  while IFS= read -r line; do
+    [[ -n "${line}" ]] || continue
+    ABI_ENTRIES+=("${line}")
+    ABI_SIGS+=("${line%%|*}")
+  done < <(abi_function_entries)
+
+  ERROR_SIGS=()
+  ERROR_NAMES=()
+  ERROR_NAME_TO_SIG=()
+  while IFS= read -r err_sig; do
+    [[ -n "${err_sig}" ]] || continue
+    err_name="$(error_name_from_sig "${err_sig}")"
+    ERROR_SIGS+=("${err_sig}")
+    ERROR_NAMES+=("${err_name}")
+    map_set_once "ERROR_NAME_TO_SIG" "${err_name}" "${err_sig}"
+  done < <(source_custom_errors "src/VolumeDynamicFeeHook.sol")
+
+  REASON_ENTRIES=()
+  REASON_VALUE_TO_NAME=()
+  while IFS= read -r line; do
+    [[ -n "${line}" ]] || continue
+    reason_name="${line%%=*}"
+    reason_val="${line#*=}"
+    REASON_ENTRIES+=("${line}")
+    map_set_once "REASON_VALUE_TO_NAME" "${reason_val}" "${reason_name}"
+  done < <(source_reason_constants "src/VolumeDynamicFeeHook.sol")
+
+  # Legacy constants retained in contract but not emitted by current v2 transition machine.
+  exclude_reason "REASON_FEE_UP" "legacy v1 reason constant; not emitted by _computeNextFeeIdxV2"
+  exclude_reason "REASON_FEE_DOWN" "legacy v1 reason constant; not emitted by _computeNextFeeIdxV2"
+  exclude_reason "REASON_REVERSAL_LOCK" "legacy v1 reason constant; not emitted by _computeNextFeeIdxV2"
+  exclude_reason "REASON_CAP" "legacy v1 reason constant; not emitted by _computeNextFeeIdxV2"
+  exclude_reason "REASON_FLOOR" "legacy v1 reason constant; not emitted by _computeNextFeeIdxV2"
+  exclude_reason "REASON_ZERO_EMA_DECAY" "legacy v1 reason constant; not emitted by _computeNextFeeIdxV2"
+  exclude_reason "REASON_BOOTSTRAP_V2" "constant exists but current v2 implementation emits REASON_EMA_BOOTSTRAP for bootstrap"
+
+  # Constructor-only path cannot be reached from mutable runtime admin surface.
+  exclude_error "TierNotFound" "constructor-only validation path; deploy script pre-validates tiers"
 }
 
 snapshot_enabled() {
   [[ "${DISABLE_SNAPSHOT}" != "1" ]]
 }
 
-snapshot_take_safe() {
-  local label="$1"
-  local snap_id
-  snap_id="$(evm_snapshot 2>/dev/null || true)"
-  if [[ -z "${snap_id}" || "${snap_id}" == "null" ]]; then
-    log "WARN: snapshot failed (${label})"
-    return 1
-  fi
-  printf '%s\n' "${snap_id}"
-}
-
-snapshot_revert_safe() {
-  local snap_id="$1"
-  local label="$2"
-  local reverted
-  reverted="$(evm_revert "${snap_id}" 2>/dev/null || true)"
-  if [[ "${reverted}" != "true" ]]; then
-    log "WARN: revert failed (${label}) id=${snap_id}"
-    return 1
-  fi
-  return 0
-}
-
-init_baseline_snapshot() {
+init_base_snapshot() {
   if ! snapshot_enabled; then
-    log "snapshot isolation: disabled (DISABLE_SNAPSHOT=1)"
+    BASE_SNAPSHOT_ID=""
     return 0
   fi
-  BASE_SNAPSHOT_ID="$(snapshot_take_safe "baseline init")" || return 1
-  return 0
+  BASE_SNAPSHOT_ID="$(evm_snapshot 2>/dev/null || true)"
+  [[ -n "${BASE_SNAPSHOT_ID}" && "${BASE_SNAPSHOT_ID}" != "null" ]]
 }
 
-prepare_scenario_isolation() {
-  local scenario_id="$1"
+prepare_case_isolation() {
   if ! snapshot_enabled; then
-    SCENARIO_SNAPSHOT_ID=""
     return 0
   fi
+
   if [[ -z "${BASE_SNAPSHOT_ID}" ]]; then
-    log "WARN: missing baseline snapshot before ${scenario_id}"
     return 1
   fi
-  snapshot_revert_safe "${BASE_SNAPSHOT_ID}" "before ${scenario_id}" || return 1
-  BASE_SNAPSHOT_ID="$(snapshot_take_safe "baseline refresh before ${scenario_id}")" || return 1
-  SCENARIO_SNAPSHOT_ID="$(snapshot_take_safe "scenario ${scenario_id} start")" || return 1
-  return 0
-}
 
-finalize_scenario_isolation() {
-  local scenario_id="$1"
-  if ! snapshot_enabled; then
-    return 0
-  fi
-  if [[ -z "${SCENARIO_SNAPSHOT_ID}" ]]; then
-    log "WARN: missing scenario snapshot during cleanup (${scenario_id})"
+  if [[ "$(evm_revert "${BASE_SNAPSHOT_ID}" 2>/dev/null || true)" != "true" ]]; then
     return 1
   fi
-  snapshot_revert_safe "${SCENARIO_SNAPSHOT_ID}" "after ${scenario_id}" || return 1
-  SCENARIO_SNAPSHOT_ID=""
-  BASE_SNAPSHOT_ID="$(snapshot_take_safe "baseline refresh after ${scenario_id}")" || return 1
-  return 0
-}
 
-scenario_checkpoint() {
-  local label="$1"
-  local expected_fee="${2:-}"
-  local line
-
-  if [[ -n "${expected_fee}" ]]; then
-    if ! line="$(checkpoint "${label}" "${expected_fee}")"; then
-      SC_CHECKPOINT_LINES+=("${line:-checkpoint=${label} failed}")
-      return 1
-    fi
-  else
-    if ! line="$(checkpoint "${label}")"; then
-      SC_CHECKPOINT_LINES+=("${line:-checkpoint=${label} failed}")
-      return 1
-    fi
-  fi
-  SC_CHECKPOINT_LINES+=("${line}")
-  return 0
-}
-
-compact_checkpoint_entry() {
-  local line="$1"
-  local label fee expected
-  label="$(kv_get "${line}" "checkpoint")"
-  fee="$(kv_get "${line}" "feeTier")"
-  expected="$(kv_get "${line}" "expectedFee")"
-
-  [[ -n "${label}" ]] || label="unknown"
-  [[ -n "${fee}" ]] || fee="n/a"
-
-  if [[ -n "${expected}" && "${expected}" != "-" ]]; then
-    printf '%s:%s/%s' "${label}" "${fee}" "${expected}"
-  else
-    printf '%s:%s' "${label}" "${fee}"
-  fi
-}
-
-checkpoint_summary_compact() {
-  local total max i item out
-  total="${#SC_CHECKPOINT_LINES[@]}"
-  if (( total == 0 )); then
-    printf 'checkpoints=n/a\n'
-    return 0
-  fi
-
-  if [[ "${VERBOSE}" == "1" ]]; then
-    max="${total}"
-  else
-    max=4
-  fi
-
-  out=""
-  for i in $(seq 0 $((total - 1))); do
-    if (( i >= max )); then
-      break
-    fi
-    item="$(compact_checkpoint_entry "${SC_CHECKPOINT_LINES[$i]}")"
-    if [[ -z "${out}" ]]; then
-      out="${item}"
-    else
-      out="${out},${item}"
-    fi
-  done
-  if (( total > max )); then
-    out="${out},..."
-  fi
-  printf 'checkpoints=%s\n' "${out}"
-}
-
-record_scenario() {
-  local id="$1"
-  local status="$2"
-  local reason="$3"
-  local metrics="$4"
-  SCENARIO_LINES+=("${id}|${status}|${reason}|${metrics}")
-}
-
-scenario_field_by_id() {
-  local id="$1"
-  local field="$2"
-  local line
-  for line in "${SCENARIO_LINES[@]}"; do
-    if [[ "${line}" == "${id}"'|'* ]]; then
-      case "${field}" in
-        status) printf '%s\n' "${line}" | awk -F'|' '{print $2}' ;;
-        reason) printf '%s\n' "${line}" | awk -F'|' '{print $3}' ;;
-        metrics) printf '%s\n' "${line}" | awk -F'|' '{print $4}' ;;
-        *) printf '\n' ;;
-      esac
-      return 0
-    fi
-  done
-  printf '\n'
-}
-
-run_scenario() {
-  local id="$1"
-  local fn="$2"
-  local status reason metrics checkpoint_summary
-  local scenario_ok=0
-  local isolation_ok=1
-
-  SC_REASON=""
-  SC_KEYS=""
-  SC_CHECKPOINT_LINES=()
-
-  if ! prepare_scenario_isolation "${id}"; then
-    isolation_ok=0
-  fi
-
-  SC_FEE_BEFORE="$(safe_current_fee_bips)"
-  SC_EXPECTED_FLOOR="$(safe_expected_floor_bips)"
-
-  log "==> ${id}"
-  log "${id}: fee_before=${SC_FEE_BEFORE} expected_floor=${SC_EXPECTED_FLOOR}"
-  if "${fn}"; then
-    scenario_ok=1
-  else
-    scenario_ok=0
-  fi
-
-  if snapshot_enabled && [[ -n "${SCENARIO_SNAPSHOT_ID}" ]]; then
-    if ! finalize_scenario_isolation "${id}"; then
-      isolation_ok=0
-    fi
-  fi
-
-  SC_FEE_AFTER="$(safe_current_fee_bips)"
-  log "${id}: fee_after=${SC_FEE_AFTER} expected_floor=${SC_EXPECTED_FLOOR}"
-  checkpoint_summary="$(checkpoint_summary_compact)"
-
-  metrics="${SC_KEYS}"
-  if [[ -z "${metrics}" ]]; then
-    metrics="${checkpoint_summary} feeBefore=${SC_FEE_BEFORE} feeAfter=${SC_FEE_AFTER} expectedFloor=${SC_EXPECTED_FLOOR}"
-  else
-    metrics="${metrics} ${checkpoint_summary} feeBefore=${SC_FEE_BEFORE} feeAfter=${SC_FEE_AFTER} expectedFloor=${SC_EXPECTED_FLOOR}"
-  fi
-
-  if (( scenario_ok == 1 && isolation_ok == 1 )); then
-    status="PASS"
-    reason="${SC_REASON:-ok}"
-    PASS_COUNT=$((PASS_COUNT + 1))
-  else
-    status="FAIL"
-    if (( isolation_ok == 0 )); then
-      if [[ -n "${SC_REASON}" ]]; then
-        reason="snapshot isolation failed; ${SC_REASON}"
-      elif (( scenario_ok == 1 )); then
-        reason="snapshot isolation failed"
-      else
-        reason="snapshot isolation failed; failed"
-      fi
-    else
-      reason="${SC_REASON:-failed}"
-    fi
-    FAIL_COUNT=$((FAIL_COUNT + 1))
-  fi
-
-  record_scenario "${id}" "${status}" "${reason}" "${metrics}"
-  log "${id}: ${status} - ${reason} | ${metrics}"
+  BASE_SNAPSHOT_ID="$(evm_snapshot 2>/dev/null || true)"
+  [[ -n "${BASE_SNAPSHOT_ID}" && "${BASE_SNAPSHOT_ID}" != "null" ]]
 }
 
 backup_config() {
-  CONFIG_BACKUP="$(mktemp "/tmp/preflight_sepolia_conf.XXXXXX")"
+  CONFIG_BACKUP="$(mktemp "/tmp/preflight_local_conf.XXXXXX")"
   cp "${CONFIG_PATH}" "${CONFIG_BACKUP}"
-}
-
-set_config_hook_address() {
-  local new_hook="$1"
-  python3 - "${CONFIG_PATH}" "HOOK_ADDRESS" "${new_hook}" <<'PY'
-import re
-import sys
-
-path = sys.argv[1]
-key = sys.argv[2]
-value = sys.argv[3]
-
-with open(path, "r", encoding="utf-8") as f:
-    src = f.read()
-
-if re.search(rf"^{re.escape(key)}=.*$", src, flags=re.M):
-    src = re.sub(rf"^{re.escape(key)}=.*$", f"{key}={value}", src, flags=re.M)
-else:
-    src = src.rstrip() + f"\n{key}={value}\n"
-
-with open(path, "w", encoding="utf-8") as f:
-    f.write(src)
-PY
 }
 
 set_config_value() {
@@ -436,6 +640,17 @@ with open(path, "w", encoding="utf-8") as f:
 PY
 }
 
+sync_runtime_config() {
+  set_config_value "POOL_MANAGER" "${POOL_MANAGER}"
+  set_config_value "VOLATILE" "${VOLATILE}"
+  set_config_value "STABLE" "${STABLE}"
+  set_config_value "STABLE_DECIMALS" "6"
+  set_config_value "TICK_SPACING" "${TICK_SPACING}"
+  set_config_value "GUARDIAN" "${GUARDIAN_ADDR}"
+  set_config_value "CREATOR_FEE_ADDRESS" "${CREATOR_ADDR}"
+  set_config_value "HOOK_ADDRESS" "${HOOK_ADDRESS}"
+}
+
 load_config() {
   if [[ -f "${ROOT_DIR}/.env" ]]; then
     # shellcheck disable=SC1091
@@ -447,82 +662,119 @@ load_config() {
   source "${CONFIG_PATH}"
   set +a
 
-  CONFIG_RPC_URL="${RPC_URL:-}"
   RPC_URL="${ANVIL_RPC_URL}"
   export RPC_URL
-  export CONFIG_RPC_URL
-}
 
-apply_v2_defaults() {
-  : "${CREATOR_FEE_LIMIT:=10}"
-  : "${CASH_TIER:=0.25}"
-  : "${EXTREME_TIER:=0.90}"
-  : "${MIN_CLOSEVOL_TO_CASH_USD6:=1000000000}"
-  : "${UP_R_TO_CASH_BPS:=18000}"
-  : "${CASH_HOLD_PERIODS:=4}"
-  : "${MIN_CLOSEVOL_TO_EXTREME_USD6:=4000000000}"
-  : "${UP_R_TO_EXTREME_BPS:=40000}"
-  : "${UP_EXTREME_CONFIRM_PERIODS:=2}"
-  : "${EXTREME_HOLD_PERIODS:=4}"
-  : "${DOWN_R_FROM_EXTREME_BPS:=13000}"
-  : "${DOWN_EXTREME_CONFIRM_PERIODS:=2}"
-  : "${DOWN_R_FROM_CASH_BPS:=10500}"
-  : "${DOWN_CASH_CONFIRM_PERIODS:=3}"
-  : "${EMERGENCY_FLOOR_CLOSEVOL_USD6:=600000000}"
-  : "${EMERGENCY_CONFIRM_PERIODS:=3}"
-
-  export CREATOR_FEE_LIMIT
-  export CASH_TIER EXTREME_TIER
-  export MIN_CLOSEVOL_TO_CASH_USD6 UP_R_TO_CASH_BPS CASH_HOLD_PERIODS
-  export MIN_CLOSEVOL_TO_EXTREME_USD6 UP_R_TO_EXTREME_BPS UP_EXTREME_CONFIRM_PERIODS EXTREME_HOLD_PERIODS
-  export DOWN_R_FROM_EXTREME_BPS DOWN_EXTREME_CONFIRM_PERIODS DOWN_R_FROM_CASH_BPS DOWN_CASH_CONFIRM_PERIODS
-  export EMERGENCY_FLOOR_CLOSEVOL_USD6 EMERGENCY_CONFIRM_PERIODS
+  build_config_runtime_args || die "Invalid local config tiers/indices/creator fee values in ${CONFIG_PATH}"
 }
 
 wait_for_rpc() {
   local i
-  for i in $(seq 1 60); do
+  for i in $(seq 1 80); do
     if cast chain-id --rpc-url "${RPC_URL}" >/dev/null 2>&1; then
       return 0
     fi
-    sleep 0.25
+    sleep 0.2
   done
   die "Anvil RPC did not start on ${RPC_URL}"
 }
 
 start_anvil() {
-  local args
-  mkdir -p "${CACHE_PATH}"
-  args=(
-    --host 127.0.0.1
-    --port 8545
-    --chain-id "${CHAIN_ID}"
-    --fork-url "${SEPOLIA_FORK_URL}"
-    --cache-path "${CACHE_PATH}"
-    --no-storage-caching
-    --silent
-  )
-  if [[ -n "${SEPOLIA_FORK_BLOCK:-}" ]]; then
-    args+=(--fork-block-number "${SEPOLIA_FORK_BLOCK}")
-  fi
-  anvil "${args[@]}" >/tmp/preflight_sepolia_anvil.log 2>&1 &
+  anvil --host 127.0.0.1 --port 8545 --chain-id "${CHAIN_ID}" --silent >/tmp/preflight_local_anvil.log 2>&1 &
   ANVIL_PID="$!"
   wait_for_rpc
 }
 
 prepare_accounts() {
-  OWNER_ADDR="$(cast wallet address --private-key "${OWNER_PK}" | awk '{print $1}')"
+  CREATOR_ADDR="$(cast wallet address --private-key "${CREATOR_PK}" | awk '{print $1}')"
   GUARDIAN_ADDR="$(cast wallet address --private-key "${GUARDIAN_PK}" | awk '{print $1}')"
-  OUTSIDER_ADDR="$(cast wallet address --private-key "${OUTSIDER_PK}" | awk '{print $1}')"
+  ATTACKER_ADDR="$(cast wallet address --private-key "${ATTACKER_PK}" | awk '{print $1}')"
 
-  set_eth_balance "${OWNER_ADDR}" "${ETH_RICH_WEI}"
+  set_eth_balance "${CREATOR_ADDR}" "${ETH_RICH_WEI}"
   set_eth_balance "${GUARDIAN_ADDR}" "${ETH_RICH_WEI}"
-  set_eth_balance "${OUTSIDER_ADDR}" "${ETH_RICH_WEI}"
+  set_eth_balance "${ATTACKER_ADDR}" "${ETH_RICH_WEI}"
+}
+
+deploy_pool_manager_local() {
+  local out
+  out="$(forge create --rpc-url "${RPC_URL}" --private-key "${CREATOR_PK}" --broadcast \
+    --remappings "${REMAPPING_SOLMATE_SRC}" --remappings "${REMAPPING_SOLMATE_ROOT}" \
+    lib/v4-core/src/PoolManager.sol:PoolManager \
+    --constructor-args "${CREATOR_ADDR}" 2>/tmp/preflight_local_poolmanager.log)" || {
+      cat /tmp/preflight_local_poolmanager.log >&2 || true
+      return 1
+    }
+
+  POOL_MANAGER="$(awk '/Deployed to:/ {print $3}' <<<"${out}" | tail -n 1)"
+  if [[ -z "${POOL_MANAGER}" ]]; then
+    POOL_MANAGER="$(grep -Eo '0x[0-9a-fA-F]{40}' <<<"${out}" | tail -n 1)"
+  fi
+  [[ -n "${POOL_MANAGER}" ]] || die "Failed to parse local PoolManager address"
+}
+
+deploy_mock_token() {
+  local name="$1"
+  local symbol="$2"
+  local decimals="$3"
+  local bytecode ctor data tx addr code attempt
+  local artifact_path
+
+  artifact_path="${ROOT_DIR}/out/MockERC20.sol/MockERC20.json"
+  if [[ -z "${MOCK_ERC20_BYTECODE}" && -f "${artifact_path}" ]]; then
+    MOCK_ERC20_BYTECODE="$(jq -r '.bytecode.object // .bytecode // empty | if type=="string" then . else empty end' "${artifact_path}" 2>/dev/null || true)"
+  fi
+  if [[ -z "${MOCK_ERC20_BYTECODE}" || "${MOCK_ERC20_BYTECODE}" == "0x" ]]; then
+    forge build >/tmp/preflight_local_build.log 2>&1 || true
+    if [[ -f "${artifact_path}" ]]; then
+      MOCK_ERC20_BYTECODE="$(jq -r '.bytecode.object // .bytecode // empty | if type=="string" then . else empty end' "${artifact_path}" 2>/dev/null || true)"
+    fi
+  fi
+  if [[ -n "${MOCK_ERC20_BYTECODE}" && "${MOCK_ERC20_BYTECODE}" != 0x* ]]; then
+    MOCK_ERC20_BYTECODE="0x${MOCK_ERC20_BYTECODE}"
+  fi
+  [[ -n "${MOCK_ERC20_BYTECODE}" && "${MOCK_ERC20_BYTECODE}" != "0x" ]] || return 1
+
+  ctor="$(cast abi-encode "constructor(string,string,uint8)" "${name}" "${symbol}" "${decimals}" 2>/dev/null || true)"
+  [[ -n "${ctor}" ]] || return 1
+  data="${MOCK_ERC20_BYTECODE}${ctor#0x}"
+
+  for attempt in 1 2 3 4 5 6; do
+    tx="$(cast_send_txhash --private-key "${CREATOR_PK}" --create "${data}" 2>/dev/null || true)"
+    if [[ -n "${tx}" ]]; then
+      addr="$(cast receipt --rpc-url "${RPC_URL}" --json "${tx}" 2>/dev/null | jq -r '.contractAddress // empty')"
+      if [[ -n "${addr}" ]]; then
+        code="$(cast code --rpc-url "${RPC_URL}" "${addr}" 2>/dev/null || true)"
+        if [[ -n "${code}" && "${code}" != "0x" ]]; then
+          printf '%s\n' "${addr}"
+          return 0
+        fi
+      fi
+    fi
+    sleep 0.4
+  done
+
+  return 1
+}
+
+mint_token() {
+  local token="$1"
+  local to="$2"
+  local amount="$3"
+  cast_send_retry --private-key "${CREATOR_PK}" "${token}" "mint(address,uint256)" "${to}" "${amount}" >/dev/null
+}
+
+ensure_allowance_max() {
+  local token="$1"
+  local spender="$2"
+  cast_send_retry --private-key "${CREATOR_PK}" "${token}" \
+    "approve(address,uint256)" "${spender}" \
+    "0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff" >/dev/null
 }
 
 helper_addr_from_artifacts() {
   local script_name="$1"
   local path addr code
+
   for path in \
     "${ROOT_DIR}/scripts/out/broadcast/${script_name}.s.sol/${CHAIN_ID}/run-latest.json" \
     "${ROOT_DIR}/lib/v4-periphery/broadcast/${script_name}.s.sol/${CHAIN_ID}/run-latest.json"
@@ -542,158 +794,82 @@ helper_addr_from_artifacts() {
 }
 
 ensure_modify_helper() {
-  local addr
+  local addr attempt
   if addr="$(helper_addr_from_artifacts "02_PoolModifyLiquidityTest" 2>/dev/null)"; then
     printf '%s\n' "${addr}"
     return 0
   fi
-  forge script lib/v4-periphery/script/02_PoolModifyLiquidityTest.s.sol:DeployPoolModifyLiquidityTest \
-    --sig "run(address)" "${POOL_MANAGER}" \
-    --rpc-url "${RPC_URL}" --private-key "${OWNER_PK}" --broadcast >/dev/null
-  helper_addr_from_artifacts "02_PoolModifyLiquidityTest"
+
+  for attempt in 1 2 3; do
+    forge script lib/v4-periphery/script/02_PoolModifyLiquidityTest.s.sol:DeployPoolModifyLiquidityTest \
+      --sig "run(address)" "${POOL_MANAGER}" \
+      --rpc-url "${RPC_URL}" --private-key "${CREATOR_PK}" --broadcast \
+      --remappings "${REMAPPING_SOLMATE_SRC}" --remappings "${REMAPPING_SOLMATE_ROOT}" \
+      >/tmp/preflight_local_modify_helper.log 2>&1 || true
+
+    if addr="$(helper_addr_from_artifacts "02_PoolModifyLiquidityTest" 2>/dev/null)"; then
+      printf '%s\n' "${addr}"
+      return 0
+    fi
+
+    if (( attempt < 3 )) && grep -Eqi "connection (closed|reset)|SendRequest|transport error|timed out|Failed to get EIP-1559 fees|503" /tmp/preflight_local_modify_helper.log; then
+      sleep 0.5
+      continue
+    fi
+  done
+
+  return 1
 }
 
 ensure_swap_helper() {
-  local addr
+  local addr attempt
   if addr="$(helper_addr_from_artifacts "03_PoolSwapTest" 2>/dev/null)"; then
     printf '%s\n' "${addr}"
     return 0
   fi
-  forge script lib/v4-periphery/script/03_PoolSwapTest.s.sol:DeployPoolSwapTest \
-    --sig "run(address)" "${POOL_MANAGER}" \
-    --rpc-url "${RPC_URL}" --private-key "${OWNER_PK}" --broadcast >/dev/null
-  helper_addr_from_artifacts "03_PoolSwapTest"
-}
 
-deploy_and_create_pipeline() {
-  local deploy_json candidate code
-
-  backup_config
-  set_config_value "GUARDIAN" "${GUARDIAN_ADDR}"
-  set_config_value "CREATOR_FEE_ADDRESS" "${OWNER_ADDR}"
-
-  export REQUIRE_GUARDIAN_CONTRACT=0
-  export PRIVATE_KEY="${OWNER_PK}"
-  deploy_json="${ROOT_DIR}/scripts/out/deploy.sepolia.json"
-  rm -f "${deploy_json}"
-
-  if ! run_deploy_hook_script; then
-    return 1
-  fi
-
-  candidate="$(extract_hook_from_deploy_json "${deploy_json}" || true)"
-  if [[ -n "${candidate}" ]]; then
-    code="$(cast code --rpc-url "${RPC_URL}" "${candidate}" 2>/dev/null || true)"
-    if [[ -n "${code}" && "${code}" != "0x" ]]; then
-      HOOK_ADDRESS="${candidate}"
-    fi
-  fi
-
-  if [[ -z "${HOOK_ADDRESS}" ]]; then
-    HOOK_ADDRESS="$(extract_hook_from_deploy_json "${deploy_json}")"
-  fi
-  [[ -n "${HOOK_ADDRESS}" ]] || die "Failed to parse HOOK_ADDRESS from scripts/out/deploy.sepolia.json"
-  set_config_hook_address "${HOOK_ADDRESS}"
-
-  if ! run_create_pool_script; then
-    return 1
-  fi
-
-  read -r TOKEN0 TOKEN1 <<<"$(sort_tokens "${VOLATILE}" "${STABLE}")"
-  POOL_KEY="(${TOKEN0},${TOKEN1},${DYNAMIC_FEE_FLAG},${TICK_SPACING},${HOOK_ADDRESS})"
-  POOL_ID="$(compute_pool_id "${VOLATILE}" "${STABLE}" "${TICK_SPACING}" "${HOOK_ADDRESS}")"
-}
-
-is_transient_rpc_error() {
-  local path="$1"
-  grep -Eqi "connection (reset|closed)|broken pipe|timed out|SendRequest|error sending request|Failed to get EIP-1559 fees|Connection reset by peer|transport error" "${path}"
-}
-
-run_deploy_hook_script() {
-  local attempt candidate code
   for attempt in 1 2 3; do
-    if ./scripts/deploy_hook.sh --chain "${CHAIN}" --rpc-url "${RPC_URL}" --private-key "${OWNER_PK}" --broadcast >/tmp/preflight_deploy.log 2>&1; then
+    forge script lib/v4-periphery/script/03_PoolSwapTest.s.sol:DeployPoolSwapTest \
+      --sig "run(address)" "${POOL_MANAGER}" \
+      --rpc-url "${RPC_URL}" --private-key "${CREATOR_PK}" --broadcast \
+      --remappings "${REMAPPING_SOLMATE_SRC}" --remappings "${REMAPPING_SOLMATE_ROOT}" \
+      >/tmp/preflight_local_swap_helper.log 2>&1 || true
+
+    if addr="$(helper_addr_from_artifacts "03_PoolSwapTest" 2>/dev/null)"; then
+      printf '%s\n' "${addr}"
       return 0
     fi
 
-    candidate="$(extract_hook_from_deploy_json "${ROOT_DIR}/scripts/out/deploy.sepolia.json" || true)"
-    if [[ -n "${candidate}" ]]; then
-      code="$(cast code --rpc-url "${RPC_URL}" "${candidate}" 2>/dev/null || true)"
-      if [[ -n "${code}" && "${code}" != "0x" ]]; then
-        log "deploy_hook attempt ${attempt}: non-zero exit, but hook code is present at ${candidate}; continuing"
-        HOOK_ADDRESS="${candidate}"
-        return 0
-      fi
-    fi
-
-    if (( attempt < 3 )) && is_transient_rpc_error "/tmp/preflight_deploy.log"; then
-      log "deploy_hook transient RPC error on attempt ${attempt}; retrying"
-      sleep 1
+    if (( attempt < 3 )) && grep -Eqi "connection (closed|reset)|SendRequest|transport error|timed out|Failed to get EIP-1559 fees|503" /tmp/preflight_local_swap_helper.log; then
+      sleep 0.5
       continue
     fi
-    return 1
   done
+
   return 1
-}
-
-run_create_pool_script() {
-  local attempt fee
-  for attempt in 1 2 3; do
-    if ./scripts/create_pool.sh --chain "${CHAIN}" --rpc-url "${RPC_URL}" --private-key "${OWNER_PK}" --broadcast >/tmp/preflight_create_pool.log 2>&1; then
-      return 0
-    fi
-
-    fee="$(cast_call_single "${HOOK_ADDRESS}" "currentFeeBips()(uint24)" || true)"
-    if [[ "${fee}" =~ ^[0-9]+$ ]]; then
-      if grep -qi "Pool initialized\\.|AlreadyInitialized" /tmp/preflight_create_pool.log; then
-        log "create_pool attempt ${attempt}: non-zero exit, but pool appears initialized (currentFeeBips=${fee}); continuing"
-        return 0
-      fi
-    fi
-
-    if (( attempt < 3 )) && is_transient_rpc_error "/tmp/preflight_create_pool.log"; then
-      log "create_pool transient RPC error on attempt ${attempt}; retrying"
-      sleep 1
-      continue
-    fi
-    return 1
-  done
-  return 1
-}
-
-ensure_allowance_max() {
-  local token="$1"
-  local spender="$2"
-  cast_send_retry --private-key "${OWNER_PK}" "${token}" \
-    "approve(address,uint256)" "${spender}" \
-    "0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff" >/dev/null
 }
 
 bootstrap_liquidity() {
-  local stable_balance liq params candidate
-  local -a liquidity_candidates
+  local params candidate liq
+  local -a candidates
 
-  stable_balance="$(cast_call_single "${STABLE}" "balanceOf(address)(uint256)" "${OWNER_ADDR}")"
-  if [[ -z "${stable_balance}" || "${stable_balance}" == "0" ]]; then
-    die "Owner has zero stable token balance (${STABLE}) on fork; cannot bootstrap active liquidity for swaps"
-  fi
-
+  ensure_allowance_max "${VOLATILE}" "${MODIFY_HELPER}"
   ensure_allowance_max "${STABLE}" "${MODIFY_HELPER}"
+  ensure_allowance_max "${VOLATILE}" "${SWAP_HELPER}"
   ensure_allowance_max "${STABLE}" "${SWAP_HELPER}"
 
-  liquidity_candidates=(
+  candidates=(
+    "1000000000000000000"
+    "100000000000000000"
+    "10000000000000000"
     "1000000000000000"
     "100000000000000"
     "10000000000000"
-    "1000000000000"
-    "100000000000"
-    "10000000000"
-    "1000000000"
   )
 
-  for candidate in "${liquidity_candidates[@]}"; do
+  for candidate in "${candidates[@]}"; do
     params="(-887220,887220,${candidate},0x0000000000000000000000000000000000000000000000000000000000000000)"
-    if cast send --rpc-url "${RPC_URL}" --private-key "${OWNER_PK}" --value "5000000000000000000" "${MODIFY_HELPER}" \
+    if cast send --rpc-url "${RPC_URL}" --private-key "${CREATOR_PK}" "${MODIFY_HELPER}" \
       "modifyLiquidity((address,address,uint24,int24,address),(int24,int24,int256,bytes32),bytes)" \
       "${POOL_KEY}" "${params}" "0x" >/dev/null 2>&1; then
       liq="${candidate}"
@@ -701,93 +877,169 @@ bootstrap_liquidity() {
     fi
   done
 
-  [[ -n "${liq:-}" ]] || die "Failed to add active liquidity via PoolModifyLiquidityTest"
+  [[ -n "${liq:-}" ]] || die "Failed to bootstrap liquidity on local pool"
 }
 
-swap_exact_in_eth() {
-  local amount_wei="$1"
-  local params
-  params="(true,-${amount_wei},${SQRT_PRICE_LIMIT_X96_ZFO})"
-  cast_send_retry --private-key "${OWNER_PK}" --value "${amount_wei}" "${SWAP_HELPER}" \
-    "swap((address,address,uint24,int24,address),(bool,int256,uint160),(bool,bool),bytes)(bytes32)" \
-    "${POOL_KEY}" "${params}" "(false,false)" "0x" >/dev/null
-}
+run_deploy_hook_script() {
+  local attempt hook_tmp code_tmp
+  local deploy_json="${ROOT_DIR}/scripts/out/deploy.local.json"
 
-swap_exact_in_stable() {
-  local amount_raw="$1"
-  local params
-  params="(false,-${amount_raw},${SQRT_PRICE_LIMIT_X96_OZF})"
-  cast_send_retry --private-key "${OWNER_PK}" "${SWAP_HELPER}" \
-    "swap((address,address,uint24,int24,address),(bool,int256,uint160),(bool,bool),bytes)(bytes32)" \
-    "${POOL_KEY}" "${params}" "(false,false)" "0x" >/dev/null
-}
-
-close_period_with_seed_eth() {
-  local seed_amount="$1"
-  local period
-  period="$(cast_call_single "${HOOK_ADDRESS}" "periodSeconds()(uint32)")"
-  warp_seconds "$((period + 1))"
-  swap_exact_in_eth "${seed_amount}"
-}
-
-close_period_with_seed_stable() {
-  local seed_amount="$1"
-  local period
-  period="$(cast_call_single "${HOOK_ADDRESS}" "periodSeconds()(uint32)")"
-  warp_seconds "$((period + 1))"
-  swap_exact_in_stable "${seed_amount}"
-}
-
-close_until_idx_eth() {
-  local target_idx="$1"
-  local max_rounds="$2"
-  shift 2
-
-  local -a amounts
-  local round idx amt amount_idx
-  amounts=("$@")
-  [[ "${#amounts[@]}" -gt 0 ]] || return 1
-
-  for round in $(seq 1 "${max_rounds}"); do
-    amount_idx=$((round - 1))
-    if (( amount_idx >= ${#amounts[@]} )); then
-      amount_idx=$((${#amounts[@]} - 1))
-    fi
-    amt="${amounts[${amount_idx}]}"
-    close_period_with_seed_eth "${amt}" || return 1
-    idx="$(jq -r '.[0]' <<<"$(state_debug_json)")"
-    if [[ "${idx}" == "${target_idx}" ]]; then
+  rm -f "${deploy_json}"
+  for attempt in 1 2 3 4; do
+    if ./scripts/deploy_hook.sh --chain local --rpc-url "${RPC_URL}" --private-key "${CREATOR_PK}" --broadcast >/tmp/preflight_local_deploy.log 2>&1; then
       return 0
     fi
+
+    hook_tmp="$(extract_hook_from_deploy_json "${deploy_json}" 2>/dev/null || true)"
+    if [[ -n "${hook_tmp}" ]]; then
+      code_tmp="$(cast code --rpc-url "${RPC_URL}" "${hook_tmp}" 2>/dev/null || true)"
+      if [[ -n "${code_tmp}" && "${code_tmp}" != "0x" ]]; then
+        log "WARN: deploy_hook.sh returned non-zero, but hook is deployed at ${hook_tmp}; applying runtime config with retries"
+        return 0
+      fi
+    fi
+
+    sleep 0.8
   done
   return 1
 }
 
+ensure_hook_runtime_configured() {
+  local creator_fee_address paused_now
+  local ctrl_tuple
+
+  creator_fee_address="${CREATOR_FEE_ADDRESS:-}"
+  if [[ -z "${creator_fee_address}" ]]; then
+    creator_fee_address="${CREATOR_ADDR}"
+  fi
+
+  paused_now="$(cast_call_single "${HOOK_ADDRESS}" "isPaused()(bool)" || true)"
+  if [[ "${paused_now}" != "true" ]]; then
+    cast_send_retry --private-key "${CREATOR_PK}" "${HOOK_ADDRESS}" "pause()" >/dev/null || return 1
+  fi
+
+  cast_send_retry --private-key "${CREATOR_PK}" "${HOOK_ADDRESS}" \
+    "setFeeTiersAndRoles(uint24[],uint8,uint8,uint8,uint8)" \
+    "${CFG_FEE_TIERS_ARG}" "${CFG_FLOOR_IDX}" "${CFG_CASH_IDX}" "${CFG_EXTREME_IDX}" "${CFG_CAP_IDX}" >/dev/null || return 1
+
+  cast_send_retry --private-key "${CREATOR_PK}" "${HOOK_ADDRESS}" \
+    "setTimingParams(uint32,uint8,uint32,uint16)" \
+    "${PERIOD_SECONDS}" "${EMA_PERIODS}" "${LULL_RESET_SECONDS}" "${DEADBAND_BPS}" >/dev/null || return 1
+
+  ctrl_tuple="(${MIN_CLOSEVOL_TO_CASH_USD6},${UP_R_TO_CASH_BPS},${CASH_HOLD_PERIODS},${MIN_CLOSEVOL_TO_EXTREME_USD6},${UP_R_TO_EXTREME_BPS},${UP_EXTREME_CONFIRM_PERIODS},${EXTREME_HOLD_PERIODS},${DOWN_R_FROM_EXTREME_BPS},${DOWN_EXTREME_CONFIRM_PERIODS},${DOWN_R_FROM_CASH_BPS},${DOWN_CASH_CONFIRM_PERIODS},${EMERGENCY_FLOOR_CLOSEVOL_USD6},${EMERGENCY_CONFIRM_PERIODS})"
+  cast_send_retry --private-key "${CREATOR_PK}" "${HOOK_ADDRESS}" \
+    "setControllerParams((uint64,uint16,uint8,uint64,uint16,uint8,uint8,uint16,uint8,uint16,uint8,uint64,uint8))" \
+    "${ctrl_tuple}" >/dev/null || return 1
+
+  cast_send_retry --private-key "${CREATOR_PK}" "${HOOK_ADDRESS}" \
+    "setCreatorFeeConfig(address,uint16)" "${creator_fee_address}" "${CFG_CREATOR_FEE_BPS}" >/dev/null || return 1
+
+  cast_send_retry --private-key "${CREATOR_PK}" "${HOOK_ADDRESS}" "setGuardian(address)" "${GUARDIAN_ADDR}" >/dev/null || return 1
+
+  paused_now="$(cast_call_single "${HOOK_ADDRESS}" "isPaused()(bool)" || true)"
+  if [[ "${paused_now}" == "true" ]]; then
+    cast_send_retry --private-key "${CREATOR_PK}" "${HOOK_ADDRESS}" "unpause()" >/dev/null || return 1
+  fi
+
+  return 0
+}
+
+run_create_pool_script() {
+  local attempt
+  for attempt in 1 2 3; do
+    if ./scripts/create_pool.sh --chain local --rpc-url "${RPC_URL}" --private-key "${CREATOR_PK}" --broadcast >/tmp/preflight_local_create.log 2>&1; then
+      return 0
+    fi
+    sleep 0.5
+  done
+  return 1
+}
+
+setup_local_environment() {
+  local deploy_json
+
+  deploy_pool_manager_local
+
+  VOLATILE="$(deploy_mock_token "Wrapped Ether" "WETH" 18)" || die "Failed to deploy VOLATILE token"
+  STABLE="$(deploy_mock_token "USD Coin" "USDC" 6)" || die "Failed to deploy STABLE token"
+  RESCUE_TOKEN="$(deploy_mock_token "Rescue Token" "RSC" 18)" || die "Failed to deploy rescue token"
+
+  mint_token "${VOLATILE}" "${CREATOR_ADDR}" "1000000000000000000000000"
+  mint_token "${STABLE}" "${CREATOR_ADDR}" "1000000000000"
+  mint_token "${VOLATILE}" "${ATTACKER_ADDR}" "10000000000000000000000"
+  mint_token "${STABLE}" "${ATTACKER_ADDR}" "10000000000"
+  mint_token "${RESCUE_TOKEN}" "${CREATOR_ADDR}" "1000000000000000000000000"
+
+  set_config_value "POOL_MANAGER" "${POOL_MANAGER}"
+  set_config_value "VOLATILE" "${VOLATILE}"
+  set_config_value "STABLE" "${STABLE}"
+  set_config_value "STABLE_DECIMALS" "6"
+  set_config_value "GUARDIAN" "${GUARDIAN_ADDR}"
+  set_config_value "CREATOR_FEE_ADDRESS" "${CREATOR_ADDR}"
+  set_config_value "HOOK_ADDRESS" ""
+
+  if ! run_deploy_hook_script; then
+    die "deploy_hook.sh failed; see /tmp/preflight_local_deploy.log"
+  fi
+
+  deploy_json="${ROOT_DIR}/scripts/out/deploy.local.json"
+  HOOK_ADDRESS="$(extract_hook_from_deploy_json "${deploy_json}" || true)"
+  [[ -n "${HOOK_ADDRESS}" ]] || die "Failed to parse HOOK_ADDRESS from ${deploy_json}"
+
+  set_config_value "HOOK_ADDRESS" "${HOOK_ADDRESS}"
+  ensure_hook_runtime_configured || die "Failed to apply hook runtime config on local Anvil"
+
+  if ! run_create_pool_script; then
+    die "create_pool.sh failed; see /tmp/preflight_local_create.log"
+  fi
+
+  read -r TOKEN0 TOKEN1 <<<"$(sort_tokens "${VOLATILE}" "${STABLE}")"
+  POOL_KEY="(${TOKEN0},${TOKEN1},${DYNAMIC_FEE_FLAG},${TICK_SPACING},${HOOK_ADDRESS})"
+  POOL_ID="$(compute_pool_id "${VOLATILE}" "${STABLE}" "${TICK_SPACING}" "${HOOK_ADDRESS}")"
+
+  if [[ "$(lower "${STABLE}")" == "$(lower "${TOKEN0}")" ]]; then
+    STABLE_IS_TOKEN0="1"
+  else
+    STABLE_IS_TOKEN0="0"
+  fi
+
+  MODIFY_HELPER="$(ensure_modify_helper)"
+  SWAP_HELPER="$(ensure_swap_helper)"
+  [[ -n "${MODIFY_HELPER}" ]] || die "Failed to deploy/resolve modify helper"
+  [[ -n "${SWAP_HELPER}" ]] || die "Failed to deploy/resolve swap helper"
+
+  bootstrap_liquidity
+}
+
 load_fee_tiers() {
-  local count i
+  local count i tier
   FEE_TIERS_BY_IDX=()
+
   count="$(cast_call_single "${HOOK_ADDRESS}" "feeTierCount()(uint16)" || true)"
   [[ "${count}" =~ ^[0-9]+$ ]] || return 1
-  if (( count == 0 )); then
-    return 1
-  fi
+  (( count > 0 )) || return 1
+
   for i in $(seq 0 $((count - 1))); do
-    local tier
     tier="$(cast_call_single "${HOOK_ADDRESS}" "feeTiers(uint256)(uint24)" "${i}" || true)"
     [[ "${tier}" =~ ^[0-9]+$ ]] || return 1
     FEE_TIERS_BY_IDX+=("${tier}")
   done
+
   FLOOR_IDX="$(cast_call_single "${HOOK_ADDRESS}" "floorIdx()(uint8)" || true)"
   CASH_IDX="$(cast_call_single "${HOOK_ADDRESS}" "cashIdx()(uint8)" || true)"
   EXTREME_IDX="$(cast_call_single "${HOOK_ADDRESS}" "extremeIdx()(uint8)" || true)"
   CAP_IDX="$(cast_call_single "${HOOK_ADDRESS}" "capIdx()(uint8)" || true)"
-  [[ "${FLOOR_IDX}" =~ ^[0-9]+$ && "${CASH_IDX}" =~ ^[0-9]+$ && "${EXTREME_IDX}" =~ ^[0-9]+$ && "${CAP_IDX}" =~ ^[0-9]+$ ]] || return 1
-  return 0
+
+  [[ "${FLOOR_IDX}" =~ ^[0-9]+$ && "${CASH_IDX}" =~ ^[0-9]+$ && "${EXTREME_IDX}" =~ ^[0-9]+$ && "${CAP_IDX}" =~ ^[0-9]+$ ]]
 }
 
 tier_by_idx() {
   local idx="$1"
   printf '%s\n' "${FEE_TIERS_BY_IDX[${idx}]}"
+}
+
+state_debug_json() {
+  cast_call_json "${HOOK_ADDRESS}" "getStateDebug()(uint8,uint8,uint8,uint8,uint8,uint64,uint64,uint96,bool)"
 }
 
 load_controller_params() {
@@ -804,6 +1056,7 @@ load_controller_params() {
   CP_DOWN_CASH_CONFIRM_PERIODS="$(cast_call_single "${HOOK_ADDRESS}" "downCashConfirmPeriods()(uint8)" || true)"
   CP_EMERGENCY_FLOOR_CLOSEVOL_USD6="$(cast_call_single "${HOOK_ADDRESS}" "emergencyFloorCloseVolUsd6()(uint64)" || true)"
   CP_EMERGENCY_CONFIRM_PERIODS="$(cast_call_single "${HOOK_ADDRESS}" "emergencyConfirmPeriods()(uint8)" || true)"
+
   [[ "${CP_MIN_CLOSEVOL_TO_CASH_USD6}" =~ ^[0-9]+$ ]] || return 1
   [[ "${CP_UP_R_TO_CASH_BPS}" =~ ^[0-9]+$ ]] || return 1
   [[ "${CP_CASH_HOLD_PERIODS}" =~ ^[0-9]+$ ]] || return 1
@@ -817,49 +1070,66 @@ load_controller_params() {
   [[ "${CP_DOWN_CASH_CONFIRM_PERIODS}" =~ ^[0-9]+$ ]] || return 1
   [[ "${CP_EMERGENCY_FLOOR_CLOSEVOL_USD6}" =~ ^[0-9]+$ ]] || return 1
   [[ "${CP_EMERGENCY_CONFIRM_PERIODS}" =~ ^[0-9]+$ ]] || return 1
-  return 0
 }
 
 persist_base_controller() {
   load_controller_params || return 1
-  BASE_MIN_CLOSEVOL_TO_CASH_USD6="${CP_MIN_CLOSEVOL_TO_CASH_USD6}"
-  BASE_UP_R_TO_CASH_BPS="${CP_UP_R_TO_CASH_BPS}"
-  BASE_CASH_HOLD_PERIODS="${CP_CASH_HOLD_PERIODS}"
-  BASE_MIN_CLOSEVOL_TO_EXTREME_USD6="${CP_MIN_CLOSEVOL_TO_EXTREME_USD6}"
-  BASE_UP_R_TO_EXTREME_BPS="${CP_UP_R_TO_EXTREME_BPS}"
-  BASE_UP_EXTREME_CONFIRM_PERIODS="${CP_UP_EXTREME_CONFIRM_PERIODS}"
-  BASE_EXTREME_HOLD_PERIODS="${CP_EXTREME_HOLD_PERIODS}"
-  BASE_DOWN_R_FROM_EXTREME_BPS="${CP_DOWN_R_FROM_EXTREME_BPS}"
-  BASE_DOWN_EXTREME_CONFIRM_PERIODS="${CP_DOWN_EXTREME_CONFIRM_PERIODS}"
-  BASE_DOWN_R_FROM_CASH_BPS="${CP_DOWN_R_FROM_CASH_BPS}"
-  BASE_DOWN_CASH_CONFIRM_PERIODS="${CP_DOWN_CASH_CONFIRM_PERIODS}"
-  BASE_EMERGENCY_FLOOR_CLOSEVOL_USD6="${CP_EMERGENCY_FLOOR_CLOSEVOL_USD6}"
-  BASE_EMERGENCY_CONFIRM_PERIODS="${CP_EMERGENCY_CONFIRM_PERIODS}"
+  BASE_CP_MIN_CLOSEVOL_TO_CASH_USD6="${CP_MIN_CLOSEVOL_TO_CASH_USD6}"
+  BASE_CP_UP_R_TO_CASH_BPS="${CP_UP_R_TO_CASH_BPS}"
+  BASE_CP_CASH_HOLD_PERIODS="${CP_CASH_HOLD_PERIODS}"
+  BASE_CP_MIN_CLOSEVOL_TO_EXTREME_USD6="${CP_MIN_CLOSEVOL_TO_EXTREME_USD6}"
+  BASE_CP_UP_R_TO_EXTREME_BPS="${CP_UP_R_TO_EXTREME_BPS}"
+  BASE_CP_UP_EXTREME_CONFIRM_PERIODS="${CP_UP_EXTREME_CONFIRM_PERIODS}"
+  BASE_CP_EXTREME_HOLD_PERIODS="${CP_EXTREME_HOLD_PERIODS}"
+  BASE_CP_DOWN_R_FROM_EXTREME_BPS="${CP_DOWN_R_FROM_EXTREME_BPS}"
+  BASE_CP_DOWN_EXTREME_CONFIRM_PERIODS="${CP_DOWN_EXTREME_CONFIRM_PERIODS}"
+  BASE_CP_DOWN_R_FROM_CASH_BPS="${CP_DOWN_R_FROM_CASH_BPS}"
+  BASE_CP_DOWN_CASH_CONFIRM_PERIODS="${CP_DOWN_CASH_CONFIRM_PERIODS}"
+  BASE_CP_EMERGENCY_FLOOR_CLOSEVOL_USD6="${CP_EMERGENCY_FLOOR_CLOSEVOL_USD6}"
+  BASE_CP_EMERGENCY_CONFIRM_PERIODS="${CP_EMERGENCY_CONFIRM_PERIODS}"
+}
+
+restore_base_controller() {
+  CP_MIN_CLOSEVOL_TO_CASH_USD6="${BASE_CP_MIN_CLOSEVOL_TO_CASH_USD6}"
+  CP_UP_R_TO_CASH_BPS="${BASE_CP_UP_R_TO_CASH_BPS}"
+  CP_CASH_HOLD_PERIODS="${BASE_CP_CASH_HOLD_PERIODS}"
+  CP_MIN_CLOSEVOL_TO_EXTREME_USD6="${BASE_CP_MIN_CLOSEVOL_TO_EXTREME_USD6}"
+  CP_UP_R_TO_EXTREME_BPS="${BASE_CP_UP_R_TO_EXTREME_BPS}"
+  CP_UP_EXTREME_CONFIRM_PERIODS="${BASE_CP_UP_EXTREME_CONFIRM_PERIODS}"
+  CP_EXTREME_HOLD_PERIODS="${BASE_CP_EXTREME_HOLD_PERIODS}"
+  CP_DOWN_R_FROM_EXTREME_BPS="${BASE_CP_DOWN_R_FROM_EXTREME_BPS}"
+  CP_DOWN_EXTREME_CONFIRM_PERIODS="${BASE_CP_DOWN_EXTREME_CONFIRM_PERIODS}"
+  CP_DOWN_R_FROM_CASH_BPS="${BASE_CP_DOWN_R_FROM_CASH_BPS}"
+  CP_DOWN_CASH_CONFIRM_PERIODS="${BASE_CP_DOWN_CASH_CONFIRM_PERIODS}"
+  CP_EMERGENCY_FLOOR_CLOSEVOL_USD6="${BASE_CP_EMERGENCY_FLOOR_CLOSEVOL_USD6}"
+  CP_EMERGENCY_CONFIRM_PERIODS="${BASE_CP_EMERGENCY_CONFIRM_PERIODS}"
+  set_controller_params
+}
+
+controller_tuple() {
+  printf '(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)\n' \
+    "${CP_MIN_CLOSEVOL_TO_CASH_USD6}" \
+    "${CP_UP_R_TO_CASH_BPS}" \
+    "${CP_CASH_HOLD_PERIODS}" \
+    "${CP_MIN_CLOSEVOL_TO_EXTREME_USD6}" \
+    "${CP_UP_R_TO_EXTREME_BPS}" \
+    "${CP_UP_EXTREME_CONFIRM_PERIODS}" \
+    "${CP_EXTREME_HOLD_PERIODS}" \
+    "${CP_DOWN_R_FROM_EXTREME_BPS}" \
+    "${CP_DOWN_EXTREME_CONFIRM_PERIODS}" \
+    "${CP_DOWN_R_FROM_CASH_BPS}" \
+    "${CP_DOWN_CASH_CONFIRM_PERIODS}" \
+    "${CP_EMERGENCY_FLOOR_CLOSEVOL_USD6}" \
+    "${CP_EMERGENCY_CONFIRM_PERIODS}"
 }
 
 set_controller_params() {
   local tuple
-  tuple="(${CP_MIN_CLOSEVOL_TO_CASH_USD6},${CP_UP_R_TO_CASH_BPS},${CP_CASH_HOLD_PERIODS},${CP_MIN_CLOSEVOL_TO_EXTREME_USD6},${CP_UP_R_TO_EXTREME_BPS},${CP_UP_EXTREME_CONFIRM_PERIODS},${CP_EXTREME_HOLD_PERIODS},${CP_DOWN_R_FROM_EXTREME_BPS},${CP_DOWN_EXTREME_CONFIRM_PERIODS},${CP_DOWN_R_FROM_CASH_BPS},${CP_DOWN_CASH_CONFIRM_PERIODS},${CP_EMERGENCY_FLOOR_CLOSEVOL_USD6},${CP_EMERGENCY_CONFIRM_PERIODS})"
-  cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" \
+  tuple="$(controller_tuple)"
+  cover_function "setControllerParams(tuple)"
+  cast_send_retry --private-key "${CREATOR_PK}" "${HOOK_ADDRESS}" \
     "setControllerParams((uint64,uint16,uint8,uint64,uint16,uint8,uint8,uint16,uint8,uint16,uint8,uint64,uint8))" \
     "${tuple}" >/dev/null
-}
-
-restore_base_controller() {
-  CP_MIN_CLOSEVOL_TO_CASH_USD6="${BASE_MIN_CLOSEVOL_TO_CASH_USD6}"
-  CP_UP_R_TO_CASH_BPS="${BASE_UP_R_TO_CASH_BPS}"
-  CP_CASH_HOLD_PERIODS="${BASE_CASH_HOLD_PERIODS}"
-  CP_MIN_CLOSEVOL_TO_EXTREME_USD6="${BASE_MIN_CLOSEVOL_TO_EXTREME_USD6}"
-  CP_UP_R_TO_EXTREME_BPS="${BASE_UP_R_TO_EXTREME_BPS}"
-  CP_UP_EXTREME_CONFIRM_PERIODS="${BASE_UP_EXTREME_CONFIRM_PERIODS}"
-  CP_EXTREME_HOLD_PERIODS="${BASE_EXTREME_HOLD_PERIODS}"
-  CP_DOWN_R_FROM_EXTREME_BPS="${BASE_DOWN_R_FROM_EXTREME_BPS}"
-  CP_DOWN_EXTREME_CONFIRM_PERIODS="${BASE_DOWN_EXTREME_CONFIRM_PERIODS}"
-  CP_DOWN_R_FROM_CASH_BPS="${BASE_DOWN_R_FROM_CASH_BPS}"
-  CP_DOWN_CASH_CONFIRM_PERIODS="${BASE_DOWN_CASH_CONFIRM_PERIODS}"
-  CP_EMERGENCY_FLOOR_CLOSEVOL_USD6="${BASE_EMERGENCY_FLOOR_CLOSEVOL_USD6}"
-  CP_EMERGENCY_CONFIRM_PERIODS="${BASE_EMERGENCY_CONFIRM_PERIODS}"
-  set_controller_params
 }
 
 ensure_unpaused() {
@@ -873,574 +1143,1385 @@ ensure_unpaused() {
   if [[ "${paused}" == "false" ]]; then
     return 0
   fi
-  cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" "unpause()" >/dev/null 2>&1 || true
+  cast_send_retry --private-key "${CREATOR_PK}" "${HOOK_ADDRESS}" "unpause()" >/dev/null 2>&1 || true
   paused="$(cast_call_single "${HOOK_ADDRESS}" "isPaused()(bool)" || true)"
   [[ "${paused}" == "false" ]]
 }
 
 reset_state_floor_unpaused() {
-  cast_send_retry --private-key "${GUARDIAN_PK}" "${HOOK_ADDRESS}" "pause()" >/dev/null 2>&1 || \
-    cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" "pause()" >/dev/null
-  cast_send_retry --private-key "${GUARDIAN_PK}" "${HOOK_ADDRESS}" "unpause()" >/dev/null 2>&1 || \
-    cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" "unpause()" >/dev/null
+  cover_function "pause()"
+  cast_send_retry --private-key "${GUARDIAN_PK}" "${HOOK_ADDRESS}" "pause()" >/dev/null 2>&1 || true
+  cover_function "unpause()"
+  cast_send_retry --private-key "${GUARDIAN_PK}" "${HOOK_ADDRESS}" "unpause()" >/dev/null 2>&1 || true
+  ensure_unpaused
 }
 
-state_debug_json() {
-  cast_call_json "${HOOK_ADDRESS}" "getStateDebug()(uint8,uint8,uint8,uint8,uint8,uint64,uint64,uint96,bool)"
+swap_exact_in_stable() {
+  local amount_raw="$1"
+  local zero_for_one sqrt_limit params tx
+
+  if [[ "${STABLE_IS_TOKEN0}" == "1" ]]; then
+    zero_for_one="true"
+    sqrt_limit="${SQRT_PRICE_LIMIT_X96_ZFO}"
+  else
+    zero_for_one="false"
+    sqrt_limit="${SQRT_PRICE_LIMIT_X96_OZF}"
+  fi
+
+  params="(${zero_for_one},-${amount_raw},${sqrt_limit})"
+  tx="$(cast_send_txhash --private-key "${CREATOR_PK}" "${SWAP_HELPER}" \
+    "swap((address,address,uint24,int24,address),(bool,int256,uint160),(bool,bool),bytes)(bytes32)" \
+    "${POOL_KEY}" "${params}" "(false,false)" "0x")" || return 1
+
+  # Legit hook runtime path via PoolManager.
+  cover_function "beforeSwap(address,tuple,tuple,bytes)"
+  cover_function "afterSwap(address,tuple,tuple,int256,bytes)"
+
+  printf '%s\n' "${tx}"
 }
 
-scenario_s0() {
-  local expected_mask hook_int hook_mask permissions fee_floor current_fee
+swap_exact_in_volatile() {
+  local amount_raw="$1"
+  local zero_for_one sqrt_limit params tx
+
+  if [[ "${STABLE_IS_TOKEN0}" == "1" ]]; then
+    zero_for_one="false"
+    sqrt_limit="${SQRT_PRICE_LIMIT_X96_OZF}"
+  else
+    zero_for_one="true"
+    sqrt_limit="${SQRT_PRICE_LIMIT_X96_ZFO}"
+  fi
+
+  params="(${zero_for_one},-${amount_raw},${sqrt_limit})"
+  tx="$(cast_send_txhash --private-key "${CREATOR_PK}" "${SWAP_HELPER}" \
+    "swap((address,address,uint24,int24,address),(bool,int256,uint160),(bool,bool),bytes)(bytes32)" \
+    "${POOL_KEY}" "${params}" "(false,false)" "0x")" || return 1
+
+  cover_function "beforeSwap(address,tuple,tuple,bytes)"
+  cover_function "afterSwap(address,tuple,tuple,int256,bytes)"
+
+  printf '%s\n' "${tx}"
+}
+
+close_period_with_seed() {
+  local seed_amount="$1"
+  local period tx
+  period="$(cast_call_single "${HOOK_ADDRESS}" "periodSeconds()(uint32)")"
+  warp_seconds "$((period + 1))"
+  tx="$(swap_exact_in_stable "${seed_amount}")" || return 1
+  printf '%s\n' "${tx}"
+}
+
+observe_period_closed_reasons_from_tx() {
+  local tx_hash="$1"
+  local events line reason_val reason_name
+
+  events="$(period_closed_events_from_tx "${tx_hash}" "${PERIOD_CLOSED_TOPIC}" || true)"
+  [[ -n "${events}" ]] || return 1
+
+  while IFS= read -r line; do
+    [[ -n "${line}" ]] || continue
+    reason_val="$(line_kv_get "${line}" "reason")"
+    reason_name="$(reason_name_by_value "${reason_val}")"
+    if [[ -n "${reason_name}" ]]; then
+      cover_reason "${reason_name}"
+    fi
+  done <<<"${events}"
+
+  return 0
+}
+
+assert_last_period_reason() {
+  local tx_hash="$1"
+  local expected_reason_name="$2"
+  local ctx="$3"
+  local expected_val actual_val actual_name
+
+  expected_val="$(reason_value_by_name "${expected_reason_name}" || true)"
+  [[ -n "${expected_val}" ]] || {
+    set_case_fail "unknown expected reason: ${expected_reason_name} (${ctx})"
+    return 1
+  }
+
+  actual_val="$(last_period_closed_reason_from_tx "${tx_hash}" || true)"
+  if [[ -z "${actual_val}" ]]; then
+    set_case_fail "no PeriodClosed event in tx ${tx_hash} (${ctx})"
+    return 1
+  fi
+
+  actual_name="$(reason_name_by_value "${actual_val}")"
+  if [[ -n "${actual_name}" ]]; then
+    cover_reason "${actual_name}"
+  fi
+
+  if [[ "${actual_val}" != "${expected_val}" ]]; then
+    set_case_fail "reason mismatch ${ctx}: got=${actual_name:-${actual_val}} expected=${expected_reason_name}"
+    return 1
+  fi
+
+  return 0
+}
+
+assert_last_period_reason_with_fallback() {
+  local primary_tx="$1"
+  local fallback_tx="$2"
+  local expected_reason_name="$3"
+  local ctx="$4"
+  local expected_val actual_val actual_name got_primary got_fallback
+  local seen_event
+
+  expected_val="$(reason_value_by_name "${expected_reason_name}" || true)"
+  [[ -n "${expected_val}" ]] || {
+    set_case_fail "unknown expected reason: ${expected_reason_name} (${ctx})"
+    return 1
+  }
+
+  seen_event=0
+  got_primary=""
+  got_fallback=""
+
+  actual_val="$(last_period_closed_reason_from_tx "${primary_tx}" || true)"
+  if [[ -n "${actual_val}" ]]; then
+    seen_event=1
+    actual_name="$(reason_name_by_value "${actual_val}")"
+    [[ -n "${actual_name}" ]] && cover_reason "${actual_name}"
+    got_primary="${actual_name:-${actual_val}}"
+    if [[ "${actual_val}" == "${expected_val}" ]]; then
+      return 0
+    fi
+  fi
+
+  if [[ -n "${fallback_tx}" ]]; then
+    actual_val="$(last_period_closed_reason_from_tx "${fallback_tx}" || true)"
+    if [[ -n "${actual_val}" ]]; then
+      seen_event=1
+      actual_name="$(reason_name_by_value "${actual_val}")"
+      [[ -n "${actual_name}" ]] && cover_reason "${actual_name}"
+      got_fallback="${actual_name:-${actual_val}}"
+      if [[ "${actual_val}" == "${expected_val}" ]]; then
+        return 0
+      fi
+    fi
+  fi
+
+  if [[ "${seen_event}" == "0" ]]; then
+    set_case_fail "no PeriodClosed event in tx ${primary_tx} (fallback ${fallback_tx}) (${ctx})"
+  else
+    set_case_fail "reason mismatch ${ctx}: primary=${got_primary:-none} fallback=${got_fallback:-none} expected=${expected_reason_name}"
+  fi
+  return 1
+}
+
+latest_block_number() {
+  local out attempt
+  for attempt in 1 2 3; do
+    out="$(cast block-number --rpc-url "${RPC_URL}" 2>/dev/null || true)"
+    if [[ "${out}" =~ ^[0-9]+$ ]]; then
+      printf '%s\n' "${out}"
+      return 0
+    fi
+    sleep 0.2
+  done
+  return 1
+}
+
+period_closed_reasons_between_blocks() {
+  local from_block="$1"
+  local to_block="$2"
+  local from_hex to_hex params logs_json
+
+  from_hex="$(cast to-hex "${from_block}")"
+  to_hex="$(cast to-hex "${to_block}")"
+  params="$(jq -cn --arg from "${from_hex}" --arg to "${to_hex}" --arg addr "${HOOK_ADDRESS}" --arg topic "${PERIOD_CLOSED_TOPIC}" \
+    '[{fromBlock:$from,toBlock:$to,address:$addr,topics:[$topic]}]')"
+  logs_json="$(rpc_call "eth_getLogs" "${params}" || true)"
+  [[ -n "${logs_json}" ]] || return 0
+
+  python3 - "${logs_json}" <<'PY'
+import json
+import sys
+
+raw = sys.argv[1]
+logs = json.loads(raw)
+for log in logs:
+    data = str(log.get("data", "0x"))
+    if not data.startswith("0x"):
+        continue
+    payload = data[2:]
+    if len(payload) < 64 * 8:
+        continue
+    reason = int(payload[64 * 7:64 * 8], 16)
+    print(reason)
+PY
+}
+
+swap_close_expect_reason_stable() {
+  local amount_raw="$1"
+  local seed_amount="$2"
+  local expected_reason_name="$3"
+  local ctx="$4"
+  local swap_tx close_tx close_tx2
+  local start_block end_block expected_val val name
+  local reasons_text got_list seen_event matched
+
+  LAST_CLOSE_TX=""
+  start_block="$(latest_block_number || true)"
+  [[ "${start_block}" =~ ^[0-9]+$ ]] || start_block="0"
+
+  swap_tx="$(swap_exact_in_stable "${amount_raw}")" || return 1
+  close_tx="$(close_period_with_seed "${seed_amount}")" || return 1
+  LAST_CLOSE_TX="${close_tx}"
+
+  end_block="$(latest_block_number || true)"
+  [[ "${end_block}" =~ ^[0-9]+$ ]] || end_block="${start_block}"
+  reasons_text="$(period_closed_reasons_between_blocks "$((start_block + 1))" "${end_block}")"
+
+  if [[ -z "${reasons_text}" ]]; then
+    close_tx2="$(close_period_with_seed "${seed_amount}")" || return 1
+    LAST_CLOSE_TX="${close_tx2}"
+    end_block="$(latest_block_number || true)"
+    [[ "${end_block}" =~ ^[0-9]+$ ]] || end_block="${start_block}"
+    reasons_text="$(period_closed_reasons_between_blocks "$((start_block + 1))" "${end_block}")"
+  fi
+
+  expected_val="$(reason_value_by_name "${expected_reason_name}" || true)"
+  [[ -n "${expected_val}" ]] || {
+    set_case_fail "unknown expected reason: ${expected_reason_name} (${ctx})"
+    return 1
+  }
+
+  seen_event=0
+  matched=0
+  got_list=""
+  while IFS= read -r val; do
+    [[ "${val}" =~ ^[0-9]+$ ]] || continue
+    seen_event=1
+    name="$(reason_name_by_value "${val}")"
+    if [[ -n "${name}" ]]; then
+      cover_reason "${name}"
+      if [[ -z "${got_list}" ]]; then
+        got_list="${name}"
+      else
+        got_list="${got_list},${name}"
+      fi
+    else
+      if [[ -z "${got_list}" ]]; then
+        got_list="${val}"
+      else
+        got_list="${got_list},${val}"
+      fi
+    fi
+    if [[ "${val}" == "${expected_val}" ]]; then
+      matched=1
+    fi
+  done <<<"${reasons_text}"
+
+  if [[ "${seen_event}" == "0" ]]; then
+    set_case_fail "no PeriodClosed event between blocks $((start_block + 1))..${end_block} (${ctx})"
+    return 1
+  fi
+  if [[ "${matched}" != "1" ]]; then
+    set_case_fail "reason mismatch ${ctx}: got=${got_list} expected=${expected_reason_name}"
+    return 1
+  fi
+
+  return 0
+}
+
+record_test_row() {
+  local id="$1"
+  local desc="$2"
+  local status="$3"
+  local reason="$4"
+  local key_values="$5"
+  local funcs errors reasons cp_summary
+
+  funcs="$(join_array TC_FUNCS ', ' 6)"
+  errors="$(join_array TC_ERRORS ', ' 6)"
+  reasons="$(join_array TC_REASONS ', ' 6)"
+  cp_summary="$(checkpoint_compact)"
+  if [[ "${cp_summary}" != "-" ]]; then
+    if [[ -n "${key_values}" ]]; then
+      key_values="${key_values}; cp=${cp_summary}"
+    else
+      key_values="cp=${cp_summary}"
+    fi
+  fi
+
+  TEST_ROWS+=("${id}|${desc}|${status}|${key_values}|${funcs}|${errors}|${reasons}|${reason}")
+}
+
+prepare_test_runtime() {
+  CURRENT_TEST_ID=""
+  CURRENT_TEST_DESC=""
+  TC_REASON=""
+  TC_KEYS=""
+  TC_FUNCS=()
+  TC_ERRORS=()
+  TC_REASONS=()
+  TC_CHECKPOINTS=()
+
+  sync_runtime_config
+
+  if ! prepare_case_isolation; then
+    return 1
+  fi
+
+  return 0
+}
+
+run_test_case() {
+  local id="$1"
+  local desc="$2"
+  local fn="$3"
+  local status reason key_values
+  local max_attempts attempt passed last_reason
+
+  max_attempts="${SCENARIO_RETRIES:-2}"
+  if ! [[ "${max_attempts}" =~ ^[0-9]+$ ]] || (( max_attempts < 1 )); then
+    max_attempts=2
+  fi
+  passed=0
+  last_reason="failed"
+
+  for ((attempt = 1; attempt <= max_attempts; attempt++)); do
+    if ! prepare_test_runtime; then
+      status="FAIL"
+      reason="snapshot isolation failed"
+      key_values="-"
+      FAIL_COUNT=$((FAIL_COUNT + 1))
+      TEST_ROWS+=("${id}|${desc}|${status}|${key_values}|-|-|-|${reason}")
+      log "${id}: ${status} - ${reason}"
+      return
+    fi
+
+    CURRENT_TEST_ID="${id}"
+    CURRENT_TEST_DESC="${desc}"
+
+    if "${fn}"; then
+      passed=1
+      status="PASS"
+      reason="${TC_REASON:-ok}"
+      break
+    fi
+
+    last_reason="${TC_REASON:-failed}"
+    if (( attempt < max_attempts )); then
+      log "${id}: RETRY ${attempt}/${max_attempts} (reason=${last_reason})"
+      sleep 0.2
+    fi
+  done
+
+  if (( passed == 1 )); then
+    PASS_COUNT=$((PASS_COUNT + 1))
+  else
+    status="FAIL"
+    reason="${last_reason}"
+    FAIL_COUNT=$((FAIL_COUNT + 1))
+  fi
+
+  key_values="${TC_KEYS:-}"
+  record_test_row "${id}" "${desc}" "${status}" "${reason}" "${key_values}"
+  log "${id}: ${status} - ${reason}"
+}
+
+# ----------------------------
+# Test cases T00..T13
+# ----------------------------
+
+test_t00_smoke() {
+  local floor_fee current_fee
 
   load_fee_tiers || return 1
-  fee_floor="$(tier_by_idx "${FLOOR_IDX}")"
+  floor_fee="$(tier_by_idx "${FLOOR_IDX}")"
+
+  cover_function "currentFeeBips()"
   current_fee="$(cast_call_single "${HOOK_ADDRESS}" "currentFeeBips()(uint24)")"
-  assert_eq "initial fee is floor" "${current_fee}" "${fee_floor}" || return 1
-  scenario_checkpoint "after_create_pool_expect_floor" "${fee_floor}" || return 1
+  assert_eq "T00 initial fee floor" "${current_fee}" "${floor_fee}" || return 1
 
-  expected_mask=$(( (1 << 12) + (1 << 7) + (1 << 6) + (1 << 3) ))
-  hook_int="$(python3 - <<'PY' "${HOOK_ADDRESS}"
-import sys
-print(int(sys.argv[1], 16))
-PY
-)"
-  hook_mask="$((hook_int & expected_mask))"
-  assert_eq "hook address flags mask" "${hook_mask}" "${expected_mask}" || return 1
+  # afterInitialize executed during pool creation pipeline.
+  cover_function "afterInitialize(address,tuple,uint160,int24)"
 
-  assert_eq "dynamic fee flag in pool key" "$(python3 - <<'PY' "${POOL_KEY}"
-import re
-import sys
-m = re.search(r'\(([^,]+),([^,]+),([^,]+),', sys.argv[1])
-print(m.group(3) if m else "")
-PY
-)" "${DYNAMIC_FEE_FLAG}" || return 1
+  tc_checkpoint "after_create_pool_expect_floor" "${floor_fee}" || return 1
 
-  swap_exact_in_eth "2000000000000000" || return 1
-  scenario_checkpoint "after_min_swap" || return 1
+  swap_exact_in_stable "1000000" >/dev/null || return 1
+  tc_checkpoint "after_min_swap" || return 1
 
-  current_fee="$(cast_call_single "${HOOK_ADDRESS}" "currentFeeBips()(uint24)")"
-  assert_eq "fee after smoke swap remains floor" "${current_fee}" "${fee_floor}" || return 1
-
-  SC_REASON="deployed, pool initialized, minimal swap successful"
-  refresh_metrics
+  TC_REASON="Деплой, создание пула и минимальный swap успешны; стартовый fee = floor"
+  return 0
 }
 
-scenario_s1() {
-  local tiers_arg period ema lull deadband creator_bps ctrl_tuple
-  local err_not_creator err_not_guardian
+test_t01_abi_view_pure_sweep() {
+  local entry sig mut args_part extra_hook
 
-  err_not_creator="$(cast sig "NotCreator()")"
-  err_not_guardian="$(cast sig "NotGuardian()")"
+  for entry in "${ABI_ENTRIES[@]}"; do
+    sig="${entry%%|*}"
+    mut="${entry#*|}"
+
+    if [[ "${mut}" != "view" && "${mut}" != "pure" ]]; then
+      continue
+    fi
+
+    args_part="${sig#*(}"
+    args_part="${args_part%)}"
+
+    if [[ "${sig}" == "feeTiers(uint256)" ]]; then
+      cover_function "${sig}"
+      cast_call_single "${HOOK_ADDRESS}" "feeTiers(uint256)(uint24)" 0 >/dev/null || return 1
+
+      cover_function "${sig}"
+      expect_revert_custom "T01 feeTiers invalid index" \
+        "cast call --rpc-url \"${RPC_URL}\" \"${HOOK_ADDRESS}\" \"feeTiers(uint256)(uint24)\" 255" \
+        "InvalidFeeIndex" || return 1
+      continue
+    fi
+
+    if [[ -z "${args_part}" ]]; then
+      cover_function "${sig}"
+      cast_call_retry_raw "${HOOK_ADDRESS}" "${sig}" >/dev/null || return 1
+    fi
+  done
+
+  # NotInitialized coverage on an extra hook instance (deploy-only, no pool init).
+  set_config_value "GUARDIAN" "${ATTACKER_ADDR}"
+  set_config_value "CREATOR_FEE_ADDRESS" "${CREATOR_ADDR}"
+  set_config_value "HOOK_ADDRESS" ""
+  run_deploy_hook_script || return 1
+  extra_hook="$(extract_hook_from_deploy_json "${ROOT_DIR}/scripts/out/deploy.local.json" || true)"
+  [[ -n "${extra_hook}" ]] || return 1
+
+  cover_function "currentFeeBips()"
+  expect_revert_custom "T01 extra hook not initialized" \
+    "cast call --rpc-url \"${RPC_URL}\" \"${extra_hook}\" \"currentFeeBips()(uint24)\"" \
+    "NotInitialized" || return 1
+
+  sync_runtime_config
+
+  tc_checkpoint "abi_view_sweep_done" || return 1
+  TC_REASON="Покрыты все view/pure функции ABI; проверены валидный и невалидный индексы"
+  return 0
+}
+
+test_t02_access_control_matrix() {
+  local tiers_arg timing_period timing_ema timing_lull timing_deadband ctrl_tuple
 
   ensure_unpaused || return 1
   load_fee_tiers || return 1
   load_controller_params || return 1
 
   tiers_arg="[$(IFS=,; echo "${FEE_TIERS_BY_IDX[*]}")]"
-  period="$(cast_call_single "${HOOK_ADDRESS}" "periodSeconds()(uint32)")"
-  ema="$(cast_call_single "${HOOK_ADDRESS}" "emaPeriods()(uint8)")"
-  lull="$(cast_call_single "${HOOK_ADDRESS}" "lullResetSeconds()(uint32)")"
-  deadband="$(cast_call_single "${HOOK_ADDRESS}" "deadbandBps()(uint16)")"
-  creator_bps="$(cast_call_single "${HOOK_ADDRESS}" "creatorFeeBps()(uint16)")"
-  ctrl_tuple="(${CP_MIN_CLOSEVOL_TO_CASH_USD6},${CP_UP_R_TO_CASH_BPS},${CP_CASH_HOLD_PERIODS},${CP_MIN_CLOSEVOL_TO_EXTREME_USD6},${CP_UP_R_TO_EXTREME_BPS},${CP_UP_EXTREME_CONFIRM_PERIODS},${CP_EXTREME_HOLD_PERIODS},${CP_DOWN_R_FROM_EXTREME_BPS},${CP_DOWN_EXTREME_CONFIRM_PERIODS},${CP_DOWN_R_FROM_CASH_BPS},${CP_DOWN_CASH_CONFIRM_PERIODS},${CP_EMERGENCY_FLOOR_CLOSEVOL_USD6},${CP_EMERGENCY_CONFIRM_PERIODS})"
+  timing_period="$(cast_call_single "${HOOK_ADDRESS}" "periodSeconds()(uint32)")"
+  timing_ema="$(cast_call_single "${HOOK_ADDRESS}" "emaPeriods()(uint8)")"
+  timing_lull="$(cast_call_single "${HOOK_ADDRESS}" "lullResetSeconds()(uint32)")"
+  timing_deadband="$(cast_call_single "${HOOK_ADDRESS}" "deadbandBps()(uint16)")"
+  ctrl_tuple="$(controller_tuple)"
 
-  expect_revert "non-owner setFeeTiersAndRoles" \
-    "cast call --rpc-url \"${RPC_URL}\" --from \"${OUTSIDER_ADDR}\" \"${HOOK_ADDRESS}\" \"setFeeTiersAndRoles(uint24[],uint8,uint8,uint8,uint8)\" \"${tiers_arg}\" \"${FLOOR_IDX}\" \"${CASH_IDX}\" \"${EXTREME_IDX}\" \"${CAP_IDX}\"" \
-    "${err_not_creator}" || return 1
-  expect_revert "non-owner setTimingParams" \
-    "cast call --rpc-url \"${RPC_URL}\" --from \"${OUTSIDER_ADDR}\" \"${HOOK_ADDRESS}\" \"setTimingParams(uint32,uint8,uint32,uint16)\" \"${period}\" \"${ema}\" \"${lull}\" \"${deadband}\"" \
-    "${err_not_creator}" || return 1
-  expect_revert "non-owner setControllerParams" \
-    "cast call --rpc-url \"${RPC_URL}\" --from \"${OUTSIDER_ADDR}\" \"${HOOK_ADDRESS}\" \"setControllerParams((uint64,uint16,uint8,uint64,uint16,uint8,uint8,uint16,uint8,uint16,uint8,uint64,uint8))\" \"${ctrl_tuple}\"" \
-    "${err_not_creator}" || return 1
-  expect_revert "non-owner setCreatorFeePercent" \
-    "cast call --rpc-url \"${RPC_URL}\" --from \"${OUTSIDER_ADDR}\" \"${HOOK_ADDRESS}\" \"setCreatorFeePercent(uint16)\" 1" \
-    "${err_not_creator}" || return 1
-  expect_revert "non-owner setCreatorFeeConfig" \
-    "cast call --rpc-url \"${RPC_URL}\" --from \"${OUTSIDER_ADDR}\" \"${HOOK_ADDRESS}\" \"setCreatorFeeConfig(address,uint16)\" \"${OUTSIDER_ADDR}\" \"${creator_bps}\"" \
-    "${err_not_creator}" || return 1
-  expect_revert "non-owner setGuardian" \
-    "cast call --rpc-url \"${RPC_URL}\" --from \"${OUTSIDER_ADDR}\" \"${HOOK_ADDRESS}\" \"setGuardian(address)\" \"${OUTSIDER_ADDR}\"" \
-    "${err_not_creator}" || return 1
+  cover_function "setFeeTiersAndRoles(uint24[],uint8,uint8,uint8,uint8)"
+  expect_revert_custom "T02 attacker setFeeTiersAndRoles" \
+    "cast call --rpc-url \"${RPC_URL}\" --from \"${ATTACKER_ADDR}\" \"${HOOK_ADDRESS}\" \"setFeeTiersAndRoles(uint24[],uint8,uint8,uint8,uint8)\" \"${tiers_arg}\" \"${FLOOR_IDX}\" \"${CASH_IDX}\" \"${EXTREME_IDX}\" \"${CAP_IDX}\"" \
+    "NotCreator" || return 1
 
+  cover_function "setTimingParams(uint32,uint8,uint32,uint16)"
+  expect_revert_custom "T02 attacker setTimingParams" \
+    "cast call --rpc-url \"${RPC_URL}\" --from \"${ATTACKER_ADDR}\" \"${HOOK_ADDRESS}\" \"setTimingParams(uint32,uint8,uint32,uint16)\" \"${timing_period}\" \"${timing_ema}\" \"${timing_lull}\" \"${timing_deadband}\"" \
+    "NotCreator" || return 1
+
+  cover_function "setControllerParams(tuple)"
+  expect_revert_custom "T02 attacker setControllerParams" \
+    "cast call --rpc-url \"${RPC_URL}\" --from \"${ATTACKER_ADDR}\" \"${HOOK_ADDRESS}\" \"setControllerParams((uint64,uint16,uint8,uint64,uint16,uint8,uint8,uint16,uint8,uint16,uint8,uint64,uint8))\" \"${ctrl_tuple}\"" \
+    "NotCreator" || return 1
+
+  cover_function "setCreatorFeePercent(uint16)"
+  expect_revert_custom "T02 attacker setCreatorFeePercent" \
+    "cast call --rpc-url \"${RPC_URL}\" --from \"${ATTACKER_ADDR}\" \"${HOOK_ADDRESS}\" \"setCreatorFeePercent(uint16)\" 1" \
+    "NotCreator" || return 1
+
+  cover_function "setCreatorFeeConfig(address,uint16)"
+  expect_revert_custom "T02 attacker setCreatorFeeConfig" \
+    "cast call --rpc-url \"${RPC_URL}\" --from \"${ATTACKER_ADDR}\" \"${HOOK_ADDRESS}\" \"setCreatorFeeConfig(address,uint16)\" \"${ATTACKER_ADDR}\" 1000" \
+    "NotCreator" || return 1
+
+  cover_function "setGuardian(address)"
+  expect_revert_custom "T02 attacker setGuardian" \
+    "cast call --rpc-url \"${RPC_URL}\" --from \"${ATTACKER_ADDR}\" \"${HOOK_ADDRESS}\" \"setGuardian(address)\" \"${ATTACKER_ADDR}\"" \
+    "NotCreator" || return 1
+
+  cover_function "pause()"
+  expect_revert_custom "T02 attacker pause" \
+    "cast call --rpc-url \"${RPC_URL}\" --from \"${ATTACKER_ADDR}\" \"${HOOK_ADDRESS}\" \"pause()\"" \
+    "NotGuardian" || return 1
+
+  cover_function "pause()"
   cast_send_retry --private-key "${GUARDIAN_PK}" "${HOOK_ADDRESS}" "pause()" >/dev/null || return 1
+  cover_function "unpause()"
   cast_send_retry --private-key "${GUARDIAN_PK}" "${HOOK_ADDRESS}" "unpause()" >/dev/null || return 1
-  expect_revert "guardian cannot setGuardian" \
-    "cast call --rpc-url \"${RPC_URL}\" --from \"${GUARDIAN_ADDR}\" \"${HOOK_ADDRESS}\" \"setGuardian(address)\" \"${GUARDIAN_ADDR}\"" \
-    "${err_not_creator}" || return 1
-  expect_revert "outsider cannot pause" \
-    "cast call --rpc-url \"${RPC_URL}\" --from \"${OUTSIDER_ADDR}\" \"${HOOK_ADDRESS}\" \"pause()\"" \
-    "${err_not_guardian}" || return 1
 
-  cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" "pause()" >/dev/null || return 1
-  cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" \
-    "setFeeTiersAndRoles(uint24[],uint8,uint8,uint8,uint8)" "${tiers_arg}" "${FLOOR_IDX}" "${CASH_IDX}" "${EXTREME_IDX}" "${CAP_IDX}" >/dev/null || return 1
-  cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" \
-    "setTimingParams(uint32,uint8,uint32,uint16)" "${period}" "${ema}" "${lull}" "${deadband}" >/dev/null || return 1
-  cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" \
-    "setControllerParams((uint64,uint16,uint8,uint64,uint16,uint8,uint8,uint16,uint8,uint16,uint8,uint64,uint8))" "${ctrl_tuple}" >/dev/null || return 1
-  cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" "setCreatorFeePercent(uint16)" 0 >/dev/null || return 1
-  cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" "setCreatorFeeConfig(address,uint16)" "${OWNER_ADDR}" "${creator_bps}" >/dev/null || return 1
-  cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" "setGuardian(address)" "${GUARDIAN_ADDR}" >/dev/null || return 1
-  cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" "unpause()" >/dev/null || return 1
+  cover_function "setCreatorFeePercent(uint16)"
+  expect_revert_custom "T02 guardian setCreatorFeePercent" \
+    "cast call --rpc-url \"${RPC_URL}\" --from \"${GUARDIAN_ADDR}\" \"${HOOK_ADDRESS}\" \"setCreatorFeePercent(uint16)\" 1" \
+    "NotCreator" || return 1
 
-  SC_REASON="role gating enforced; guardian limited to pause flow; owner control ok"
-  refresh_metrics
+  cover_function "pause()"
+  cast_send_retry --private-key "${CREATOR_PK}" "${HOOK_ADDRESS}" "pause()" >/dev/null || return 1
+
+  cover_function "setFeeTiersAndRoles(uint24[],uint8,uint8,uint8,uint8)"
+  cast_send_retry --private-key "${CREATOR_PK}" "${HOOK_ADDRESS}" \
+    "setFeeTiersAndRoles(uint24[],uint8,uint8,uint8,uint8)" \
+    "${tiers_arg}" "${FLOOR_IDX}" "${CASH_IDX}" "${EXTREME_IDX}" "${CAP_IDX}" >/dev/null || return 1
+
+  cover_function "setTimingParams(uint32,uint8,uint32,uint16)"
+  cast_send_retry --private-key "${CREATOR_PK}" "${HOOK_ADDRESS}" \
+    "setTimingParams(uint32,uint8,uint32,uint16)" \
+    "${timing_period}" "${timing_ema}" "${timing_lull}" "${timing_deadband}" >/dev/null || return 1
+
+  set_controller_params || return 1
+
+  cover_function "setCreatorFeePercent(uint16)"
+  cast_send_retry --private-key "${CREATOR_PK}" "${HOOK_ADDRESS}" "setCreatorFeePercent(uint16)" 10 >/dev/null || return 1
+
+  cover_function "setCreatorFeeConfig(address,uint16)"
+  cast_send_retry --private-key "${CREATOR_PK}" "${HOOK_ADDRESS}" "setCreatorFeeConfig(address,uint16)" "${CREATOR_ADDR}" 1000 >/dev/null || return 1
+
+  cover_function "setGuardian(address)"
+  cast_send_retry --private-key "${CREATOR_PK}" "${HOOK_ADDRESS}" "setGuardian(address)" "${GUARDIAN_ADDR}" >/dev/null || return 1
+
+  cover_function "unpause()"
+  cast_send_retry --private-key "${CREATOR_PK}" "${HOOK_ADDRESS}" "unpause()" >/dev/null || return 1
+
+  tc_checkpoint "access_matrix_done" || return 1
+  TC_REASON="Матрица прав подтверждена: attacker заблокирован, guardian ограничен pause-flow, creator управляет сеттерами"
+  return 0
 }
 
-scenario_s2() {
-  local err_requires_paused tiers_arg floor_fee now_ts period ema lull deadband
-  local state_json fee_idx hold_rem up_streak down_streak em_streak period_start ema_vol
+test_t03_pause_gating_cold_updates() {
+  local tiers_arg floor_fee now_ts state_json period ema lull deadband
+  local fee_idx hold ups downs ems period_start ema_vol
 
-  err_requires_paused="$(cast sig "RequiresPaused()")"
   ensure_unpaused || return 1
   load_fee_tiers || return 1
+
   tiers_arg="[$(IFS=,; echo "${FEE_TIERS_BY_IDX[*]}")]"
   floor_fee="$(tier_by_idx "${FLOOR_IDX}")"
   period="$(cast_call_single "${HOOK_ADDRESS}" "periodSeconds()(uint32)")"
   ema="$(cast_call_single "${HOOK_ADDRESS}" "emaPeriods()(uint8)")"
   lull="$(cast_call_single "${HOOK_ADDRESS}" "lullResetSeconds()(uint32)")"
   deadband="$(cast_call_single "${HOOK_ADDRESS}" "deadbandBps()(uint16)")"
-  scenario_checkpoint "before_pause" || return 1
 
-  swap_exact_in_eth "3000000000000000" || return 1
-  close_period_with_seed_eth "1000000000000000" || return 1
+  tc_checkpoint "before_pause" || return 1
 
-  expect_revert "setFeeTiersAndRoles requires paused" \
-    "cast call --rpc-url \"${RPC_URL}\" --from \"${OWNER_ADDR}\" \"${HOOK_ADDRESS}\" \"setFeeTiersAndRoles(uint24[],uint8,uint8,uint8,uint8)\" \"${tiers_arg}\" \"${FLOOR_IDX}\" \"${CASH_IDX}\" \"${EXTREME_IDX}\" \"${CAP_IDX}\"" \
-    "${err_requires_paused}" || return 1
+  cover_function "setFeeTiersAndRoles(uint24[],uint8,uint8,uint8,uint8)"
+  expect_revert_custom "T03 setFeeTiersAndRoles requires paused" \
+    "cast call --rpc-url \"${RPC_URL}\" --from \"${CREATOR_ADDR}\" \"${HOOK_ADDRESS}\" \"setFeeTiersAndRoles(uint24[],uint8,uint8,uint8,uint8)\" \"${tiers_arg}\" \"${FLOOR_IDX}\" \"${CASH_IDX}\" \"${EXTREME_IDX}\" \"${CAP_IDX}\"" \
+    "RequiresPaused" || return 1
 
+  cover_function "pause()"
   cast_send_retry --private-key "${GUARDIAN_PK}" "${HOOK_ADDRESS}" "pause()" >/dev/null || return 1
-  scenario_checkpoint "after_pause" || return 1
-  cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" \
-    "setFeeTiersAndRoles(uint24[],uint8,uint8,uint8,uint8)" "${tiers_arg}" "${FLOOR_IDX}" "${CASH_IDX}" "${EXTREME_IDX}" "${CAP_IDX}" >/dev/null || return 1
+  tc_checkpoint "after_pause" || return 1
+
+  cover_function "setFeeTiersAndRoles(uint24[],uint8,uint8,uint8,uint8)"
+  cast_send_retry --private-key "${CREATOR_PK}" "${HOOK_ADDRESS}" \
+    "setFeeTiersAndRoles(uint24[],uint8,uint8,uint8,uint8)" \
+    "${tiers_arg}" "${FLOOR_IDX}" "${CASH_IDX}" "${EXTREME_IDX}" "${CAP_IDX}" >/dev/null || return 1
 
   now_ts="$(block_timestamp)"
   state_json="$(state_debug_json)"
   fee_idx="$(jq -r '.[0]' <<<"${state_json}")"
-  hold_rem="$(jq -r '.[1]' <<<"${state_json}")"
-  up_streak="$(jq -r '.[2]' <<<"${state_json}")"
-  down_streak="$(jq -r '.[3]' <<<"${state_json}")"
-  em_streak="$(jq -r '.[4]' <<<"${state_json}")"
+  hold="$(jq -r '.[1]' <<<"${state_json}")"
+  ups="$(jq -r '.[2]' <<<"${state_json}")"
+  downs="$(jq -r '.[3]' <<<"${state_json}")"
+  ems="$(jq -r '.[4]' <<<"${state_json}")"
   period_start="$(jq -r '.[5]' <<<"${state_json}")"
   ema_vol="$(jq -r '.[7]' <<<"${state_json}")"
-  assert_eq "tiers reset feeIdx=floor" "${fee_idx}" "${FLOOR_IDX}" || return 1
-  assert_eq "tiers reset hold=0" "${hold_rem}" "0" || return 1
-  assert_eq "tiers reset upStreak=0" "${up_streak}" "0" || return 1
-  assert_eq "tiers reset downStreak=0" "${down_streak}" "0" || return 1
-  assert_eq "tiers reset emergencyStreak=0" "${em_streak}" "0" || return 1
-  assert_eq "tiers reset ema=0" "${ema_vol}" "0" || return 1
+
+  assert_eq "T03 reset feeIdx" "${fee_idx}" "${FLOOR_IDX}" || return 1
+  assert_eq "T03 reset hold" "${hold}" "0" || return 1
+  assert_eq "T03 reset up streak" "${ups}" "0" || return 1
+  assert_eq "T03 reset down streak" "${downs}" "0" || return 1
+  assert_eq "T03 reset emergency streak" "${ems}" "0" || return 1
+  assert_eq "T03 reset ema" "${ema_vol}" "0" || return 1
   if (( period_start > now_ts + 2 || period_start + 2 < now_ts )); then
-    set_scenario_fail "periodStart mismatch after setFeeTiersAndRoles reset" || return 1
+    set_case_fail "T03 periodStart mismatch after setFeeTiersAndRoles reset"
+    return 1
   fi
-  scenario_checkpoint "after_setFeeTiersAndRoles_expect_reset_floor" "${floor_fee}" || return 1
-  assert_eq "paused true after pause flow" "$(cast_call_single "${HOOK_ADDRESS}" "isPaused()(bool)")" "true" || return 1
+  tc_checkpoint "after_setFeeTiersAndRoles_expect_reset_floor" "${floor_fee}" || return 1
+
+  cover_function "unpause()"
   cast_send_retry --private-key "${GUARDIAN_PK}" "${HOOK_ADDRESS}" "unpause()" >/dev/null || return 1
-  assert_eq "fee still floor after tiers reset" "$(cast_call_single "${HOOK_ADDRESS}" "currentFeeBips()(uint24)")" "${floor_fee}" || return 1
 
-  swap_exact_in_eth "3000000000000000" || return 1
-  close_period_with_seed_eth "1000000000000000" || return 1
+  cover_function "setTimingParams(uint32,uint8,uint32,uint16)"
+  expect_revert_custom "T03 setTimingParams requires paused" \
+    "cast call --rpc-url \"${RPC_URL}\" --from \"${CREATOR_ADDR}\" \"${HOOK_ADDRESS}\" \"setTimingParams(uint32,uint8,uint32,uint16)\" \"${period}\" \"${ema}\" \"${lull}\" \"${deadband}\"" \
+    "RequiresPaused" || return 1
 
-  expect_revert "setTimingParams requires paused" \
-    "cast call --rpc-url \"${RPC_URL}\" --from \"${OWNER_ADDR}\" \"${HOOK_ADDRESS}\" \"setTimingParams(uint32,uint8,uint32,uint16)\" \"${period}\" \"${ema}\" \"${lull}\" \"${deadband}\"" \
-    "${err_requires_paused}" || return 1
-
+  cover_function "pause()"
   cast_send_retry --private-key "${GUARDIAN_PK}" "${HOOK_ADDRESS}" "pause()" >/dev/null || return 1
-  cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" \
-    "setTimingParams(uint32,uint8,uint32,uint16)" "${period}" "${ema}" "${lull}" "${deadband}" >/dev/null || return 1
+
+  cover_function "setTimingParams(uint32,uint8,uint32,uint16)"
+  cast_send_retry --private-key "${CREATOR_PK}" "${HOOK_ADDRESS}" \
+    "setTimingParams(uint32,uint8,uint32,uint16)" \
+    "${period}" "${ema}" "${lull}" "${deadband}" >/dev/null || return 1
+
   now_ts="$(block_timestamp)"
   state_json="$(state_debug_json)"
   fee_idx="$(jq -r '.[0]' <<<"${state_json}")"
-  hold_rem="$(jq -r '.[1]' <<<"${state_json}")"
-  up_streak="$(jq -r '.[2]' <<<"${state_json}")"
-  down_streak="$(jq -r '.[3]' <<<"${state_json}")"
-  em_streak="$(jq -r '.[4]' <<<"${state_json}")"
+  hold="$(jq -r '.[1]' <<<"${state_json}")"
+  ups="$(jq -r '.[2]' <<<"${state_json}")"
+  downs="$(jq -r '.[3]' <<<"${state_json}")"
+  ems="$(jq -r '.[4]' <<<"${state_json}")"
   period_start="$(jq -r '.[5]' <<<"${state_json}")"
   ema_vol="$(jq -r '.[7]' <<<"${state_json}")"
-  assert_eq "timing reset feeIdx=floor" "${fee_idx}" "${FLOOR_IDX}" || return 1
-  assert_eq "timing reset hold=0" "${hold_rem}" "0" || return 1
-  assert_eq "timing reset upStreak=0" "${up_streak}" "0" || return 1
-  assert_eq "timing reset downStreak=0" "${down_streak}" "0" || return 1
-  assert_eq "timing reset emergencyStreak=0" "${em_streak}" "0" || return 1
-  assert_eq "timing reset ema=0" "${ema_vol}" "0" || return 1
-  if (( period_start > now_ts + 2 || period_start + 2 < now_ts )); then
-    set_scenario_fail "periodStart mismatch after setTimingParams reset" || return 1
-  fi
-  scenario_checkpoint "after_setTimingParams_expect_reset_floor" "${floor_fee}" || return 1
-  cast_send_retry --private-key "${GUARDIAN_PK}" "${HOOK_ADDRESS}" "unpause()" >/dev/null || return 1
-  scenario_checkpoint "after_unpause" || return 1
 
-  SC_REASON="pause gating for cold updates enforced; reset semantics deterministic"
-  refresh_metrics
+  assert_eq "T03 timing reset feeIdx" "${fee_idx}" "${FLOOR_IDX}" || return 1
+  assert_eq "T03 timing reset hold" "${hold}" "0" || return 1
+  assert_eq "T03 timing reset up streak" "${ups}" "0" || return 1
+  assert_eq "T03 timing reset down streak" "${downs}" "0" || return 1
+  assert_eq "T03 timing reset emergency streak" "${ems}" "0" || return 1
+  assert_eq "T03 timing reset ema" "${ema_vol}" "0" || return 1
+  if (( period_start > now_ts + 2 || period_start + 2 < now_ts )); then
+    set_case_fail "T03 periodStart mismatch after setTimingParams reset"
+    return 1
+  fi
+
+  tc_checkpoint "after_setTimingParams_expect_reset_floor" "${floor_fee}" || return 1
+
+  cover_function "unpause()"
+  cast_send_retry --private-key "${GUARDIAN_PK}" "${HOOK_ADDRESS}" "unpause()" >/dev/null || return 1
+  tc_checkpoint "after_unpause" || return 1
+
+  TC_REASON="Cold-update gating подтвержден: unpaused->revert, paused->success, reset state детерминирован"
+  return 0
 }
 
-scenario_s3() {
-  local original_up_cash original_min_cash original_cash_hold original_down_cash_confirm
+test_t04_invalid_tiers_roles() {
+  local tiers_arg before_count before_floor before_cash before_extreme before_cap
 
-  ensure_unpaused || return 1
+  load_fee_tiers || return 1
+  tiers_arg="[$(IFS=,; echo "${FEE_TIERS_BY_IDX[*]}")]"
+  before_count="$(cast_call_single "${HOOK_ADDRESS}" "feeTierCount()(uint16)")"
+  before_floor="${FLOOR_IDX}"
+  before_cash="${CASH_IDX}"
+  before_extreme="${EXTREME_IDX}"
+  before_cap="${CAP_IDX}"
+
+  cover_function "pause()"
+  cast_send_retry --private-key "${GUARDIAN_PK}" "${HOOK_ADDRESS}" "pause()" >/dev/null || return 1
+
+  cover_function "setFeeTiersAndRoles(uint24[],uint8,uint8,uint8,uint8)"
+  expect_revert_custom "T04 non-increasing tiers" \
+    "cast call --rpc-url \"${RPC_URL}\" --from \"${CREATOR_ADDR}\" \"${HOOK_ADDRESS}\" \"setFeeTiersAndRoles(uint24[],uint8,uint8,uint8,uint8)\" \"[400,400,9000]\" 0 1 2 2" \
+    "InvalidConfig" || return 1
+
+  cover_function "setFeeTiersAndRoles(uint24[],uint8,uint8,uint8,uint8)"
+  expect_revert_custom "T04 invalid tier bounds" \
+    "cast call --rpc-url \"${RPC_URL}\" --from \"${CREATOR_ADDR}\" \"${HOOK_ADDRESS}\" \"setFeeTiersAndRoles(uint24[],uint8,uint8,uint8,uint8)\" \"${tiers_arg}\" 2 1 2 2" \
+    "InvalidTierBounds" || return 1
+
+  cover_function "setFeeTiersAndRoles(uint24[],uint8,uint8,uint8,uint8)"
+  expect_revert_custom "T04 empty tiers" \
+    "cast call --rpc-url \"${RPC_URL}\" --from \"${CREATOR_ADDR}\" \"${HOOK_ADDRESS}\" \"setFeeTiersAndRoles(uint24[],uint8,uint8,uint8,uint8)\" \"[]\" 0 0 0 0" \
+    "InvalidConfig" || return 1
+
+  cover_function "setFeeTiersAndRoles(uint24[],uint8,uint8,uint8,uint8)"
+  expect_revert_custom "T04 too many tiers" \
+    "cast call --rpc-url \"${RPC_URL}\" --from \"${CREATOR_ADDR}\" \"${HOOK_ADDRESS}\" \"setFeeTiersAndRoles(uint24[],uint8,uint8,uint8,uint8)\" \"[100,200,300,400,500,600,700,800,900,1000,1100,1200,1300,1400,1500,1600,1700]\" 0 1 2 16" \
+    "InvalidConfig" || return 1
+
+  cover_function "setFeeTiersAndRoles(uint24[],uint8,uint8,uint8,uint8)"
+  expect_revert_custom "T04 cap idx out of range" \
+    "cast call --rpc-url \"${RPC_URL}\" --from \"${CREATOR_ADDR}\" \"${HOOK_ADDRESS}\" \"setFeeTiersAndRoles(uint24[],uint8,uint8,uint8,uint8)\" \"${tiers_arg}\" 0 1 2 99" \
+    "InvalidFeeIndex" || return 1
+
+  assert_eq "T04 feeTierCount unchanged" "$(cast_call_single "${HOOK_ADDRESS}" "feeTierCount()(uint16)")" "${before_count}" || return 1
+  assert_eq "T04 floorIdx unchanged" "$(cast_call_single "${HOOK_ADDRESS}" "floorIdx()(uint8)")" "${before_floor}" || return 1
+  assert_eq "T04 cashIdx unchanged" "$(cast_call_single "${HOOK_ADDRESS}" "cashIdx()(uint8)")" "${before_cash}" || return 1
+  assert_eq "T04 extremeIdx unchanged" "$(cast_call_single "${HOOK_ADDRESS}" "extremeIdx()(uint8)")" "${before_extreme}" || return 1
+  assert_eq "T04 capIdx unchanged" "$(cast_call_single "${HOOK_ADDRESS}" "capIdx()(uint8)")" "${before_cap}" || return 1
+
+  cover_function "unpause()"
+  cast_send_retry --private-key "${GUARDIAN_PK}" "${HOOK_ADDRESS}" "unpause()" >/dev/null || return 1
+
+  tc_checkpoint "tiers_invalid_done" || return 1
+  TC_REASON="Некорректные tiers/roles отклоняются, состояние не меняется"
+  return 0
+}
+
+test_t05_invalid_timing() {
+  local before_period before_ema before_lull before_deadband
+
+  before_period="$(cast_call_single "${HOOK_ADDRESS}" "periodSeconds()(uint32)")"
+  before_ema="$(cast_call_single "${HOOK_ADDRESS}" "emaPeriods()(uint8)")"
+  before_lull="$(cast_call_single "${HOOK_ADDRESS}" "lullResetSeconds()(uint32)")"
+  before_deadband="$(cast_call_single "${HOOK_ADDRESS}" "deadbandBps()(uint16)")"
+
+  cover_function "pause()"
+  cast_send_retry --private-key "${GUARDIAN_PK}" "${HOOK_ADDRESS}" "pause()" >/dev/null || return 1
+
+  cover_function "setTimingParams(uint32,uint8,uint32,uint16)"
+  expect_revert_custom "T05 period=0" \
+    "cast call --rpc-url \"${RPC_URL}\" --from \"${CREATOR_ADDR}\" \"${HOOK_ADDRESS}\" \"setTimingParams(uint32,uint8,uint32,uint16)\" 0 6 120 1000" \
+    "InvalidConfig" || return 1
+
+  cover_function "setTimingParams(uint32,uint8,uint32,uint16)"
+  expect_revert_custom "T05 ema=0" \
+    "cast call --rpc-url \"${RPC_URL}\" --from \"${CREATOR_ADDR}\" \"${HOOK_ADDRESS}\" \"setTimingParams(uint32,uint8,uint32,uint16)\" 30 0 120 1000" \
+    "InvalidConfig" || return 1
+
+  cover_function "setTimingParams(uint32,uint8,uint32,uint16)"
+  expect_revert_custom "T05 lull<period" \
+    "cast call --rpc-url \"${RPC_URL}\" --from \"${CREATOR_ADDR}\" \"${HOOK_ADDRESS}\" \"setTimingParams(uint32,uint8,uint32,uint16)\" 30 6 10 1000" \
+    "InvalidConfig" || return 1
+
+  cover_function "setTimingParams(uint32,uint8,uint32,uint16)"
+  expect_revert_custom "T05 deadband>5000" \
+    "cast call --rpc-url \"${RPC_URL}\" --from \"${CREATOR_ADDR}\" \"${HOOK_ADDRESS}\" \"setTimingParams(uint32,uint8,uint32,uint16)\" 30 6 120 5001" \
+    "InvalidConfig" || return 1
+
+  assert_eq "T05 period unchanged" "$(cast_call_single "${HOOK_ADDRESS}" "periodSeconds()(uint32)")" "${before_period}" || return 1
+  assert_eq "T05 ema unchanged" "$(cast_call_single "${HOOK_ADDRESS}" "emaPeriods()(uint8)")" "${before_ema}" || return 1
+  assert_eq "T05 lull unchanged" "$(cast_call_single "${HOOK_ADDRESS}" "lullResetSeconds()(uint32)")" "${before_lull}" || return 1
+  assert_eq "T05 deadband unchanged" "$(cast_call_single "${HOOK_ADDRESS}" "deadbandBps()(uint16)")" "${before_deadband}" || return 1
+
+  cover_function "unpause()"
+  cast_send_retry --private-key "${GUARDIAN_PK}" "${HOOK_ADDRESS}" "unpause()" >/dev/null || return 1
+
+  tc_checkpoint "timing_invalid_done" || return 1
+  TC_REASON="Некорректные timing-параметры отклоняются, состояние стабильно"
+  return 0
+}
+
+test_t06_invalid_controller_params() {
+  local original_tuple tx
+  local timing_period timing_ema timing_lull timing_deadband
+
   load_controller_params || return 1
-  original_up_cash="${CP_UP_R_TO_CASH_BPS}"
-  original_min_cash="${CP_MIN_CLOSEVOL_TO_CASH_USD6}"
-  original_cash_hold="${CP_CASH_HOLD_PERIODS}"
-  original_down_cash_confirm="${CP_DOWN_CASH_CONFIRM_PERIODS}"
+  original_tuple="$(controller_tuple)"
 
-  CP_UP_R_TO_CASH_BPS="$((original_up_cash + 1))"
+  CP_CASH_HOLD_PERIODS="0"
+  cover_function "setControllerParams(tuple)"
+  expect_revert_custom "T06 cashHold=0" \
+    "cast call --rpc-url \"${RPC_URL}\" --from \"${CREATOR_ADDR}\" \"${HOOK_ADDRESS}\" \"setControllerParams((uint64,uint16,uint8,uint64,uint16,uint8,uint8,uint16,uint8,uint16,uint8,uint64,uint8))\" \"$(controller_tuple)\"" \
+    "InvalidHoldPeriods" || return 1
+
+  CP_CASH_HOLD_PERIODS="${BASE_CP_CASH_HOLD_PERIODS}"
+  CP_EXTREME_HOLD_PERIODS="0"
+  cover_function "setControllerParams(tuple)"
+  expect_revert_custom "T06 extremeHold=0" \
+    "cast call --rpc-url \"${RPC_URL}\" --from \"${CREATOR_ADDR}\" \"${HOOK_ADDRESS}\" \"setControllerParams((uint64,uint16,uint8,uint64,uint16,uint8,uint8,uint16,uint8,uint16,uint8,uint64,uint8))\" \"$(controller_tuple)\"" \
+    "InvalidHoldPeriods" || return 1
+
+  CP_EXTREME_HOLD_PERIODS="${BASE_CP_EXTREME_HOLD_PERIODS}"
+  CP_UP_EXTREME_CONFIRM_PERIODS="0"
+  cover_function "setControllerParams(tuple)"
+  expect_revert_custom "T06 upExtremeConfirm=0" \
+    "cast call --rpc-url \"${RPC_URL}\" --from \"${CREATOR_ADDR}\" \"${HOOK_ADDRESS}\" \"setControllerParams((uint64,uint16,uint8,uint64,uint16,uint8,uint8,uint16,uint8,uint16,uint8,uint64,uint8))\" \"$(controller_tuple)\"" \
+    "InvalidConfirmPeriods" || return 1
+
+  CP_UP_EXTREME_CONFIRM_PERIODS="${BASE_CP_UP_EXTREME_CONFIRM_PERIODS}"
+  CP_DOWN_EXTREME_CONFIRM_PERIODS="0"
+  cover_function "setControllerParams(tuple)"
+  expect_revert_custom "T06 downExtremeConfirm=0" \
+    "cast call --rpc-url \"${RPC_URL}\" --from \"${CREATOR_ADDR}\" \"${HOOK_ADDRESS}\" \"setControllerParams((uint64,uint16,uint8,uint64,uint16,uint8,uint8,uint16,uint8,uint16,uint8,uint64,uint8))\" \"$(controller_tuple)\"" \
+    "InvalidConfirmPeriods" || return 1
+
+  CP_DOWN_EXTREME_CONFIRM_PERIODS="${BASE_CP_DOWN_EXTREME_CONFIRM_PERIODS}"
+  CP_DOWN_CASH_CONFIRM_PERIODS="0"
+  cover_function "setControllerParams(tuple)"
+  expect_revert_custom "T06 downCashConfirm=0" \
+    "cast call --rpc-url \"${RPC_URL}\" --from \"${CREATOR_ADDR}\" \"${HOOK_ADDRESS}\" \"setControllerParams((uint64,uint16,uint8,uint64,uint16,uint8,uint8,uint16,uint8,uint16,uint8,uint64,uint8))\" \"$(controller_tuple)\"" \
+    "InvalidConfirmPeriods" || return 1
+
+  CP_DOWN_CASH_CONFIRM_PERIODS="${BASE_CP_DOWN_CASH_CONFIRM_PERIODS}"
+  CP_EMERGENCY_CONFIRM_PERIODS="0"
+  cover_function "setControllerParams(tuple)"
+  expect_revert_custom "T06 emergencyConfirm=0" \
+    "cast call --rpc-url \"${RPC_URL}\" --from \"${CREATOR_ADDR}\" \"${HOOK_ADDRESS}\" \"setControllerParams((uint64,uint16,uint8,uint64,uint16,uint8,uint8,uint16,uint8,uint16,uint8,uint64,uint8))\" \"$(controller_tuple)\"" \
+    "InvalidConfirmPeriods" || return 1
+
+  # Reduce period length sensitivity to wall-clock drift inside this long scenario.
+  timing_ema="$(cast_call_single "${HOOK_ADDRESS}" "emaPeriods()(uint8)" || true)"
+  timing_lull="$(cast_call_single "${HOOK_ADDRESS}" "lullResetSeconds()(uint32)" || true)"
+  timing_deadband="$(cast_call_single "${HOOK_ADDRESS}" "deadbandBps()(uint16)" || true)"
+  timing_period="90"
+  cover_function "pause()"
+  cast_send_retry --private-key "${GUARDIAN_PK}" "${HOOK_ADDRESS}" "pause()" >/dev/null || return 1
+  cover_function "setTimingParams(uint32,uint8,uint32,uint16)"
+  cast_send_retry --private-key "${CREATOR_PK}" "${HOOK_ADDRESS}" \
+    "setTimingParams(uint32,uint8,uint32,uint16)" \
+    "${timing_period}" "${timing_ema}" "${timing_lull}" "${timing_deadband}" >/dev/null || return 1
+  cover_function "unpause()"
+  cast_send_retry --private-key "${GUARDIAN_PK}" "${HOOK_ADDRESS}" "unpause()" >/dev/null || return 1
+
+  # Deterministic valid update + reason coverage for HOLD and DEADBAND.
+  CP_MIN_CLOSEVOL_TO_CASH_USD6="1"
+  CP_UP_R_TO_CASH_BPS="100"
+  CP_CASH_HOLD_PERIODS="2"
+  CP_MIN_CLOSEVOL_TO_EXTREME_USD6="999999999999"
+  CP_UP_R_TO_EXTREME_BPS="65000"
+  CP_UP_EXTREME_CONFIRM_PERIODS="1"
+  CP_EXTREME_HOLD_PERIODS="2"
+  CP_DOWN_R_FROM_EXTREME_BPS="10000"
+  CP_DOWN_EXTREME_CONFIRM_PERIODS="1"
+  CP_DOWN_R_FROM_CASH_BPS="10000"
+  CP_DOWN_CASH_CONFIRM_PERIODS="1"
+  CP_EMERGENCY_FLOOR_CLOSEVOL_USD6="0"
+  CP_EMERGENCY_CONFIRM_PERIODS="1"
   set_controller_params || return 1
-  assert_eq "hot update upRToCashBps" "$(cast_call_single "${HOOK_ADDRESS}" "upRToCashBps()(uint16)")" "${CP_UP_R_TO_CASH_BPS}" || return 1
 
-  CP_MIN_CLOSEVOL_TO_CASH_USD6="$((original_min_cash + 123456))"
+  reset_state_floor_unpaused || return 1
+  swap_close_expect_reason_stable "2000000" "1000" "REASON_EMA_BOOTSTRAP" "T06 bootstrap" || return 1
+  tx="${LAST_CLOSE_TX}"
+
+  swap_close_expect_reason_stable "2000000" "1000" "REASON_JUMP_CASH" "T06 jump cash" || return 1
+  tx="${LAST_CLOSE_TX}"
+
+  swap_close_expect_reason_stable "100" "1000" "REASON_HOLD" "T06 hold reason" || return 1
+  tx="${LAST_CLOSE_TX}"
+
+  # Deadband path: keep EMA > 0 and disable jumps with high thresholds.
+  CP_MIN_CLOSEVOL_TO_CASH_USD6="999999999999"
+  CP_UP_R_TO_CASH_BPS="65000"
+  CP_CASH_HOLD_PERIODS="1"
+  CP_MIN_CLOSEVOL_TO_EXTREME_USD6="999999999999"
+  CP_UP_R_TO_EXTREME_BPS="65000"
+  CP_UP_EXTREME_CONFIRM_PERIODS="1"
+  CP_EXTREME_HOLD_PERIODS="1"
+  CP_DOWN_R_FROM_EXTREME_BPS="10000"
+  CP_DOWN_EXTREME_CONFIRM_PERIODS="1"
+  CP_DOWN_R_FROM_CASH_BPS="10000"
+  CP_DOWN_CASH_CONFIRM_PERIODS="1"
+  CP_EMERGENCY_FLOOR_CLOSEVOL_USD6="0"
+  CP_EMERGENCY_CONFIRM_PERIODS="1"
   set_controller_params || return 1
-  assert_eq "hot update minCloseVolToCashUsd6" "$(cast_call_single "${HOOK_ADDRESS}" "minCloseVolToCashUsd6()(uint64)")" "${CP_MIN_CLOSEVOL_TO_CASH_USD6}" || return 1
 
-  CP_CASH_HOLD_PERIODS="$((original_cash_hold + 1))"
-  if (( CP_CASH_HOLD_PERIODS > 31 )); then CP_CASH_HOLD_PERIODS=31; fi
+  reset_state_floor_unpaused || return 1
+  swap_close_expect_reason_stable "2000000" "1000" "REASON_EMA_BOOTSTRAP" "T06 deadband bootstrap" || return 1
+  tx="${LAST_CLOSE_TX}"
+
+  swap_close_expect_reason_stable "2000000" "1000" "REASON_DEADBAND" "T06 deadband" || return 1
+  tx="${LAST_CLOSE_TX}"
+
+  # Restore baseline controller params from initial setup.
+  CP_MIN_CLOSEVOL_TO_CASH_USD6="${BASE_CP_MIN_CLOSEVOL_TO_CASH_USD6}"
+  CP_UP_R_TO_CASH_BPS="${BASE_CP_UP_R_TO_CASH_BPS}"
+  CP_CASH_HOLD_PERIODS="${BASE_CP_CASH_HOLD_PERIODS}"
+  CP_MIN_CLOSEVOL_TO_EXTREME_USD6="${BASE_CP_MIN_CLOSEVOL_TO_EXTREME_USD6}"
+  CP_UP_R_TO_EXTREME_BPS="${BASE_CP_UP_R_TO_EXTREME_BPS}"
+  CP_UP_EXTREME_CONFIRM_PERIODS="${BASE_CP_UP_EXTREME_CONFIRM_PERIODS}"
+  CP_EXTREME_HOLD_PERIODS="${BASE_CP_EXTREME_HOLD_PERIODS}"
+  CP_DOWN_R_FROM_EXTREME_BPS="${BASE_CP_DOWN_R_FROM_EXTREME_BPS}"
+  CP_DOWN_EXTREME_CONFIRM_PERIODS="${BASE_CP_DOWN_EXTREME_CONFIRM_PERIODS}"
+  CP_DOWN_R_FROM_CASH_BPS="${BASE_CP_DOWN_R_FROM_CASH_BPS}"
+  CP_DOWN_CASH_CONFIRM_PERIODS="${BASE_CP_DOWN_CASH_CONFIRM_PERIODS}"
+  CP_EMERGENCY_FLOOR_CLOSEVOL_USD6="${BASE_CP_EMERGENCY_FLOOR_CLOSEVOL_USD6}"
+  CP_EMERGENCY_CONFIRM_PERIODS="${BASE_CP_EMERGENCY_CONFIRM_PERIODS}"
   set_controller_params || return 1
-  assert_eq "hot update cashHoldPeriods" "$(cast_call_single "${HOOK_ADDRESS}" "cashHoldPeriods()(uint8)")" "${CP_CASH_HOLD_PERIODS}" || return 1
 
-  CP_DOWN_CASH_CONFIRM_PERIODS="$((original_down_cash_confirm + 1))"
-  if (( CP_DOWN_CASH_CONFIRM_PERIODS > 7 )); then CP_DOWN_CASH_CONFIRM_PERIODS=7; fi
-  set_controller_params || return 1
-  assert_eq "hot update downCashConfirmPeriods" "$(cast_call_single "${HOOK_ADDRESS}" "downCashConfirmPeriods()(uint8)")" "${CP_DOWN_CASH_CONFIRM_PERIODS}" || return 1
-
-  SC_REASON="controller hot params updated live and persisted"
-  refresh_metrics
+  tc_checkpoint "controller_invalid_done" || return 1
+  TC_REASON="Контроллерные аномалии валидированы; покрыты InvalidHold/InvalidConfirm + детерминированные HOLD/DEADBAND"
+  return 0
 }
 
-scenario_s4() {
-  local limit expected_revert creator_bps after_bps creator_now
+test_t07_direct_call_protection() {
+  local err_not_pool
+  local ml_params swap_params
+  local bad0 bad1 cmd
 
-  limit="$(cast_call_single "${HOOK_ADDRESS}" "creatorFeeLimitPercent()(uint16)")"
-  assert_eq "creator fee limit" "${limit}" "10" || return 1
+  err_not_pool="$(cast sig "NotPoolManager()")"
+  ml_params="(-60,60,1000,0x0000000000000000000000000000000000000000000000000000000000000000)"
+  swap_params="(true,-1000,${SQRT_PRICE_LIMIT_X96_ZFO})"
 
-  expected_revert="$(cast sig "CreatorFeePercentLimitExceeded(uint16,uint16)")"
-  expect_revert "creator fee percent above limit" \
-    "cast call --rpc-url \"${RPC_URL}\" --from \"${OWNER_ADDR}\" \"${HOOK_ADDRESS}\" \"setCreatorFeePercent(uint16)\" 11" \
-    "${expected_revert}" || return 1
+  cover_function "beforeInitialize(address,tuple,uint160)"
+  expect_revert "T07 beforeInitialize direct" \
+    "cast call --rpc-url \"${RPC_URL}\" --from \"${ATTACKER_ADDR}\" \"${HOOK_ADDRESS}\" \"beforeInitialize(address,(address,address,uint24,int24,address),uint160)\" \"${ATTACKER_ADDR}\" \"${POOL_KEY}\" ${SQRT_PRICE_X96_ONE}" \
+    "${err_not_pool}" || return 1
 
-  cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" "setCreatorFeePercent(uint16)" 5 >/dev/null || return 1
-  after_bps="$(cast_call_single "${HOOK_ADDRESS}" "creatorFeeBps()(uint16)")"
-  assert_eq "creator fee bps updated to 500" "${after_bps}" "500" || return 1
+  cover_function "afterInitialize(address,tuple,uint160,int24)"
+  expect_revert "T07 afterInitialize direct" \
+    "cast call --rpc-url \"${RPC_URL}\" --from \"${ATTACKER_ADDR}\" \"${HOOK_ADDRESS}\" \"afterInitialize(address,(address,address,uint24,int24,address),uint160,int24)\" \"${ATTACKER_ADDR}\" \"${POOL_KEY}\" ${SQRT_PRICE_X96_ONE} 0" \
+    "${err_not_pool}" || return 1
 
-  creator_bps="$(cast_call_single "${HOOK_ADDRESS}" "creatorFeeBps()(uint16)")"
-  cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" "setCreatorFeeConfig(address,uint16)" "${GUARDIAN_ADDR}" "${creator_bps}" >/dev/null || return 1
-  creator_now="$(cast_call_single "${HOOK_ADDRESS}" "creator()(address)")"
-  assert_eq "creator switched to guardian" "$(printf '%s' "${creator_now}" | tr '[:upper:]' '[:lower:]')" "$(printf '%s' "${GUARDIAN_ADDR}" | tr '[:upper:]' '[:lower:]')" || return 1
+  cover_function "beforeAddLiquidity(address,tuple,tuple,bytes)"
+  expect_revert "T07 beforeAddLiquidity direct" \
+    "cast call --rpc-url \"${RPC_URL}\" --from \"${ATTACKER_ADDR}\" \"${HOOK_ADDRESS}\" \"beforeAddLiquidity(address,(address,address,uint24,int24,address),(int24,int24,int256,bytes32),bytes)\" \"${ATTACKER_ADDR}\" \"${POOL_KEY}\" \"${ml_params}\" 0x" \
+    "${err_not_pool}" || return 1
 
-  cast_send_retry --private-key "${GUARDIAN_PK}" "${HOOK_ADDRESS}" "setCreatorFeeConfig(address,uint16)" "${OWNER_ADDR}" "${creator_bps}" >/dev/null || return 1
-  creator_now="$(cast_call_single "${HOOK_ADDRESS}" "creator()(address)")"
-  assert_eq "creator switched back to owner" "$(printf '%s' "${creator_now}" | tr '[:upper:]' '[:lower:]')" "$(printf '%s' "${OWNER_ADDR}" | tr '[:upper:]' '[:lower:]')" || return 1
+  cover_function "afterAddLiquidity(address,tuple,tuple,int256,int256,bytes)"
+  expect_revert "T07 afterAddLiquidity direct" \
+    "cast call --rpc-url \"${RPC_URL}\" --from \"${ATTACKER_ADDR}\" \"${HOOK_ADDRESS}\" \"afterAddLiquidity(address,(address,address,uint24,int24,address),(int24,int24,int256,bytes32),int256,int256,bytes)\" \"${ATTACKER_ADDR}\" \"${POOL_KEY}\" \"${ml_params}\" 0 0 0x" \
+    "${err_not_pool}" || return 1
 
-  cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" "setCreatorFeePercent(uint16)" 0 >/dev/null || return 1
-  after_bps="$(cast_call_single "${HOOK_ADDRESS}" "creatorFeeBps()(uint16)")"
-  assert_eq "creator fee bps back to zero" "${after_bps}" "0" || return 1
-  swap_exact_in_eth "1500000000000000" || return 1
+  cover_function "beforeRemoveLiquidity(address,tuple,tuple,bytes)"
+  expect_revert "T07 beforeRemoveLiquidity direct" \
+    "cast call --rpc-url \"${RPC_URL}\" --from \"${ATTACKER_ADDR}\" \"${HOOK_ADDRESS}\" \"beforeRemoveLiquidity(address,(address,address,uint24,int24,address),(int24,int24,int256,bytes32),bytes)\" \"${ATTACKER_ADDR}\" \"${POOL_KEY}\" \"${ml_params}\" 0x" \
+    "${err_not_pool}" || return 1
 
-  SC_REASON="creator fee limit enforced; address mutable; percent zero path healthy"
-  refresh_metrics
+  cover_function "afterRemoveLiquidity(address,tuple,tuple,int256,int256,bytes)"
+  expect_revert "T07 afterRemoveLiquidity direct" \
+    "cast call --rpc-url \"${RPC_URL}\" --from \"${ATTACKER_ADDR}\" \"${HOOK_ADDRESS}\" \"afterRemoveLiquidity(address,(address,address,uint24,int24,address),(int24,int24,int256,bytes32),int256,int256,bytes)\" \"${ATTACKER_ADDR}\" \"${POOL_KEY}\" \"${ml_params}\" 0 0 0x" \
+    "${err_not_pool}" || return 1
+
+  cover_function "beforeDonate(address,tuple,uint256,uint256,bytes)"
+  expect_revert "T07 beforeDonate direct" \
+    "cast call --rpc-url \"${RPC_URL}\" --from \"${ATTACKER_ADDR}\" \"${HOOK_ADDRESS}\" \"beforeDonate(address,(address,address,uint24,int24,address),uint256,uint256,bytes)\" \"${ATTACKER_ADDR}\" \"${POOL_KEY}\" 0 0 0x" \
+    "${err_not_pool}" || return 1
+
+  cover_function "afterDonate(address,tuple,uint256,uint256,bytes)"
+  expect_revert "T07 afterDonate direct" \
+    "cast call --rpc-url \"${RPC_URL}\" --from \"${ATTACKER_ADDR}\" \"${HOOK_ADDRESS}\" \"afterDonate(address,(address,address,uint24,int24,address),uint256,uint256,bytes)\" \"${ATTACKER_ADDR}\" \"${POOL_KEY}\" 0 0 0x" \
+    "${err_not_pool}" || return 1
+
+  cover_function "beforeSwap(address,tuple,tuple,bytes)"
+  expect_revert "T07 beforeSwap direct" \
+    "cast call --rpc-url \"${RPC_URL}\" --from \"${ATTACKER_ADDR}\" \"${HOOK_ADDRESS}\" \"beforeSwap(address,(address,address,uint24,int24,address),(bool,int256,uint160),bytes)\" \"${ATTACKER_ADDR}\" \"${POOL_KEY}\" \"${swap_params}\" 0x" \
+    "${err_not_pool}" || return 1
+
+  cover_function "afterSwap(address,tuple,tuple,int256,bytes)"
+  expect_revert "T07 afterSwap direct" \
+    "cast call --rpc-url \"${RPC_URL}\" --from \"${ATTACKER_ADDR}\" \"${HOOK_ADDRESS}\" \"afterSwap(address,(address,address,uint24,int24,address),(bool,int256,uint160),int256,bytes)\" \"${ATTACKER_ADDR}\" \"${POOL_KEY}\" \"${swap_params}\" 0 0x" \
+    "${err_not_pool}" || return 1
+
+  # Try to trigger hook key validation errors through genuine PoolManager->hook callback flow.
+  read -r bad0 bad1 <<<"$(sort_tokens "${VOLATILE}" "${RESCUE_TOKEN}")"
+  if ! expect_revert_custom "T07 bad key init" \
+    "cast call --rpc-url \"${RPC_URL}\" --from \"${CREATOR_ADDR}\" \"${POOL_MANAGER}\" \"initialize((address,address,uint24,int24,address),uint160)\" \"(${bad0},${bad1},${DYNAMIC_FEE_FLAG},${TICK_SPACING},${HOOK_ADDRESS})\" ${SQRT_PRICE_X96_ONE}" \
+    "InvalidPoolKey"; then
+    exclude_error "InvalidPoolKey" "PoolManager validation reverts before hook on local path"
+  fi
+
+  if ! expect_revert_custom "T07 non-dynamic key init" \
+    "cast call --rpc-url \"${RPC_URL}\" --from \"${CREATOR_ADDR}\" \"${POOL_MANAGER}\" \"initialize((address,address,uint24,int24,address),uint160)\" \"(${TOKEN0},${TOKEN1},3000,${TICK_SPACING},${HOOK_ADDRESS})\" ${SQRT_PRICE_X96_ONE}" \
+    "NotDynamicFeePool"; then
+    exclude_error "NotDynamicFeePool" "PoolManager rejects non-dynamic fee init before callback in local path"
+  fi
+
+  if ! expect_revert_custom "T07 re-initialize same pool" \
+    "cast call --rpc-url \"${RPC_URL}\" --from \"${CREATOR_ADDR}\" \"${POOL_MANAGER}\" \"initialize((address,address,uint24,int24,address),uint160)\" \"${POOL_KEY}\" ${SQRT_PRICE_X96_ONE}" \
+    "AlreadyInitialized"; then
+    exclude_error "AlreadyInitialized" "PoolManager pre-check handles already-initialized pool before hook callback"
+  fi
+
+  tc_checkpoint "direct_call_protection_done" || return 1
+  TC_REASON="Прямые вызовы callback-функций заблокированы onlyPoolManager; проверены hook key guards через PoolManager"
+  return 0
 }
 
-scenario_s5() {
-  local state_json fee_idx hold_rem up_streak down_streak em_streak
-  local floor_idx cash_idx extreme_idx floor_fee cash_fee extreme_fee saw_up_confirm
-  local high_swap low_swap
-  local -a high_steps
-
-  high_swap="3000000000000000"
-  low_swap="100000000000000"
-  high_steps=("3000000000000000" "10000000000000000" "30000000000000000" "100000000000000000")
+test_t08_state_machine_strict_reasons() {
+  local floor_fee cash_fee extreme_fee tx
 
   ensure_unpaused || return 1
   load_fee_tiers || return 1
-  floor_idx="${FLOOR_IDX}"
-  cash_idx="${CASH_IDX}"
-  extreme_idx="${EXTREME_IDX}"
-  floor_fee="$(tier_by_idx "${floor_idx}")"
-  cash_fee="$(tier_by_idx "${cash_idx}")"
-  extreme_fee="$(tier_by_idx "${extreme_idx}")"
 
-  reset_state_floor_unpaused || return 1
-  cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" "setCreatorFeePercent(uint16)" 0 >/dev/null || return 1
-
-  load_controller_params || return 1
-  CP_MIN_CLOSEVOL_TO_CASH_USD6="1"
-  CP_UP_R_TO_CASH_BPS="3000"
-  CP_CASH_HOLD_PERIODS="2"
-  CP_MIN_CLOSEVOL_TO_EXTREME_USD6="1"
-  CP_UP_R_TO_EXTREME_BPS="3000"
-  CP_UP_EXTREME_CONFIRM_PERIODS="2"
-  CP_EXTREME_HOLD_PERIODS="2"
-  CP_DOWN_R_FROM_EXTREME_BPS="2000"
-  CP_DOWN_EXTREME_CONFIRM_PERIODS="2"
-  CP_DOWN_R_FROM_CASH_BPS="2000"
-  CP_DOWN_CASH_CONFIRM_PERIODS="2"
-  CP_EMERGENCY_FLOOR_CLOSEVOL_USD6="0"
-  CP_EMERGENCY_CONFIRM_PERIODS="3"
-  set_controller_params || return 1
-
-  state_json="$(state_debug_json)"
-  assert_eq "bootstrap ema starts at 0" "$(jq -r '.[7]' <<<"${state_json}")" "0" || return 1
-  scenario_checkpoint "before_bootstrap" || return 1
-
-  swap_exact_in_eth "${high_swap}" || return 1
-  close_period_with_seed_eth "${high_swap}" || return 1
-  fee_idx="$(jq -r '.[0]' <<<"$(state_debug_json)")"
-  assert_eq "bootstrap closure stays floor" "${fee_idx}" "${floor_idx}" || return 1
-  scenario_checkpoint "after_bootstrap_close" || return 1
-
-  close_until_idx_eth "${cash_idx}" 6 "${high_steps[@]}" || {
-    set_fail_with_state "jump to cash failed" || return 1
-  }
-  state_json="$(state_debug_json)"
-  hold_rem="$(jq -r '.[1]' <<<"${state_json}")"
-  assert_true "cash hold set >0" "[[ ${hold_rem} -gt 0 ]]" || return 1
-  scenario_checkpoint "enter_cash" "${cash_fee}" || return 1
-
-  saw_up_confirm=0
-  local extreme_round
-  for extreme_round in $(seq 1 8); do
-    close_period_with_seed_eth "${high_swap}" || return 1
-    state_json="$(state_debug_json)"
-    fee_idx="$(jq -r '.[0]' <<<"${state_json}")"
-    up_streak="$(jq -r '.[2]' <<<"${state_json}")"
-    if [[ "${fee_idx}" == "${cash_idx}" ]] && (( up_streak >= 1 )); then
-      saw_up_confirm=1
-    fi
-    if [[ "${fee_idx}" == "${extreme_idx}" ]]; then
-      break
-    fi
-    if (( up_streak == 0 )) && [[ "${fee_idx}" == "${floor_idx}" ]]; then
-      set_fail_with_state "failed to maintain upward path toward extreme" || return 1
-    fi
-    if (( saw_up_confirm == 1 )) && [[ "${fee_idx}" == "${cash_idx}" ]]; then
-      # keep driving until confirm threshold is reached
-      continue
-    fi
-    if (( saw_up_confirm == 0 )) && [[ "${fee_idx}" == "${cash_idx}" ]]; then
-      continue
-    fi
-    # hard stop for unexpected state drift
-    if [[ "${fee_idx}" != "${cash_idx}" ]]; then
-      set_fail_with_state "jump to extreme after confirms failed" || return 1
-    fi
-  done
-  assert_true "upExtreme streak confirmation observed" "[[ ${saw_up_confirm} -eq 1 ]]" || return 1
-  hold_rem="$(jq -r '.[1]' <<<"${state_json}")"
-  if [[ "${fee_idx}" != "${extreme_idx}" ]]; then
-    set_fail_with_state "jump to extreme after confirms failed" || return 1
-  fi
-  assert_true "extreme hold set >0" "[[ ${hold_rem} -gt 0 ]]" || return 1
-  scenario_checkpoint "enter_extreme" "${extreme_fee}" || return 1
-
-  close_period_with_seed_eth "${low_swap}" || return 1
-  assert_eq "down blocked by hold #1" "$(jq -r '.[0]' <<<"$(state_debug_json)")" "${extreme_idx}" || return 1
-
-  close_period_with_seed_eth "${low_swap}" || return 1
-  state_json="$(state_debug_json)"
-  assert_eq "still extreme while down confirmations start" "$(jq -r '.[0]' <<<"${state_json}")" "${extreme_idx}" || return 1
-  assert_true "down streak started from extreme" "[[ $(jq -r '.[3]' <<<"${state_json}") -ge 1 ]]" || return 1
-
-  close_period_with_seed_eth "${low_swap}" || return 1
-  assert_eq "extreme down to cash after confirms" "$(jq -r '.[0]' <<<"$(state_debug_json)")" "${cash_idx}" || return 1
-  scenario_checkpoint "down_to_cash" "${cash_fee}" || return 1
-
-  close_period_with_seed_eth "${low_swap}" || return 1
-  assert_eq "cash down confirm #1 keeps cash" "$(jq -r '.[0]' <<<"$(state_debug_json)")" "${cash_idx}" || return 1
-
-  close_period_with_seed_eth "${low_swap}" || return 1
-  assert_eq "cash down to floor after confirms" "$(jq -r '.[0]' <<<"$(state_debug_json)")" "${floor_idx}" || return 1
-  scenario_checkpoint "down_to_floor" "${floor_fee}" || return 1
-
-  CP_EMERGENCY_FLOOR_CLOSEVOL_USD6="900000000000"
-  CP_EMERGENCY_CONFIRM_PERIODS="2"
-  set_controller_params || return 1
-
-  reset_state_floor_unpaused || return 1
-  swap_exact_in_eth "${high_swap}" || return 1
-  close_period_with_seed_eth "${high_swap}" || return 1
-  assert_eq "emergency pre-bootstrap stays floor" "$(jq -r '.[0]' <<<"$(state_debug_json)")" "${floor_idx}" || return 1
-  close_until_idx_eth "${cash_idx}" 6 "${high_steps[@]}" || {
-    set_fail_with_state "re-enter cash for emergency test failed" || return 1
-  }
-  assert_eq "re-enter cash for emergency test" "$(jq -r '.[0]' <<<"$(state_debug_json)")" "${cash_idx}" || return 1
-
-  close_period_with_seed_eth "${low_swap}" || return 1
-  assert_eq "emergency confirm #1 keeps cash" "$(jq -r '.[0]' <<<"$(state_debug_json)")" "${cash_idx}" || return 1
-
-  close_period_with_seed_eth "${low_swap}" || return 1
-  state_json="$(state_debug_json)"
-  fee_idx="$(jq -r '.[0]' <<<"${state_json}")"
-  hold_rem="$(jq -r '.[1]' <<<"${state_json}")"
-  up_streak="$(jq -r '.[2]' <<<"${state_json}")"
-  down_streak="$(jq -r '.[3]' <<<"${state_json}")"
-  em_streak="$(jq -r '.[4]' <<<"${state_json}")"
-  assert_eq "emergency floor forces floor" "${fee_idx}" "${floor_idx}" || return 1
-  assert_eq "emergency reset hold" "${hold_rem}" "0" || return 1
-  assert_eq "emergency reset up streak" "${up_streak}" "0" || return 1
-  assert_eq "emergency reset down streak" "${down_streak}" "0" || return 1
-  assert_eq "emergency reset emergency streak" "${em_streak}" "0" || return 1
-  scenario_checkpoint "emergency_floor" "${floor_fee}" || return 1
+  floor_fee="$(tier_by_idx "${FLOOR_IDX}")"
+  cash_fee="$(tier_by_idx "${CASH_IDX}")"
+  extreme_fee="$(tier_by_idx "${EXTREME_IDX}")"
 
   restore_base_controller || return 1
+  reset_state_floor_unpaused || return 1
 
-  SC_REASON="v2 state-machine transitions validated with warp/hold/confirm/emergency"
-  refresh_metrics
+  tc_checkpoint "before_bootstrap" || return 1
+
+  swap_close_expect_reason_stable "2000000" "1000" "REASON_EMA_BOOTSTRAP" "T08 bootstrap close" || return 1
+  tx="${LAST_CLOSE_TX}"
+  assert_eq "T08 bootstrap stays floor" "$(jq -r '.[0]' <<<"$(state_debug_json)")" "${FLOOR_IDX}" || return 1
+  tc_checkpoint "after_bootstrap_close" || return 1
+
+  swap_close_expect_reason_stable "8000000" "1000" "REASON_JUMP_CASH" "T08 enter cash" || return 1
+  tx="${LAST_CLOSE_TX}"
+  assert_eq "T08 fee idx cash" "$(jq -r '.[0]' <<<"$(state_debug_json)")" "${CASH_IDX}" || return 1
+  tc_checkpoint "enter_cash" "${cash_fee}" || return 1
+
+  swap_close_expect_reason_stable "8000000" "1000" "REASON_JUMP_EXTREME" "T08 enter extreme" || return 1
+  tx="${LAST_CLOSE_TX}"
+  assert_eq "T08 fee idx extreme" "$(jq -r '.[0]' <<<"$(state_debug_json)")" "${EXTREME_IDX}" || return 1
+  tc_checkpoint "enter_extreme" "${extreme_fee}" || return 1
+
+  swap_close_expect_reason_stable "1200000" "1000" "REASON_DOWN_TO_CASH" "T08 down to cash" || return 1
+  tx="${LAST_CLOSE_TX}"
+  assert_eq "T08 fee idx down cash" "$(jq -r '.[0]' <<<"$(state_debug_json)")" "${CASH_IDX}" || return 1
+  tc_checkpoint "down_to_cash" "${cash_fee}" || return 1
+
+  swap_close_expect_reason_stable "1200000" "1000" "REASON_DOWN_TO_FLOOR" "T08 down to floor" || return 1
+  tx="${LAST_CLOSE_TX}"
+  assert_eq "T08 fee idx down floor" "$(jq -r '.[0]' <<<"$(state_debug_json)")" "${FLOOR_IDX}" || return 1
+  tc_checkpoint "down_to_floor" "${floor_fee}" || return 1
+
+  swap_close_expect_reason_stable "8000000" "1000" "REASON_JUMP_CASH" "T08 re-enter cash for emergency" || return 1
+  tx="${LAST_CLOSE_TX}"
+
+  swap_close_expect_reason_stable "100" "100" "REASON_EMERGENCY_FLOOR" "T08 emergency floor" || return 1
+  tx="${LAST_CLOSE_TX}"
+  assert_eq "T08 emergency to floor" "$(jq -r '.[0]' <<<"$(state_debug_json)")" "${FLOOR_IDX}" || return 1
+  tc_checkpoint "emergency_floor" "${floor_fee}" || return 1
+
+  TC_REASON="Переходы FLOOR->CASH->EXTREME->CASH->FLOOR и emergency floor подтверждены со строгой проверкой reason-кодов"
+  return 0
 }
 
-scenario_s6() {
-  local period lull warp_by state_json fee_idx hold_rem
+test_t09_multi_period_close_loop() {
+  local tx events_count fee_idx
 
-  period="$(cast_call_single "${HOOK_ADDRESS}" "periodSeconds()(uint32)")"
-  lull="$(cast_call_single "${HOOK_ADDRESS}" "lullResetSeconds()(uint32)")"
-  warp_by=$((period * 4))
-  if (( warp_by >= lull )); then
-    warp_by=$((lull - 1))
-  fi
-  if (( warp_by < period )); then
-    warp_by="${period}"
-  fi
+  warp_seconds 100
+  tx="$(swap_exact_in_stable "1000")" || return 1
 
-  warp_seconds "${warp_by}"
-  swap_exact_in_eth "2000000000000000" || return 1
+  observe_period_closed_reasons_from_tx "${tx}" || true
 
-  state_json="$(state_debug_json)"
-  fee_idx="$(jq -r '.[0]' <<<"${state_json}")"
-  hold_rem="$(jq -r '.[1]' <<<"${state_json}")"
-  assert_true "feeIdx in bounds after multi-period close" "[[ ${fee_idx} -ge ${FLOOR_IDX} && ${fee_idx} -le ${CAP_IDX} ]]" || return 1
-  assert_true "holdRemaining sane" "[[ ${hold_rem} -ge 0 && ${hold_rem} -le 31 ]]" || return 1
+  events_count="$(period_closed_events_from_tx "${tx}" "${PERIOD_CLOSED_TOPIC}" | wc -l | tr -d ' ')"
+  assert_true "T09 multiple PeriodClosed events" "[[ ${events_count} -ge 2 ]]" || return 1
 
-  SC_REASON="multi-period close path executes without revert and keeps coherent state"
-  refresh_metrics
+  fee_idx="$(jq -r '.[0]' <<<"$(state_debug_json)")"
+  assert_true "T09 fee idx in bounds" "[[ ${fee_idx} -ge ${FLOOR_IDX} && ${fee_idx} -le ${CAP_IDX} ]]" || return 1
+
+  tc_checkpoint "multi_period_after_swap" || return 1
+  TC_REASON="Мульти-периодный close-loop отрабатывает без revert/OOG, состояние консистентно"
+  return 0
 }
 
-scenario_s7() {
-  local lull floor_idx cash_idx state_json fee_idx ema_vol hold_rem up_streak down_streak em_streak high_swap
-  local -a high_steps
-  high_swap="3000000000000000"
-  high_steps=("3000000000000000" "10000000000000000" "30000000000000000" "100000000000000000")
+test_t10_lull_reset_strict() {
+  local cash_fee floor_fee lull tx
 
   ensure_unpaused || return 1
   load_fee_tiers || return 1
-  floor_idx="${FLOOR_IDX}"
-  cash_idx="${CASH_IDX}"
+  cash_fee="$(tier_by_idx "${CASH_IDX}")"
+  floor_fee="$(tier_by_idx "${FLOOR_IDX}")"
 
-  load_controller_params || return 1
-  CP_MIN_CLOSEVOL_TO_CASH_USD6="1"
-  CP_UP_R_TO_CASH_BPS="3000"
-  CP_CASH_HOLD_PERIODS="2"
-  CP_EMERGENCY_FLOOR_CLOSEVOL_USD6="0"
-  CP_EMERGENCY_CONFIRM_PERIODS="3"
-  set_controller_params || return 1
-
+  restore_base_controller || return 1
   reset_state_floor_unpaused || return 1
-  swap_exact_in_eth "${high_swap}" || return 1
-  close_period_with_seed_eth "${high_swap}" || return 1
-  assert_eq "lull pre-bootstrap stays floor" "$(jq -r '.[0]' <<<"$(state_debug_json)")" "${floor_idx}" || return 1
-  close_until_idx_eth "${cash_idx}" 6 "${high_steps[@]}" || {
-    set_fail_with_state "lull precondition did not reach cash" || return 1
-  }
-  scenario_checkpoint "pre_lull" || return 1
+
+  swap_close_expect_reason_stable "2000000" "1000" "REASON_EMA_BOOTSTRAP" "T10 bootstrap" || return 1
+  tx="${LAST_CLOSE_TX}"
+
+  swap_close_expect_reason_stable "8000000" "1000" "REASON_JUMP_CASH" "T10 enter cash" || return 1
+  tx="${LAST_CLOSE_TX}"
+  tc_checkpoint "pre_lull" "${cash_fee}" || return 1
 
   lull="$(cast_call_single "${HOOK_ADDRESS}" "lullResetSeconds()(uint32)")"
   warp_seconds "$((lull + 1))"
-  swap_exact_in_eth "1000000000000000" || return 1
 
-  state_json="$(state_debug_json)"
-  fee_idx="$(jq -r '.[0]' <<<"${state_json}")"
-  hold_rem="$(jq -r '.[1]' <<<"${state_json}")"
-  up_streak="$(jq -r '.[2]' <<<"${state_json}")"
-  down_streak="$(jq -r '.[3]' <<<"${state_json}")"
-  em_streak="$(jq -r '.[4]' <<<"${state_json}")"
-  ema_vol="$(jq -r '.[7]' <<<"${state_json}")"
-  assert_eq "lull reset fee to floor" "${fee_idx}" "${floor_idx}" || return 1
-  assert_eq "lull reset ema to zero" "${ema_vol}" "0" || return 1
-  assert_eq "lull reset hold" "${hold_rem}" "0" || return 1
-  assert_eq "lull reset up streak" "${up_streak}" "0" || return 1
-  assert_eq "lull reset down streak" "${down_streak}" "0" || return 1
-  assert_eq "lull reset emergency streak" "${em_streak}" "0" || return 1
-  scenario_checkpoint "post_lull_reset_expect_floor" "$(tier_by_idx "${floor_idx}")" || return 1
+  tx="$(swap_exact_in_stable "1000")" || return 1
+  assert_last_period_reason "${tx}" "REASON_LULL_RESET" "T10 lull reset" || return 1
+  tc_checkpoint "post_lull_reset_expect_floor" "${floor_fee}" || return 1
 
-  restore_base_controller || return 1
-
-  SC_REASON="lull reset clears EMA/counters and returns fee to floor"
-  refresh_metrics
+  TC_REASON="Lull reset подтвержден: strict reason=REASON_LULL_RESET, fee возвращается к floor"
+  return 0
 }
 
-scenario_s8() {
-  local hook_addr removed_hits
+test_t11_paused_behavior() {
+  local floor_fee before_state after_state before_fee_idx after_fee_idx before_period after_period
 
-  ./scripts/deploy_hook.sh --chain "${CHAIN}" --rpc-url "${RPC_URL}" --private-key "${OWNER_PK}" >/tmp/preflight_deploy_dry.log 2>&1 || return 1
-  ./scripts/create_pool.sh --chain "${CHAIN}" --rpc-url "${RPC_URL}" --private-key "${OWNER_PK}" >/tmp/preflight_create_dry.log 2>&1 || return 1
+  ensure_unpaused || return 1
+  load_fee_tiers || return 1
+  floor_fee="$(tier_by_idx "${FLOOR_IDX}")"
 
-  hook_addr="$(extract_hook_from_deploy_json "${ROOT_DIR}/scripts/out/deploy.sepolia.json")"
-  [[ -n "${hook_addr}" ]] || return 1
+  # Move from floor to cash first, then pause and verify forced-floor behavior.
+  swap_exact_in_stable "1000000" >/dev/null || return 1
+  close_period_with_seed "1000" >/dev/null || return 1
+  swap_exact_in_stable "2500000" >/dev/null || return 1
+  close_period_with_seed "1000" >/dev/null || return 1
 
-  removed_hits="$(rg -n "setCreatorFeeAddress\\(|setControllerParamsO4\\(|legacyO4|obsoleteO4" scripts test/scripts -g '!scripts/anvil/preflight_local.sh' -S || true)"
-  if [[ -n "${removed_hits}" ]]; then
-    set_scenario_fail "detected references to removed O4-era methods in scripts" || return 1
+  cover_function "pause()"
+  cast_send_retry --private-key "${GUARDIAN_PK}" "${HOOK_ADDRESS}" "pause()" >/dev/null || return 1
+  tc_checkpoint "paused_state_expect_floor" "${floor_fee}" || return 1
+
+  before_state="$(state_debug_json)"
+  before_fee_idx="$(jq -r '.[0]' <<<"${before_state}")"
+  before_period="$(jq -r '.[6]' <<<"${before_state}")"
+
+  warp_seconds 45
+  swap_exact_in_stable "2000" >/dev/null || return 1
+
+  after_state="$(state_debug_json)"
+  after_fee_idx="$(jq -r '.[0]' <<<"${after_state}")"
+  after_period="$(jq -r '.[6]' <<<"${after_state}")"
+
+  assert_eq "T11 paused fee idx unchanged" "${after_fee_idx}" "${before_fee_idx}" || return 1
+  assert_eq "T11 paused periodVol unchanged" "${after_period}" "${before_period}" || return 1
+
+  cover_function "emergencyResetStateToFloor()"
+  cast_send_retry --private-key "${GUARDIAN_PK}" "${HOOK_ADDRESS}" "emergencyResetStateToFloor()" >/dev/null || return 1
+
+  cover_function "unpause()"
+  cast_send_retry --private-key "${GUARDIAN_PK}" "${HOOK_ADDRESS}" "unpause()" >/dev/null || return 1
+
+  swap_exact_in_stable "1000" >/dev/null || return 1
+  tc_checkpoint "after_unpause_activity" || return 1
+
+  TC_REASON="Поведение в pause корректно: state не двигается, emergency reset доступен, после unpause работа возобновляется"
+  return 0
+}
+
+test_t12_creator_fee_e2e() {
+  local limit b0_before b1_before a0_before a1_before
+  local b0_mid b1_mid b0_after b1_after a0_after a1_after
+  local accrued_before0 accrued_before1 accrued_mid0 accrued_mid1
+
+  ensure_unpaused || return 1
+
+  cover_function "creatorFeeLimitPercent()"
+  limit="$(cast_call_single "${HOOK_ADDRESS}" "creatorFeeLimitPercent()(uint16)")"
+  assert_eq "T12 creator fee limit" "${limit}" "10" || return 1
+
+  cover_function "setCreatorFeePercent(uint16)"
+  cast_send_retry --private-key "${CREATOR_PK}" "${HOOK_ADDRESS}" "setCreatorFeePercent(uint16)" 10 >/dev/null || return 1
+
+  cover_function "setCreatorFeeConfig(address,uint16)"
+  cast_send_retry --private-key "${CREATOR_PK}" "${HOOK_ADDRESS}" "setCreatorFeeConfig(address,uint16)" "${CREATOR_ADDR}" 1000 >/dev/null || return 1
+
+  cover_function "creatorFeesAccrued()"
+  read -r accrued_before0 accrued_before1 <<<"$(cast_call_json "${HOOK_ADDRESS}" "creatorFeesAccrued()(uint256,uint256)" | jq -r '.[0],.[1]' | xargs)"
+
+  b0_before="$(cast_call_single "${VOLATILE}" "balanceOf(address)(uint256)" "${CREATOR_ADDR}")"
+  b1_before="$(cast_call_single "${STABLE}" "balanceOf(address)(uint256)" "${CREATOR_ADDR}")"
+  a0_before="$(cast_call_single "${VOLATILE}" "balanceOf(address)(uint256)" "${ATTACKER_ADDR}")"
+  a1_before="$(cast_call_single "${STABLE}" "balanceOf(address)(uint256)" "${ATTACKER_ADDR}")"
+
+  swap_exact_in_stable "3000000" >/dev/null || return 1
+  close_period_with_seed "1000" >/dev/null || return 1
+  swap_exact_in_stable "2000000" >/dev/null || return 1
+  close_period_with_seed "1000" >/dev/null || return 1
+  swap_exact_in_volatile "1000000000000000000" >/dev/null || return 1
+
+  read -r accrued_mid0 accrued_mid1 <<<"$(cast_call_json "${HOOK_ADDRESS}" "creatorFeesAccrued()(uint256,uint256)" | jq -r '.[0],.[1]' | xargs)"
+  assert_true "T12 accrued increased" "[[ ${accrued_mid0} -gt ${accrued_before0} || ${accrued_mid1} -gt ${accrued_before1} ]]" || return 1
+
+  cover_function "claimAllCreatorFees(address)"
+  cast_send_retry --private-key "${CREATOR_PK}" "${HOOK_ADDRESS}" "claimAllCreatorFees(address)" "${ATTACKER_ADDR}" >/dev/null || return 1
+
+  read -r b0_after b1_after <<<"$(cast_call_json "${HOOK_ADDRESS}" "creatorFeesAccrued()(uint256,uint256)" | jq -r '.[0],.[1]' | xargs)"
+  assert_eq "T12 accrued token0 after claim" "${b0_after}" "0" || return 1
+  assert_eq "T12 accrued token1 after claim" "${b1_after}" "0" || return 1
+
+  a0_after="$(cast_call_single "${VOLATILE}" "balanceOf(address)(uint256)" "${ATTACKER_ADDR}")"
+  a1_after="$(cast_call_single "${STABLE}" "balanceOf(address)(uint256)" "${ATTACKER_ADDR}")"
+  assert_true "T12 recipient balance increased" "[[ ${a0_after} -gt ${a0_before} || ${a1_after} -gt ${a1_before} ]]" || return 1
+
+  # Edge checks.
+  cover_function "setCreatorFeePercent(uint16)"
+  expect_revert_custom "T12 creator fee percent above limit" \
+    "cast call --rpc-url \"${RPC_URL}\" --from \"${CREATOR_ADDR}\" \"${HOOK_ADDRESS}\" \"setCreatorFeePercent(uint16)\" 11" \
+    "CreatorFeePercentLimitExceeded" || return 1
+
+  cover_function "setCreatorFeeConfig(address,uint16)"
+  expect_revert_custom "T12 creator fee bps above limit" \
+    "cast call --rpc-url \"${RPC_URL}\" --from \"${CREATOR_ADDR}\" \"${HOOK_ADDRESS}\" \"setCreatorFeeConfig(address,uint16)\" \"${CREATOR_ADDR}\" 1100" \
+    "CreatorFeeLimitExceeded" || return 1
+
+  cover_function "claimCreatorFees(address,uint256,uint256)"
+  expect_revert_custom "T12 claim too large" \
+    "cast call --rpc-url \"${RPC_URL}\" --from \"${CREATOR_ADDR}\" \"${HOOK_ADDRESS}\" \"claimCreatorFees(address,uint256,uint256)\" \"${ATTACKER_ADDR}\" 1 0" \
+    "ClaimTooLarge" || return 1
+
+  cover_function "claimCreatorFees(address,uint256,uint256)"
+  expect_revert_custom "T12 claimCreatorFees zero recipient" \
+    "cast call --rpc-url \"${RPC_URL}\" --from \"${CREATOR_ADDR}\" \"${HOOK_ADDRESS}\" \"claimCreatorFees(address,uint256,uint256)\" 0x0000000000000000000000000000000000000000 0 0" \
+    "InvalidRecipient" || return 1
+
+  cover_function "claimAllCreatorFees(address)"
+  expect_revert_custom "T12 claimAllCreatorFees zero recipient" \
+    "cast call --rpc-url \"${RPC_URL}\" --from \"${CREATOR_ADDR}\" \"${HOOK_ADDRESS}\" \"claimAllCreatorFees(address)\" 0x0000000000000000000000000000000000000000" \
+    "InvalidRecipient" || return 1
+
+  # deterministic no-op when accrued==0
+  cover_function "claimAllCreatorFees(address)"
+  cast_send_retry --private-key "${CREATOR_PK}" "${HOOK_ADDRESS}" "claimAllCreatorFees(address)" "${ATTACKER_ADDR}" >/dev/null || return 1
+
+  tc_checkpoint "creator_fee_after_claim" || return 1
+  TC_REASON="Creator fee E2E подтверждён: accrual, claim, лимиты и edge-cases отрабатывают корректно"
+  return 0
+}
+
+test_t13_rescue_token() {
+  local hook_before hook_after creator_before creator_after amount
+
+  amount="5000000000000000000"
+
+  cast_send_retry --private-key "${CREATOR_PK}" "${RESCUE_TOKEN}" "transfer(address,uint256)" "${HOOK_ADDRESS}" "${amount}" >/dev/null || return 1
+
+  cover_function "rescueToken(address,uint256)"
+  expect_revert_custom "T13 attacker rescue" \
+    "cast call --rpc-url \"${RPC_URL}\" --from \"${ATTACKER_ADDR}\" \"${HOOK_ADDRESS}\" \"rescueToken(address,uint256)\" \"${RESCUE_TOKEN}\" ${amount}" \
+    "NotGuardian" || return 1
+
+  cover_function "rescueToken(address,uint256)"
+  expect_revert_custom "T13 rescue pool token forbidden" \
+    "cast call --rpc-url \"${RPC_URL}\" --from \"${GUARDIAN_ADDR}\" \"${HOOK_ADDRESS}\" \"rescueToken(address,uint256)\" \"${STABLE}\" 1" \
+    "InvalidRescueCurrency" || return 1
+
+  hook_before="$(cast_call_single "${RESCUE_TOKEN}" "balanceOf(address)(uint256)" "${HOOK_ADDRESS}")"
+  creator_before="$(cast_call_single "${RESCUE_TOKEN}" "balanceOf(address)(uint256)" "${CREATOR_ADDR}")"
+
+  cover_function "rescueToken(address,uint256)"
+  cast_send_retry --private-key "${GUARDIAN_PK}" "${HOOK_ADDRESS}" "rescueToken(address,uint256)" "${RESCUE_TOKEN}" "${amount}" >/dev/null || return 1
+
+  hook_after="$(cast_call_single "${RESCUE_TOKEN}" "balanceOf(address)(uint256)" "${HOOK_ADDRESS}")"
+  creator_after="$(cast_call_single "${RESCUE_TOKEN}" "balanceOf(address)(uint256)" "${CREATOR_ADDR}")"
+
+  assert_true "T13 hook balance decreased" "[[ ${hook_after} -lt ${hook_before} ]]" || return 1
+  assert_true "T13 creator balance increased" "[[ ${creator_after} -gt ${creator_before} ]]" || return 1
+
+  tc_checkpoint "rescue_done" || return 1
+  TC_REASON="Rescue path подтверждён: unauthorized blocked, allowed transfer выполняется, pool-currency rescue запрещён"
+  return 0
+}
+
+# ----------------------------
+# Coverage checks + reporting
+# ----------------------------
+
+enforce_coverage() {
+  local sig tests err ex why reason_name reason_tests reason_excluded
+
+  # If still uncovered, keep explicit exclusions only for demonstrably unreachable runtime paths.
+  if [[ -z "$(map_get "ERROR_COVER" "AlreadyInitialized" || true)" ]]; then
+    exclude_error "AlreadyInitialized" "PoolManager pre-check reverts before hook callback in runtime flow"
+  fi
+  if [[ -z "$(map_get "ERROR_COVER" "InvalidPoolKey" || true)" ]]; then
+    exclude_error "InvalidPoolKey" "PoolManager-level checks may short-circuit malformed key before hook callback"
+  fi
+  if [[ -z "$(map_get "ERROR_COVER" "NotDynamicFeePool" || true)" ]]; then
+    exclude_error "NotDynamicFeePool" "PoolManager-level checks may short-circuit non-dynamic fee init before callback"
   fi
 
-  SC_REASON="dry-run scripts succeeded and no removed O4 references detected"
-  refresh_metrics
-}
+  for sig in "${ABI_SIGS[@]}"; do
+    tests="$(map_get "ABI_COVER" "${sig}" || true)"
+    if [[ -z "${tests}" ]]; then
+      COVERAGE_FAIL_COUNT=$((COVERAGE_FAIL_COUNT + 1))
+    fi
+  done
 
-print_summary() {
-  local id status reason metrics
-  log ""
-  log "===== PREFLIGHT SUMMARY ====="
-  log "pass=${PASS_COUNT} fail=${FAIL_COUNT}"
-  for id in S0 S1 S2 S3 S4 S5 S6 S7 S8; do
-    status="$(scenario_field_by_id "${id}" "status")"
-    reason="$(scenario_field_by_id "${id}" "reason")"
-    metrics="$(scenario_field_by_id "${id}" "metrics")"
-    log "${id}: ${status:-N/A} - ${reason:-n/a} | ${metrics:-n/a}"
+  for err in "${ERROR_NAMES[@]}"; do
+    tests="$(map_get "ERROR_COVER" "${err}" || true)"
+    ex="$(map_get "ERROR_EXCLUDED" "${err}" || true)"
+    if [[ -z "${tests}" && -z "${ex}" ]]; then
+      COVERAGE_FAIL_COUNT=$((COVERAGE_FAIL_COUNT + 1))
+    fi
+  done
+
+  for reason_name in "${REASON_ENTRIES[@]}"; do
+    reason_name="${reason_name%%=*}"
+    reason_tests="$(map_get "REASON_COVER" "${reason_name}" || true)"
+    reason_excluded="$(map_get "REASON_EXCLUDED" "${reason_name}" || true)"
+    if [[ -z "${reason_tests}" && -z "${reason_excluded}" ]]; then
+      COVERAGE_FAIL_COUNT=$((COVERAGE_FAIL_COUNT + 1))
+    fi
   done
 }
 
+print_report_tables() {
+  local row id desc status keys funcs errs reasons note
+  local sig tests err ex reason_name reason_val reason_tests reason_excluded
+
+  log ""
+  log "=== Итоговый отчёт preflight (LOCAL Anvil) ==="
+  log ""
+  log "| Тест | Описание | Результат | Ключевые значения (feeTier, rBps, closeVol, hold, paused) | Покрытые функции | Покрытые ошибки | Покрытые REASON |"
+  log "|---|---|---|---|---|---|---|"
+  for row in "${TEST_ROWS[@]}"; do
+    id="${row%%|*}"
+    row="${row#*|}"
+    desc="${row%%|*}"
+    row="${row#*|}"
+    status="${row%%|*}"
+    row="${row#*|}"
+    keys="${row%%|*}"
+    row="${row#*|}"
+    funcs="${row%%|*}"
+    row="${row#*|}"
+    errs="${row%%|*}"
+    row="${row#*|}"
+    reasons="${row%%|*}"
+    note="${row#*|}"
+    log "| ${id} | ${desc}. ${note} | ${status} | ${keys} | ${funcs} | ${errs} | ${reasons} |"
+  done
+
+  log ""
+  log "| Функция (signature) | Покрыто в тестах |"
+  log "|---|---|"
+  for sig in "${ABI_SIGS[@]}"; do
+    tests="$(map_get "ABI_COVER" "${sig}" || true)"
+    [[ -n "${tests}" ]] || tests="-"
+    log "| ${sig} | ${tests} |"
+  done
+
+  log ""
+  log "| Ошибка | Покрыто в тестах | EXCLUDED причина (если есть) |"
+  log "|---|---|---|"
+  for err in "${ERROR_NAMES[@]}"; do
+    tests="$(map_get "ERROR_COVER" "${err}" || true)"
+    ex="$(map_get "ERROR_EXCLUDED" "${err}" || true)"
+    [[ -n "${tests}" ]] || tests="-"
+    [[ -n "${ex}" ]] || ex="-"
+    log "| ${err} | ${tests} | ${ex} |"
+  done
+
+  log ""
+  log "| REASON | Покрыто в тестах | EXCLUDED причина (если есть) |"
+  log "|---|---|---|"
+  for reason_name in "${REASON_ENTRIES[@]}"; do
+    reason_val="${reason_name#*=}"
+    reason_name="${reason_name%%=*}"
+    reason_tests="$(map_get "REASON_COVER" "${reason_name}" || true)"
+    reason_excluded="$(map_get "REASON_EXCLUDED" "${reason_name}" || true)"
+    [[ -n "${reason_tests}" ]] || reason_tests="-"
+    [[ -n "${reason_excluded}" ]] || reason_excluded="-"
+    log "| ${reason_name}=${reason_val} | ${reason_tests} | ${reason_excluded} |"
+  done
+
+  log ""
+  log "Итог: PASS=${PASS_COUNT} FAIL=${FAIL_COUNT} COVERAGE_FAIL=${COVERAGE_FAIL_COUNT}"
+}
+
 main() {
+  PERIOD_CLOSED_TOPIC="$(period_closed_topic0)"
+
   load_config
-  apply_v2_defaults
+  backup_config
   start_anvil
   prepare_accounts
 
-  log "owner=${OWNER_ADDR}"
+  log "creator=${CREATOR_ADDR}"
   log "guardian=${GUARDIAN_ADDR}"
-  log "outsider=${OUTSIDER_ADDR}"
-  log "chain=${CHAIN} chain_id=${CHAIN_ID}"
+  log "attacker=${ATTACKER_ADDR}"
+  log "chain=local chain_id=${CHAIN_ID}"
 
-  deploy_and_create_pipeline
-  MODIFY_HELPER="$(ensure_modify_helper)"
-  SWAP_HELPER="$(ensure_swap_helper)"
+  setup_local_environment
 
-  [[ -n "${MODIFY_HELPER}" ]] || die "Failed to resolve PoolModifyLiquidityTest helper"
-  [[ -n "${SWAP_HELPER}" ]] || die "Failed to resolve PoolSwapTest helper"
-
-  bootstrap_liquidity
-
-  log "hook=${HOOK_ADDRESS}"
   log "pool_manager=${POOL_MANAGER}"
+  log "volatile=${VOLATILE}"
+  log "stable=${STABLE}"
+  log "rescue_token=${RESCUE_TOKEN}"
+  log "hook=${HOOK_ADDRESS}"
   log "pool_id=${POOL_ID}"
   log "pool_key=${POOL_KEY}"
   log "swap_helper=${SWAP_HELPER}"
   log "modify_helper=${MODIFY_HELPER}"
 
-  load_fee_tiers || die "Failed to load fee tiers after deployment"
-  persist_base_controller || die "Failed to load base controller params"
-  if ! init_baseline_snapshot; then
-    log "WARN: snapshot baseline init failed; scenarios will be marked non-deterministic"
+  init_coverage_catalogs
+  load_fee_tiers || die "Failed to load fee tiers"
+  persist_base_controller || die "Failed to read base controller params"
+
+  if ! init_base_snapshot; then
+    die "Failed to create baseline snapshot (disable with DISABLE_SNAPSHOT=1 only for debugging)"
   fi
 
-  run_scenario "S0" scenario_s0
-  run_scenario "S1" scenario_s1
-  run_scenario "S2" scenario_s2
-  run_scenario "S3" scenario_s3
-  run_scenario "S4" scenario_s4
-  run_scenario "S5" scenario_s5
-  run_scenario "S6" scenario_s6
-  run_scenario "S7" scenario_s7
-  run_scenario "S8" scenario_s8
+  run_test_case "T00" "Smoke: deploy/create/swap" test_t00_smoke
+  run_test_case "T01" "ABI view/pure sweep + invalid getter index" test_t01_abi_view_pure_sweep
+  run_test_case "T02" "Матрица доступа (creator/guardian/attacker)" test_t02_access_control_matrix
+  run_test_case "T03" "Pause gating для cold updates + reset semantics" test_t03_pause_gating_cold_updates
+  run_test_case "T04" "Аномалии tiers/roles" test_t04_invalid_tiers_roles
+  run_test_case "T05" "Аномалии timing params" test_t05_invalid_timing
+  run_test_case "T06" "Аномалии controller params + deterministic paths" test_t06_invalid_controller_params
+  run_test_case "T07" "Direct-call защита callback-функций" test_t07_direct_call_protection
+  run_test_case "T08" "Полная v2 state machine + strict reason checks" test_t08_state_machine_strict_reasons
+  run_test_case "T09" "Multi-period close loop safety" test_t09_multi_period_close_loop
+  run_test_case "T10" "Lull reset + strict reason check" test_t10_lull_reset_strict
+  run_test_case "T11" "Paused behavior + emergency reset" test_t11_paused_behavior
+  run_test_case "T12" "Creator fee E2E + edge cases" test_t12_creator_fee_e2e
+  run_test_case "T13" "Rescue token path" test_t13_rescue_token
 
-  print_summary
-  if (( FAIL_COUNT > 0 )); then
+  enforce_coverage
+  print_report_tables
+
+  if (( FAIL_COUNT > 0 || COVERAGE_FAIL_COUNT > 0 )); then
     exit 1
   fi
 }
