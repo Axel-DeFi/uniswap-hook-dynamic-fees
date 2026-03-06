@@ -982,7 +982,16 @@ setup_local_environment() {
   [[ -n "${HOOK_ADDRESS}" ]] || die "Failed to parse HOOK_ADDRESS from ${deploy_json}"
 
   set_config_value "HOOK_ADDRESS" "${HOOK_ADDRESS}"
-  ensure_hook_runtime_configured || die "Failed to apply hook runtime config on local Anvil"
+  local runtime_cfg_attempt
+  local runtime_cfg_ok=0
+  for runtime_cfg_attempt in 1 2 3; do
+    if ensure_hook_runtime_configured; then
+      runtime_cfg_ok=1
+      break
+    fi
+    sleep 0.8
+  done
+  (( runtime_cfg_ok == 1 )) || die "Failed to apply hook runtime config on local Anvil"
 
   if ! run_create_pool_script; then
     die "create_pool.sh failed; see /tmp/preflight_local_create.log"
