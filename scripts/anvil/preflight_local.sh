@@ -52,7 +52,6 @@ REMAPPING_SOLMATE_ROOT="solmate/=lib/v4-core/lib/solmate/src/"
 MOCK_ERC20_BYTECODE=""
 
 CREATOR_PK="${PRIVATE_KEY}"
-GUARDIAN_PK="0x59c6995e998f97a5a0044966f0945385aace2f59b95f4d9b3e9b6a38f9f6f62b"
 ATTACKER_PK="0x5de4111afa1a4b94908fef3deabf442ba4f8d615f4c6d93ce2d5d4f29e6f5f3f"
 ETH_RICH_WEI="1000000000000000000000"
 
@@ -61,7 +60,6 @@ CONFIG_BACKUP=""
 BASE_SNAPSHOT_ID=""
 
 CREATOR_ADDR=""
-GUARDIAN_ADDR=""
 ATTACKER_ADDR=""
 
 POOL_MANAGER=""
@@ -240,7 +238,7 @@ build_config_runtime_args() {
   CFG_EXTREME_IDX="$(config_tier_index_by_pips "${extreme_pips}" || true)"
   CFG_CAP_IDX="$(config_tier_index_by_pips "${cap_pips}" || true)"
   [[ -n "${CFG_FLOOR_IDX}" && -n "${CFG_CASH_IDX}" && -n "${CFG_EXTREME_IDX}" && -n "${CFG_CAP_IDX}" ]] || return 1
-  if (( CFG_FLOOR_IDX > CFG_CAP_IDX )); then
+  if (( CFG_FLOOR_IDX >= CFG_CASH_IDX || CFG_CASH_IDX >= CFG_EXTREME_IDX || CFG_EXTREME_IDX != CFG_CAP_IDX )); then
     return 1
   fi
 
@@ -572,13 +570,12 @@ init_coverage_catalogs() {
   exclude_reason "REASON_FEE_UP" "legacy v1 reason constant; not emitted by _computeNextFeeIdxV2"
   exclude_reason "REASON_FEE_DOWN" "legacy v1 reason constant; not emitted by _computeNextFeeIdxV2"
   exclude_reason "REASON_REVERSAL_LOCK" "legacy v1 reason constant; not emitted by _computeNextFeeIdxV2"
-  exclude_reason "REASON_CAP" "legacy v1 reason constant; not emitted by _computeNextFeeIdxV2"
   exclude_reason "REASON_FLOOR" "legacy v1 reason constant; not emitted by _computeNextFeeIdxV2"
   exclude_reason "REASON_ZERO_EMA_DECAY" "legacy v1 reason constant; not emitted by _computeNextFeeIdxV2"
-  exclude_reason "REASON_BOOTSTRAP_V2" "constant exists but current v2 implementation emits REASON_EMA_BOOTSTRAP for bootstrap"
 
   # Constructor-only path cannot be reached from mutable runtime admin surface.
   exclude_error "TierNotFound" "constructor-only validation path; deploy script pre-validates tiers"
+  exclude_error "EthTransferFailed" "requires deliberately reverting ETH receiver contract; excluded from preflight runtime scope"
 }
 
 snapshot_enabled() {
@@ -646,7 +643,7 @@ sync_runtime_config() {
   set_config_value "STABLE" "${STABLE}"
   set_config_value "STABLE_DECIMALS" "6"
   set_config_value "TICK_SPACING" "${TICK_SPACING}"
-  set_config_value "GUARDIAN" "${GUARDIAN_ADDR}"
+  set_config_value "CREATOR" "${CREATOR_ADDR}"
   set_config_value "CREATOR_FEE_ADDRESS" "${CREATOR_ADDR}"
   set_config_value "HOOK_ADDRESS" "${HOOK_ADDRESS}"
 }
@@ -687,11 +684,9 @@ start_anvil() {
 
 prepare_accounts() {
   CREATOR_ADDR="$(cast wallet address --private-key "${CREATOR_PK}" | awk '{print $1}')"
-  GUARDIAN_ADDR="$(cast wallet address --private-key "${GUARDIAN_PK}" | awk '{print $1}')"
   ATTACKER_ADDR="$(cast wallet address --private-key "${ATTACKER_PK}" | awk '{print $1}')"
 
   set_eth_balance "${CREATOR_ADDR}" "${ETH_RICH_WEI}"
-  set_eth_balance "${GUARDIAN_ADDR}" "${ETH_RICH_WEI}"
   set_eth_balance "${ATTACKER_ADDR}" "${ETH_RICH_WEI}"
 }
 
@@ -932,9 +927,10 @@ ensure_hook_runtime_configured() {
     "${ctrl_tuple}" >/dev/null || return 1
 
   cast_send_retry --private-key "${CREATOR_PK}" "${HOOK_ADDRESS}" \
-    "setCreatorFeeConfig(address,uint16)" "${creator_fee_address}" "${CFG_CREATOR_FEE_BPS}" >/dev/null || return 1
+    "setCreatorFeeRecipient(address)" "${creator_fee_address}" >/dev/null || return 1
 
-  cast_send_retry --private-key "${CREATOR_PK}" "${HOOK_ADDRESS}" "setGuardian(address)" "${GUARDIAN_ADDR}" >/dev/null || return 1
+  cast_send_retry --private-key "${CREATOR_PK}" "${HOOK_ADDRESS}" \
+    "setCreatorFeeConfig(address,uint16)" "${CREATOR_ADDR}" 0 >/dev/null || return 1
 
   paused_now="$(cast_call_single "${HOOK_ADDRESS}" "isPaused()(bool)" || true)"
   if [[ "${paused_now}" == "true" ]]; then
@@ -974,7 +970,6 @@ setup_local_environment() {
   set_config_value "VOLATILE" "${VOLATILE}"
   set_config_value "STABLE" "${STABLE}"
   set_config_value "STABLE_DECIMALS" "6"
-  set_config_value "GUARDIAN" "${GUARDIAN_ADDR}"
   set_config_value "CREATOR_FEE_ADDRESS" "${CREATOR_ADDR}"
   set_config_value "HOOK_ADDRESS" ""
 
@@ -1124,21 +1119,26 @@ controller_tuple() {
 }
 
 set_controller_params() {
-  local tuple
+  local tuple was_paused
   tuple="$(controller_tuple)"
+  was_paused="$(cast_call_single "${HOOK_ADDRESS}" "isPaused()(bool)" || true)"
+  if [[ "${was_paused}" != "true" ]]; then
+    cover_function "pause()"
+    cast_send_retry --private-key "${CREATOR_PK}" "${HOOK_ADDRESS}" "pause()" >/dev/null || return 1
+  fi
   cover_function "setControllerParams(tuple)"
   cast_send_retry --private-key "${CREATOR_PK}" "${HOOK_ADDRESS}" \
     "setControllerParams((uint64,uint16,uint8,uint64,uint16,uint8,uint8,uint16,uint8,uint16,uint8,uint64,uint8))" \
-    "${tuple}" >/dev/null
+    "${tuple}" >/dev/null || return 1
+  if [[ "${was_paused}" != "true" ]]; then
+    cover_function "unpause()"
+    cast_send_retry --private-key "${CREATOR_PK}" "${HOOK_ADDRESS}" "unpause()" >/dev/null || return 1
+  fi
+  return 0
 }
 
 ensure_unpaused() {
   local paused
-  paused="$(cast_call_single "${HOOK_ADDRESS}" "isPaused()(bool)" || true)"
-  if [[ "${paused}" == "false" ]]; then
-    return 0
-  fi
-  cast_send_retry --private-key "${GUARDIAN_PK}" "${HOOK_ADDRESS}" "unpause()" >/dev/null 2>&1 || true
   paused="$(cast_call_single "${HOOK_ADDRESS}" "isPaused()(bool)" || true)"
   if [[ "${paused}" == "false" ]]; then
     return 0
@@ -1150,9 +1150,9 @@ ensure_unpaused() {
 
 reset_state_floor_unpaused() {
   cover_function "pause()"
-  cast_send_retry --private-key "${GUARDIAN_PK}" "${HOOK_ADDRESS}" "pause()" >/dev/null 2>&1 || true
+  cast_send_retry --private-key "${CREATOR_PK}" "${HOOK_ADDRESS}" "pause()" >/dev/null 2>&1 || true
   cover_function "unpause()"
-  cast_send_retry --private-key "${GUARDIAN_PK}" "${HOOK_ADDRESS}" "unpause()" >/dev/null 2>&1 || true
+  cast_send_retry --private-key "${CREATOR_PK}" "${HOOK_ADDRESS}" "unpause()" >/dev/null 2>&1 || true
   ensure_unpaused
 }
 
@@ -1174,7 +1174,6 @@ swap_exact_in_stable() {
     "${POOL_KEY}" "${params}" "(false,false)" "0x")" || return 1
 
   # Legit hook runtime path via PoolManager.
-  cover_function "beforeSwap(address,tuple,tuple,bytes)"
   cover_function "afterSwap(address,tuple,tuple,int256,bytes)"
 
   printf '%s\n' "${tx}"
@@ -1197,7 +1196,6 @@ swap_exact_in_volatile() {
     "swap((address,address,uint24,int24,address),(bool,int256,uint160),(bool,bool),bytes)(bytes32)" \
     "${POOL_KEY}" "${params}" "(false,false)" "0x")" || return 1
 
-  cover_function "beforeSwap(address,tuple,tuple,bytes)"
   cover_function "afterSwap(address,tuple,tuple,int256,bytes)"
 
   printf '%s\n' "${tx}"
@@ -1583,7 +1581,7 @@ test_t01_abi_view_pure_sweep() {
   done
 
   # NotInitialized coverage on an extra hook instance (deploy-only, no pool init).
-  set_config_value "GUARDIAN" "${ATTACKER_ADDR}"
+  set_config_value "CREATOR" "${ATTACKER_ADDR}"
   set_config_value "CREATOR_FEE_ADDRESS" "${CREATOR_ADDR}"
   set_config_value "HOOK_ADDRESS" ""
   run_deploy_hook_script || return 1
@@ -1641,25 +1639,20 @@ test_t02_access_control_matrix() {
     "cast call --rpc-url \"${RPC_URL}\" --from \"${ATTACKER_ADDR}\" \"${HOOK_ADDRESS}\" \"setCreatorFeeConfig(address,uint16)\" \"${ATTACKER_ADDR}\" 1000" \
     "NotCreator" || return 1
 
-  cover_function "setGuardian(address)"
-  expect_revert_custom "T02 attacker setGuardian" \
-    "cast call --rpc-url \"${RPC_URL}\" --from \"${ATTACKER_ADDR}\" \"${HOOK_ADDRESS}\" \"setGuardian(address)\" \"${ATTACKER_ADDR}\"" \
+  cover_function "setCreatorFeeRecipient(address)"
+  expect_revert_custom "T02 attacker setCreatorFeeRecipient" \
+    "cast call --rpc-url \"${RPC_URL}\" --from \"${ATTACKER_ADDR}\" \"${HOOK_ADDRESS}\" \"setCreatorFeeRecipient(address)\" \"${ATTACKER_ADDR}\"" \
     "NotCreator" || return 1
 
   cover_function "pause()"
   expect_revert_custom "T02 attacker pause" \
     "cast call --rpc-url \"${RPC_URL}\" --from \"${ATTACKER_ADDR}\" \"${HOOK_ADDRESS}\" \"pause()\"" \
-    "NotGuardian" || return 1
+    "NotCreator" || return 1
 
   cover_function "pause()"
-  cast_send_retry --private-key "${GUARDIAN_PK}" "${HOOK_ADDRESS}" "pause()" >/dev/null || return 1
+  cast_send_retry --private-key "${CREATOR_PK}" "${HOOK_ADDRESS}" "pause()" >/dev/null || return 1
   cover_function "unpause()"
-  cast_send_retry --private-key "${GUARDIAN_PK}" "${HOOK_ADDRESS}" "unpause()" >/dev/null || return 1
-
-  cover_function "setCreatorFeePercent(uint16)"
-  expect_revert_custom "T02 guardian setCreatorFeePercent" \
-    "cast call --rpc-url \"${RPC_URL}\" --from \"${GUARDIAN_ADDR}\" \"${HOOK_ADDRESS}\" \"setCreatorFeePercent(uint16)\" 1" \
-    "NotCreator" || return 1
+  cast_send_retry --private-key "${CREATOR_PK}" "${HOOK_ADDRESS}" "unpause()" >/dev/null || return 1
 
   cover_function "pause()"
   cast_send_retry --private-key "${CREATOR_PK}" "${HOOK_ADDRESS}" "pause()" >/dev/null || return 1
@@ -1682,14 +1675,14 @@ test_t02_access_control_matrix() {
   cover_function "setCreatorFeeConfig(address,uint16)"
   cast_send_retry --private-key "${CREATOR_PK}" "${HOOK_ADDRESS}" "setCreatorFeeConfig(address,uint16)" "${CREATOR_ADDR}" 1000 >/dev/null || return 1
 
-  cover_function "setGuardian(address)"
-  cast_send_retry --private-key "${CREATOR_PK}" "${HOOK_ADDRESS}" "setGuardian(address)" "${GUARDIAN_ADDR}" >/dev/null || return 1
+  cover_function "setCreatorFeeRecipient(address)"
+  cast_send_retry --private-key "${CREATOR_PK}" "${HOOK_ADDRESS}" "setCreatorFeeRecipient(address)" "${CREATOR_ADDR}" >/dev/null || return 1
 
   cover_function "unpause()"
   cast_send_retry --private-key "${CREATOR_PK}" "${HOOK_ADDRESS}" "unpause()" >/dev/null || return 1
 
   tc_checkpoint "access_matrix_done" || return 1
-  TC_REASON="Матрица прав подтверждена: attacker заблокирован, guardian ограничен pause-flow, creator управляет сеттерами"
+  TC_REASON="Матрица прав подтверждена: attacker заблокирован, все админ-действия доступны только creator"
   return 0
 }
 
@@ -1715,7 +1708,7 @@ test_t03_pause_gating_cold_updates() {
     "RequiresPaused" || return 1
 
   cover_function "pause()"
-  cast_send_retry --private-key "${GUARDIAN_PK}" "${HOOK_ADDRESS}" "pause()" >/dev/null || return 1
+  cast_send_retry --private-key "${CREATOR_PK}" "${HOOK_ADDRESS}" "pause()" >/dev/null || return 1
   tc_checkpoint "after_pause" || return 1
 
   cover_function "setFeeTiersAndRoles(uint24[],uint8,uint8,uint8,uint8)"
@@ -1746,7 +1739,7 @@ test_t03_pause_gating_cold_updates() {
   tc_checkpoint "after_setFeeTiersAndRoles_expect_reset_floor" "${floor_fee}" || return 1
 
   cover_function "unpause()"
-  cast_send_retry --private-key "${GUARDIAN_PK}" "${HOOK_ADDRESS}" "unpause()" >/dev/null || return 1
+  cast_send_retry --private-key "${CREATOR_PK}" "${HOOK_ADDRESS}" "unpause()" >/dev/null || return 1
 
   cover_function "setTimingParams(uint32,uint8,uint32,uint16)"
   expect_revert_custom "T03 setTimingParams requires paused" \
@@ -1754,7 +1747,7 @@ test_t03_pause_gating_cold_updates() {
     "RequiresPaused" || return 1
 
   cover_function "pause()"
-  cast_send_retry --private-key "${GUARDIAN_PK}" "${HOOK_ADDRESS}" "pause()" >/dev/null || return 1
+  cast_send_retry --private-key "${CREATOR_PK}" "${HOOK_ADDRESS}" "pause()" >/dev/null || return 1
 
   cover_function "setTimingParams(uint32,uint8,uint32,uint16)"
   cast_send_retry --private-key "${CREATOR_PK}" "${HOOK_ADDRESS}" \
@@ -1785,7 +1778,7 @@ test_t03_pause_gating_cold_updates() {
   tc_checkpoint "after_setTimingParams_expect_reset_floor" "${floor_fee}" || return 1
 
   cover_function "unpause()"
-  cast_send_retry --private-key "${GUARDIAN_PK}" "${HOOK_ADDRESS}" "unpause()" >/dev/null || return 1
+  cast_send_retry --private-key "${CREATOR_PK}" "${HOOK_ADDRESS}" "unpause()" >/dev/null || return 1
   tc_checkpoint "after_unpause" || return 1
 
   TC_REASON="Cold-update gating подтвержден: unpaused->revert, paused->success, reset state детерминирован"
@@ -1804,7 +1797,7 @@ test_t04_invalid_tiers_roles() {
   before_cap="${CAP_IDX}"
 
   cover_function "pause()"
-  cast_send_retry --private-key "${GUARDIAN_PK}" "${HOOK_ADDRESS}" "pause()" >/dev/null || return 1
+  cast_send_retry --private-key "${CREATOR_PK}" "${HOOK_ADDRESS}" "pause()" >/dev/null || return 1
 
   cover_function "setFeeTiersAndRoles(uint24[],uint8,uint8,uint8,uint8)"
   expect_revert_custom "T04 non-increasing tiers" \
@@ -1838,7 +1831,7 @@ test_t04_invalid_tiers_roles() {
   assert_eq "T04 capIdx unchanged" "$(cast_call_single "${HOOK_ADDRESS}" "capIdx()(uint8)")" "${before_cap}" || return 1
 
   cover_function "unpause()"
-  cast_send_retry --private-key "${GUARDIAN_PK}" "${HOOK_ADDRESS}" "unpause()" >/dev/null || return 1
+  cast_send_retry --private-key "${CREATOR_PK}" "${HOOK_ADDRESS}" "unpause()" >/dev/null || return 1
 
   tc_checkpoint "tiers_invalid_done" || return 1
   TC_REASON="Некорректные tiers/roles отклоняются, состояние не меняется"
@@ -1854,7 +1847,7 @@ test_t05_invalid_timing() {
   before_deadband="$(cast_call_single "${HOOK_ADDRESS}" "deadbandBps()(uint16)")"
 
   cover_function "pause()"
-  cast_send_retry --private-key "${GUARDIAN_PK}" "${HOOK_ADDRESS}" "pause()" >/dev/null || return 1
+  cast_send_retry --private-key "${CREATOR_PK}" "${HOOK_ADDRESS}" "pause()" >/dev/null || return 1
 
   cover_function "setTimingParams(uint32,uint8,uint32,uint16)"
   expect_revert_custom "T05 period=0" \
@@ -1882,7 +1875,7 @@ test_t05_invalid_timing() {
   assert_eq "T05 deadband unchanged" "$(cast_call_single "${HOOK_ADDRESS}" "deadbandBps()(uint16)")" "${before_deadband}" || return 1
 
   cover_function "unpause()"
-  cast_send_retry --private-key "${GUARDIAN_PK}" "${HOOK_ADDRESS}" "unpause()" >/dev/null || return 1
+  cast_send_retry --private-key "${CREATOR_PK}" "${HOOK_ADDRESS}" "unpause()" >/dev/null || return 1
 
   tc_checkpoint "timing_invalid_done" || return 1
   TC_REASON="Некорректные timing-параметры отклоняются, состояние стабильно"
@@ -1895,6 +1888,8 @@ test_t06_invalid_controller_params() {
 
   load_controller_params || return 1
   original_tuple="$(controller_tuple)"
+  cover_function "pause()"
+  cast_send_retry --private-key "${CREATOR_PK}" "${HOOK_ADDRESS}" "pause()" >/dev/null || return 1
 
   CP_CASH_HOLD_PERIODS="0"
   cover_function "setControllerParams(tuple)"
@@ -1943,13 +1938,13 @@ test_t06_invalid_controller_params() {
   timing_deadband="$(cast_call_single "${HOOK_ADDRESS}" "deadbandBps()(uint16)" || true)"
   timing_period="90"
   cover_function "pause()"
-  cast_send_retry --private-key "${GUARDIAN_PK}" "${HOOK_ADDRESS}" "pause()" >/dev/null || return 1
+  cast_send_retry --private-key "${CREATOR_PK}" "${HOOK_ADDRESS}" "pause()" >/dev/null || return 1
   cover_function "setTimingParams(uint32,uint8,uint32,uint16)"
   cast_send_retry --private-key "${CREATOR_PK}" "${HOOK_ADDRESS}" \
     "setTimingParams(uint32,uint8,uint32,uint16)" \
     "${timing_period}" "${timing_ema}" "${timing_lull}" "${timing_deadband}" >/dev/null || return 1
   cover_function "unpause()"
-  cast_send_retry --private-key "${GUARDIAN_PK}" "${HOOK_ADDRESS}" "unpause()" >/dev/null || return 1
+  cast_send_retry --private-key "${CREATOR_PK}" "${HOOK_ADDRESS}" "unpause()" >/dev/null || return 1
 
   # Deterministic valid update + reason coverage for HOLD and DEADBAND.
   CP_MIN_CLOSEVOL_TO_CASH_USD6="1"
@@ -1977,9 +1972,9 @@ test_t06_invalid_controller_params() {
   swap_close_expect_reason_stable "100" "1000" "REASON_HOLD" "T06 hold reason" || return 1
   tx="${LAST_CLOSE_TX}"
 
-  # Deadband path: keep EMA > 0 and disable jumps with high thresholds.
-  CP_MIN_CLOSEVOL_TO_CASH_USD6="999999999999"
-  CP_UP_R_TO_CASH_BPS="65000"
+  # Deadband path: floor->cash raw threshold is met, but deadband blocks the transition.
+  CP_MIN_CLOSEVOL_TO_CASH_USD6="1"
+  CP_UP_R_TO_CASH_BPS="18000"
   CP_CASH_HOLD_PERIODS="1"
   CP_MIN_CLOSEVOL_TO_EXTREME_USD6="999999999999"
   CP_UP_R_TO_EXTREME_BPS="65000"
@@ -1994,10 +1989,10 @@ test_t06_invalid_controller_params() {
   set_controller_params || return 1
 
   reset_state_floor_unpaused || return 1
-  swap_close_expect_reason_stable "2000000" "1000" "REASON_EMA_BOOTSTRAP" "T06 deadband bootstrap" || return 1
+  swap_close_expect_reason_stable "1000000000" "1000" "REASON_EMA_BOOTSTRAP" "T06 deadband bootstrap" || return 1
   tx="${LAST_CLOSE_TX}"
 
-  swap_close_expect_reason_stable "2000000" "1000" "REASON_DEADBAND" "T06 deadband" || return 1
+  swap_close_expect_reason_stable "2200000000" "1000" "REASON_DEADBAND" "T06 deadband" || return 1
   tx="${LAST_CLOSE_TX}"
 
   # Restore baseline controller params from initial setup.
@@ -2015,6 +2010,12 @@ test_t06_invalid_controller_params() {
   CP_EMERGENCY_FLOOR_CLOSEVOL_USD6="${BASE_CP_EMERGENCY_FLOOR_CLOSEVOL_USD6}"
   CP_EMERGENCY_CONFIRM_PERIODS="${BASE_CP_EMERGENCY_CONFIRM_PERIODS}"
   set_controller_params || return 1
+
+  reset_state_floor_unpaused || return 1
+  swap_close_expect_reason_stable "2000000" "1000" "REASON_EMA_BOOTSTRAP" "T06 no-change bootstrap" || return 1
+  tx="${LAST_CLOSE_TX}"
+  swap_close_expect_reason_stable "2000000" "1000" "REASON_NO_CHANGE" "T06 no-change" || return 1
+  tx="${LAST_CLOSE_TX}"
 
   tc_checkpoint "controller_invalid_done" || return 1
   TC_REASON="Контроллерные аномалии валидированы; покрыты InvalidHold/InvalidConfirm + детерминированные HOLD/DEADBAND"
@@ -2219,7 +2220,7 @@ test_t11_paused_behavior() {
   close_period_with_seed "1000" >/dev/null || return 1
 
   cover_function "pause()"
-  cast_send_retry --private-key "${GUARDIAN_PK}" "${HOOK_ADDRESS}" "pause()" >/dev/null || return 1
+  cast_send_retry --private-key "${CREATOR_PK}" "${HOOK_ADDRESS}" "pause()" >/dev/null || return 1
   tc_checkpoint "paused_state_expect_floor" "${floor_fee}" || return 1
 
   before_state="$(state_debug_json)"
@@ -2237,10 +2238,10 @@ test_t11_paused_behavior() {
   assert_eq "T11 paused periodVol unchanged" "${after_period}" "${before_period}" || return 1
 
   cover_function "emergencyResetStateToFloor()"
-  cast_send_retry --private-key "${GUARDIAN_PK}" "${HOOK_ADDRESS}" "emergencyResetStateToFloor()" >/dev/null || return 1
+  cast_send_retry --private-key "${CREATOR_PK}" "${HOOK_ADDRESS}" "emergencyResetStateToFloor()" >/dev/null || return 1
 
   cover_function "unpause()"
-  cast_send_retry --private-key "${GUARDIAN_PK}" "${HOOK_ADDRESS}" "unpause()" >/dev/null || return 1
+  cast_send_retry --private-key "${CREATOR_PK}" "${HOOK_ADDRESS}" "unpause()" >/dev/null || return 1
 
   swap_exact_in_stable "1000" >/dev/null || return 1
   tc_checkpoint "after_unpause_activity" || return 1
@@ -2250,8 +2251,7 @@ test_t11_paused_behavior() {
 }
 
 test_t12_creator_fee_e2e() {
-  local limit b0_before b1_before a0_before a1_before
-  local b0_mid b1_mid b0_after b1_after a0_after a1_after
+  local limit b0_after b1_after
   local accrued_before0 accrued_before1 accrued_mid0 accrued_mid1
 
   ensure_unpaused || return 1
@@ -2261,18 +2261,13 @@ test_t12_creator_fee_e2e() {
   assert_eq "T12 creator fee limit" "${limit}" "10" || return 1
 
   cover_function "setCreatorFeePercent(uint16)"
-  cast_send_retry --private-key "${CREATOR_PK}" "${HOOK_ADDRESS}" "setCreatorFeePercent(uint16)" 10 >/dev/null || return 1
+  cast_send_retry --private-key "${CREATOR_PK}" "${HOOK_ADDRESS}" "setCreatorFeePercent(uint16)" 0 >/dev/null || return 1
 
   cover_function "setCreatorFeeConfig(address,uint16)"
-  cast_send_retry --private-key "${CREATOR_PK}" "${HOOK_ADDRESS}" "setCreatorFeeConfig(address,uint16)" "${CREATOR_ADDR}" 1000 >/dev/null || return 1
+  cast_send_retry --private-key "${CREATOR_PK}" "${HOOK_ADDRESS}" "setCreatorFeeConfig(address,uint16)" "${CREATOR_ADDR}" 0 >/dev/null || return 1
 
   cover_function "creatorFeesAccrued()"
   read -r accrued_before0 accrued_before1 <<<"$(cast_call_json "${HOOK_ADDRESS}" "creatorFeesAccrued()(uint256,uint256)" | jq -r '.[0],.[1]' | xargs)"
-
-  b0_before="$(cast_call_single "${VOLATILE}" "balanceOf(address)(uint256)" "${CREATOR_ADDR}")"
-  b1_before="$(cast_call_single "${STABLE}" "balanceOf(address)(uint256)" "${CREATOR_ADDR}")"
-  a0_before="$(cast_call_single "${VOLATILE}" "balanceOf(address)(uint256)" "${ATTACKER_ADDR}")"
-  a1_before="$(cast_call_single "${STABLE}" "balanceOf(address)(uint256)" "${ATTACKER_ADDR}")"
 
   swap_exact_in_stable "3000000" >/dev/null || return 1
   close_period_with_seed "1000" >/dev/null || return 1
@@ -2281,20 +2276,27 @@ test_t12_creator_fee_e2e() {
   swap_exact_in_volatile "1000000000000000000" >/dev/null || return 1
 
   read -r accrued_mid0 accrued_mid1 <<<"$(cast_call_json "${HOOK_ADDRESS}" "creatorFeesAccrued()(uint256,uint256)" | jq -r '.[0],.[1]' | xargs)"
-  assert_true "T12 accrued increased" "[[ ${accrued_mid0} -gt ${accrued_before0} || ${accrued_mid1} -gt ${accrued_before1} ]]" || return 1
+  assert_eq "T12 accrued token0 unchanged at zero fee" "${accrued_mid0}" "${accrued_before0}" || return 1
+  assert_eq "T12 accrued token1 unchanged at zero fee" "${accrued_mid1}" "${accrued_before1}" || return 1
 
-  cover_function "claimAllCreatorFees(address)"
-  cast_send_retry --private-key "${CREATOR_PK}" "${HOOK_ADDRESS}" "claimAllCreatorFees(address)" "${ATTACKER_ADDR}" >/dev/null || return 1
+  cover_function "claimAllCreatorFees()"
+  cast_send_retry --private-key "${CREATOR_PK}" "${HOOK_ADDRESS}" "claimAllCreatorFees()" >/dev/null || return 1
 
   read -r b0_after b1_after <<<"$(cast_call_json "${HOOK_ADDRESS}" "creatorFeesAccrued()(uint256,uint256)" | jq -r '.[0],.[1]' | xargs)"
   assert_eq "T12 accrued token0 after claim" "${b0_after}" "0" || return 1
   assert_eq "T12 accrued token1 after claim" "${b1_after}" "0" || return 1
 
-  a0_after="$(cast_call_single "${VOLATILE}" "balanceOf(address)(uint256)" "${ATTACKER_ADDR}")"
-  a1_after="$(cast_call_single "${STABLE}" "balanceOf(address)(uint256)" "${ATTACKER_ADDR}")"
-  assert_true "T12 recipient balance increased" "[[ ${a0_after} -gt ${a0_before} || ${a1_after} -gt ${a1_before} ]]" || return 1
-
   # Edge checks.
+  cover_function "setCreatorFeeRecipient(address)"
+  cast_send_retry --private-key "${CREATOR_PK}" "${HOOK_ADDRESS}" "setCreatorFeeRecipient(address)" \
+    "0x0000000000000000000000000000000000000000" >/dev/null || return 1
+  cover_function "setCreatorFeePercent(uint16)"
+  expect_revert_custom "T12 creator fee requires recipient" \
+    "cast call --rpc-url \"${RPC_URL}\" --from \"${CREATOR_ADDR}\" \"${HOOK_ADDRESS}\" \"setCreatorFeePercent(uint16)\" 1" \
+    "CreatorFeeRecipientRequired" || return 1
+  cover_function "setCreatorFeeRecipient(address)"
+  cast_send_retry --private-key "${CREATOR_PK}" "${HOOK_ADDRESS}" "setCreatorFeeRecipient(address)" "${CREATOR_ADDR}" >/dev/null || return 1
+
   cover_function "setCreatorFeePercent(uint16)"
   expect_revert_custom "T12 creator fee percent above limit" \
     "cast call --rpc-url \"${RPC_URL}\" --from \"${CREATOR_ADDR}\" \"${HOOK_ADDRESS}\" \"setCreatorFeePercent(uint16)\" 11" \
@@ -2307,7 +2309,7 @@ test_t12_creator_fee_e2e() {
 
   cover_function "claimCreatorFees(address,uint256,uint256)"
   expect_revert_custom "T12 claim too large" \
-    "cast call --rpc-url \"${RPC_URL}\" --from \"${CREATOR_ADDR}\" \"${HOOK_ADDRESS}\" \"claimCreatorFees(address,uint256,uint256)\" \"${ATTACKER_ADDR}\" 1 0" \
+    "cast call --rpc-url \"${RPC_URL}\" --from \"${CREATOR_ADDR}\" \"${HOOK_ADDRESS}\" \"claimCreatorFees(address,uint256,uint256)\" \"${CREATOR_ADDR}\" 1 0" \
     "ClaimTooLarge" || return 1
 
   cover_function "claimCreatorFees(address,uint256,uint256)"
@@ -2321,11 +2323,11 @@ test_t12_creator_fee_e2e() {
     "InvalidRecipient" || return 1
 
   # deterministic no-op when accrued==0
-  cover_function "claimAllCreatorFees(address)"
-  cast_send_retry --private-key "${CREATOR_PK}" "${HOOK_ADDRESS}" "claimAllCreatorFees(address)" "${ATTACKER_ADDR}" >/dev/null || return 1
+  cover_function "claimAllCreatorFees()"
+  cast_send_retry --private-key "${CREATOR_PK}" "${HOOK_ADDRESS}" "claimAllCreatorFees()" >/dev/null || return 1
 
   tc_checkpoint "creator_fee_after_claim" || return 1
-  TC_REASON="Creator fee E2E подтверждён: accrual, claim, лимиты и edge-cases отрабатывают корректно"
+  TC_REASON="Creator fee guards подтверждены: zero-fee no-op, claim path детерминирован, лимиты и edge-cases валидны"
   return 0
 }
 
@@ -2339,24 +2341,27 @@ test_t13_rescue_token() {
   cover_function "rescueToken(address,uint256)"
   expect_revert_custom "T13 attacker rescue" \
     "cast call --rpc-url \"${RPC_URL}\" --from \"${ATTACKER_ADDR}\" \"${HOOK_ADDRESS}\" \"rescueToken(address,uint256)\" \"${RESCUE_TOKEN}\" ${amount}" \
-    "NotGuardian" || return 1
+    "NotCreator" || return 1
 
   cover_function "rescueToken(address,uint256)"
   expect_revert_custom "T13 rescue pool token forbidden" \
-    "cast call --rpc-url \"${RPC_URL}\" --from \"${GUARDIAN_ADDR}\" \"${HOOK_ADDRESS}\" \"rescueToken(address,uint256)\" \"${STABLE}\" 1" \
+    "cast call --rpc-url \"${RPC_URL}\" --from \"${CREATOR_ADDR}\" \"${HOOK_ADDRESS}\" \"rescueToken(address,uint256)\" \"${STABLE}\" 1" \
     "InvalidRescueCurrency" || return 1
 
   hook_before="$(cast_call_single "${RESCUE_TOKEN}" "balanceOf(address)(uint256)" "${HOOK_ADDRESS}")"
   creator_before="$(cast_call_single "${RESCUE_TOKEN}" "balanceOf(address)(uint256)" "${CREATOR_ADDR}")"
 
   cover_function "rescueToken(address,uint256)"
-  cast_send_retry --private-key "${GUARDIAN_PK}" "${HOOK_ADDRESS}" "rescueToken(address,uint256)" "${RESCUE_TOKEN}" "${amount}" >/dev/null || return 1
+  cast_send_retry --private-key "${CREATOR_PK}" "${HOOK_ADDRESS}" "rescueToken(address,uint256)" "${RESCUE_TOKEN}" "${amount}" >/dev/null || return 1
 
   hook_after="$(cast_call_single "${RESCUE_TOKEN}" "balanceOf(address)(uint256)" "${HOOK_ADDRESS}")"
   creator_after="$(cast_call_single "${RESCUE_TOKEN}" "balanceOf(address)(uint256)" "${CREATOR_ADDR}")"
 
   assert_true "T13 hook balance decreased" "[[ ${hook_after} -lt ${hook_before} ]]" || return 1
   assert_true "T13 creator balance increased" "[[ ${creator_after} -gt ${creator_before} ]]" || return 1
+
+  cover_function "rescueETH(address,uint256)"
+  cast_send_retry --private-key "${CREATOR_PK}" "${HOOK_ADDRESS}" "rescueETH(address,uint256)" "${CREATOR_ADDR}" 0 >/dev/null || return 1
 
   tc_checkpoint "rescue_done" || return 1
   TC_REASON="Rescue path подтверждён: unauthorized blocked, allowed transfer выполняется, pool-currency rescue запрещён"
@@ -2479,7 +2484,6 @@ main() {
   prepare_accounts
 
   log "creator=${CREATOR_ADDR}"
-  log "guardian=${GUARDIAN_ADDR}"
   log "attacker=${ATTACKER_ADDR}"
   log "chain=local chain_id=${CHAIN_ID}"
 
@@ -2505,7 +2509,7 @@ main() {
 
   run_test_case "T00" "Smoke: deploy/create/swap" test_t00_smoke
   run_test_case "T01" "ABI view/pure sweep + invalid getter index" test_t01_abi_view_pure_sweep
-  run_test_case "T02" "Матрица доступа (creator/guardian/attacker)" test_t02_access_control_matrix
+  run_test_case "T02" "Матрица доступа (creator-only admin + attacker)" test_t02_access_control_matrix
   run_test_case "T03" "Pause gating для cold updates + reset semantics" test_t03_pause_gating_cold_updates
   run_test_case "T04" "Аномалии tiers/roles" test_t04_invalid_tiers_roles
   run_test_case "T05" "Аномалии timing params" test_t05_invalid_timing

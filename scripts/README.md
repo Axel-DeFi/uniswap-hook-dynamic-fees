@@ -33,19 +33,17 @@ Scripts will automatically:
 Secrets should live in `./.env` (repo root). Typical variables:
 
 - `DEFAULT_PRIVATE_KEY` — deployer key (used by configs via `PRIVATE_KEY=${DEFAULT_PRIVATE_KEY:-}`)
-- `DEFAULT_OWNER` — optional owner address override for hook admin
-- `DEFAULT_GUARDIAN` — guardian address (optional)
-- `REQUIRE_GUARDIAN_CONTRACT=1` — optional strict mode to require contract guardian (recommended for production)
+- `DEFAULT_CREATOR` — optional explicit creator/admin address
 
 ### Strategy / monetization params
 
 - `FEE_TIERS` — comma-separated fee levels in percent (for example `0.009,0.04,0.09,0.25,0.45,0.90`)
 - `FLOOR_TIER`, `CAP_TIER` — floor/cap fee levels in percent (must match one of `FEE_TIERS`)
 - `CREATOR_FEE_PERCENT` — creator fee share in percent (for example `10` = 10%)
-- `CREATOR_FEE_ADDRESS` — optional payout recipient for creator fees (defaults to `GUARDIAN`)
+- `CREATOR_FEE_ADDRESS` — explicit payout recipient for creator fees (required when `CREATOR_FEE_PERCENT > 0`)
 
 Note:
-- Fee tiers and controller/timing params are mutable on-chain via owner setters.
+- Fee tiers and controller/timing params are mutable on-chain via creator setters.
 - `deploy_hook.sh` now applies config values through setters immediately after deployment (pause -> configure -> unpause).
 - Floor tier is used as start fee and pause fee.
 

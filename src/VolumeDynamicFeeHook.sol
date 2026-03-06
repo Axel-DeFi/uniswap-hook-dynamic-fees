@@ -10,11 +10,6 @@ import {BalanceDelta, BalanceDeltaLibrary} from "@uniswap/v4-core/src/types/Bala
 import {SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {Hooks} from "@uniswap/v4-core/src/libraries/Hooks.sol";
 import {LPFeeLibrary} from "@uniswap/v4-core/src/libraries/LPFeeLibrary.sol";
-import {
-    BeforeSwapDelta,
-    toBeforeSwapDelta,
-    BeforeSwapDeltaLibrary
-} from "@uniswap/v4-core/src/types/BeforeSwapDelta.sol";
 
 /**
  * @dev VolumeDynamicFeeHook
@@ -29,7 +24,6 @@ import {
 /// @notice Single-pool Uniswap v4 hook that updates dynamic LP fees using stable-coin volume heuristics.
 contract VolumeDynamicFeeHook is BaseHook {
     using BalanceDeltaLibrary for BalanceDelta;
-    using BeforeSwapDeltaLibrary for BeforeSwapDelta;
 
     // -----------------------------------------------------------------------
     // Fee tiers (hundredths of a bip). Example: 3000 = 0.30%
@@ -81,8 +75,8 @@ contract VolumeDynamicFeeHook is BaseHook {
     uint16 public feeTierCount;
     uint24[] private _feeTiersByIdx;
     ControllerConfig private _config;
-    address private _guardian;
     address private _creator;
+    address private _creatorFeeRecipient;
     uint16 public immutable creatorFeeLimitPercent;
 
     function feeTiers(uint256 idx) public view returns (uint24) {
@@ -119,12 +113,6 @@ contract VolumeDynamicFeeHook is BaseHook {
     uint8 private constant DIR_NONE = 0;
 
     // Period-close reason codes (for PeriodClosed event).
-    uint8 public constant REASON_FEE_UP = 1;
-    uint8 public constant REASON_FEE_DOWN = 2;
-    uint8 public constant REASON_REVERSAL_LOCK = 3;
-    uint8 public constant REASON_CAP = 4;
-    uint8 public constant REASON_FLOOR = 5;
-    uint8 public constant REASON_ZERO_EMA_DECAY = 6;
     uint8 public constant REASON_NO_SWAPS = 7;
     uint8 public constant REASON_LULL_RESET = 8;
     uint8 public constant REASON_DEADBAND = 9;
@@ -135,7 +123,7 @@ contract VolumeDynamicFeeHook is BaseHook {
     uint8 public constant REASON_DOWN_TO_FLOOR = 14;
     uint8 public constant REASON_HOLD = 15;
     uint8 public constant REASON_EMERGENCY_FLOOR = 16;
-    uint8 public constant REASON_BOOTSTRAP_V2 = 17;
+    uint8 public constant REASON_NO_CHANGE = 17;
 
     uint16 private constant MAX_LULL_PERIODS = 24;
     uint8 private constant MAX_EMA_PERIODS = 64;
@@ -174,9 +162,9 @@ contract VolumeDynamicFeeHook is BaseHook {
     event LullReset(uint24 newFee, uint8 newFeeIdx);
     event CreatorFeeAccrued(address indexed currency, uint256 amount, uint24 feeBips);
     event CreatorFeesClaimed(address indexed to, uint256 amount0, uint256 amount1);
+    event CreatorFeeRecipientUpdated(address indexed previousRecipient, address indexed newRecipient);
     event RescueTransfer(address indexed currency, uint256 amount, address indexed recipient);
     event CreatorUpdated(address indexed previousCreator, address indexed newCreator);
-    event GuardianUpdated(address indexed previousGuardian, address indexed newGuardian);
     event FeeTiersUpdated(uint24[] tiers, uint8 floorIdx, uint8 cashIdx, uint8 extremeIdx, uint8 capIdx);
     event ControllerParamsUpdated(
         uint64 minCloseVolToCashUsd6,
@@ -207,11 +195,11 @@ contract VolumeDynamicFeeHook is BaseHook {
     error AlreadyInitialized();
     error NotInitialized();
     error InvalidConfig();
-    error NotGuardian();
     error NotCreator();
     error InvalidRescueCurrency();
     error InvalidRecipient();
     error ClaimTooLarge();
+    error CreatorFeeRecipientRequired();
     error CreatorFeeLimitExceeded(uint16 requestedBps, uint16 maxAllowedBps);
     error CreatorFeePercentLimitExceeded(uint16 requestedPercent, uint16 maxAllowedPercent);
     error TierNotFound();
@@ -219,12 +207,13 @@ contract VolumeDynamicFeeHook is BaseHook {
     error InvalidHoldPeriods();
     error InvalidConfirmPeriods();
     error RequiresPaused();
+    error EthTransferFailed();
 
     uint8 private constant RESET_REASON_ADMIN_TIERS = 1;
     uint8 private constant RESET_REASON_ADMIN_TIMING = 2;
-    uint8 private constant RESET_REASON_GUARDIAN_PAUSE = 3;
-    uint8 private constant RESET_REASON_GUARDIAN_UNPAUSE = 4;
-    uint8 private constant RESET_REASON_GUARDIAN_EMERGENCY = 5;
+    uint8 private constant RESET_REASON_ADMIN_PAUSE = 3;
+    uint8 private constant RESET_REASON_ADMIN_UNPAUSE = 4;
+    uint8 private constant RESET_REASON_ADMIN_EMERGENCY = 5;
 
     constructor(
         IPoolManager _poolManager,
@@ -240,8 +229,8 @@ contract VolumeDynamicFeeHook is BaseHook {
         uint8 _emaPeriods,
         uint16 _deadbandBps,
         uint32 _lullResetSeconds,
-        address _guardianAddr,
         address _creatorAddr,
+        address _creatorFeeRecipientAddr,
         uint16 _creatorFeeLimitPercent,
         uint16 _creatorFeeBps,
         uint24 _cashTier,
@@ -280,8 +269,9 @@ contract VolumeDynamicFeeHook is BaseHook {
         _stableIsCurrency0 = (_stableCurrency == _poolCurrency0);
 
         _setTimingParamsInternal(_periodSeconds, _emaPeriods, _lullResetSeconds, _deadbandBps);
-        _setGuardianInternal(_guardianAddr);
-        _setCreatorFeeConfigInternal(_creatorAddr, _creatorFeeBps);
+        _setCreatorInternal(_creatorAddr);
+        _setCreatorFeeRecipientInternal(_creatorFeeRecipientAddr);
+        _setCreatorFeeBpsInternal(_creatorFeeBps);
 
         uint8 cashTierIdx_ = _mustFindTierIdx(_feeTiers, _cashTier);
         uint8 extremeTierIdx_ = _mustFindTierIdx(_feeTiers, _extremeTier);
@@ -318,8 +308,8 @@ contract VolumeDynamicFeeHook is BaseHook {
             _stableScale = uint64(10 ** (stableDecimals - 6));
         }
 
-        emit GuardianUpdated(address(0), _guardianAddr);
         emit CreatorUpdated(address(0), _creatorAddr);
+        emit CreatorFeeRecipientUpdated(address(0), _creatorFeeRecipientAddr);
         emit CreatorFeeConfigUpdated(_creatorAddr, _creatorFeeBps);
         emit FeeTiersUpdated(_feeTiers, _floorIdx, cashTierIdx_, extremeTierIdx_, _capIdx);
         emit ControllerParamsUpdated(
@@ -340,11 +330,6 @@ contract VolumeDynamicFeeHook is BaseHook {
         emit TimingParamsUpdated(_periodSeconds, _emaPeriods, _lullResetSeconds, _deadbandBps);
     }
 
-    modifier onlyGuardian() {
-        if (msg.sender != _guardian && msg.sender != _creator) revert NotGuardian();
-        _;
-    }
-
     modifier onlyCreator() {
         if (msg.sender != _creator) revert NotCreator();
         _;
@@ -355,19 +340,28 @@ contract VolumeDynamicFeeHook is BaseHook {
         _;
     }
 
-    function _setGuardianInternal(address newGuardian) internal {
-        if (newGuardian == address(0)) revert InvalidConfig();
-        _guardian = newGuardian;
+    function _setCreatorInternal(address newCreator) internal {
+        if (newCreator == address(0)) revert InvalidConfig();
+        _creator = newCreator;
     }
 
-    function _setCreatorFeeConfigInternal(address newCreator, uint16 newCreatorFeeBps) internal {
-        if (newCreator == address(0)) revert InvalidConfig();
+    function _setCreatorFeeRecipientInternal(address newRecipient) internal {
+        if (newRecipient == address(0) && _config.creatorFeeBps > 0) revert CreatorFeeRecipientRequired();
+        _creatorFeeRecipient = newRecipient;
+    }
+
+    function _setCreatorFeeBpsInternal(uint16 newCreatorFeeBps) internal {
         uint16 maxAllowedBps = _creatorFeeLimitBps();
         if (newCreatorFeeBps > maxAllowedBps) {
             revert CreatorFeeLimitExceeded(newCreatorFeeBps, maxAllowedBps);
         }
-        _creator = newCreator;
+        if (newCreatorFeeBps > 0 && _creatorFeeRecipient == address(0)) revert CreatorFeeRecipientRequired();
         _config.creatorFeeBps = newCreatorFeeBps;
+    }
+
+    function _setCreatorFeeConfigInternal(address newCreator, uint16 newCreatorFeeBps) internal {
+        _setCreatorInternal(newCreator);
+        _setCreatorFeeBpsInternal(newCreatorFeeBps);
     }
 
     function _creatorFeeLimitBps() internal view returns (uint16) {
@@ -451,7 +445,7 @@ contract VolumeDynamicFeeHook is BaseHook {
         ) {
             revert InvalidFeeIndex();
         }
-        if (floorIdx_ > cashIdx_ || cashIdx_ > extremeIdx_ || extremeIdx_ > capIdx_) {
+        if (floorIdx_ >= cashIdx_ || cashIdx_ >= extremeIdx_ || extremeIdx_ != capIdx_) {
             revert InvalidTierBounds();
         }
 
@@ -470,7 +464,7 @@ contract VolumeDynamicFeeHook is BaseHook {
         _config.floorIdx = floorIdx_;
         _config.cashIdx = cashIdx_;
         _config.extremeIdx = extremeIdx_;
-        _config.capIdx = capIdx_;
+        _config.capIdx = extremeIdx_;
     }
 
     function _resetStateToFloor(bool pausedValue, uint8 reasonCode) internal {
@@ -494,47 +488,7 @@ contract VolumeDynamicFeeHook is BaseHook {
     // -----------------------------------------------------------------------
     function getHookPermissions() public pure override returns (Hooks.Permissions memory perms) {
         perms.afterInitialize = true;
-        perms.beforeSwap = true;
-        perms.beforeSwapReturnDelta = true;
         perms.afterSwap = true;
-    }
-
-    function _beforeSwap(address, PoolKey calldata key, SwapParams calldata params, bytes calldata)
-        internal
-        override
-        returns (bytes4, BeforeSwapDelta, uint24)
-    {
-        _validateKey(key);
-        if (isPaused() || _config.creatorFeeBps == 0 || params.amountSpecified >= 0) {
-            return (IHooks.beforeSwap.selector, BeforeSwapDeltaLibrary.ZERO_DELTA, 0);
-        }
-
-        (,, uint64 periodStart, uint8 feeIdx,,,,,,) = _unpackState(_state);
-        if (periodStart == 0) {
-            return (IHooks.beforeSwap.selector, BeforeSwapDeltaLibrary.ZERO_DELTA, 0);
-        }
-
-        uint256 amountIn = uint256(-params.amountSpecified);
-        uint256 creatorCut = _computeCreatorFee(amountIn, _feeTier(feeIdx));
-        if (creatorCut == 0 || creatorCut >= amountIn) {
-            return (IHooks.beforeSwap.selector, BeforeSwapDeltaLibrary.ZERO_DELTA, 0);
-        }
-        uint256 maxSpecifiedDelta = uint256(type(uint128).max >> 1);
-        if (creatorCut > maxSpecifiedDelta) {
-            creatorCut = maxSpecifiedDelta;
-        }
-
-        Currency specifiedCurrency = params.zeroForOne ? key.currency0 : key.currency1;
-        poolManager.take(specifiedCurrency, address(this), creatorCut);
-        if (specifiedCurrency == poolCurrency0) {
-            _creatorFees0 += creatorCut;
-        } else {
-            _creatorFees1 += creatorCut;
-        }
-        emit CreatorFeeAccrued(Currency.unwrap(specifiedCurrency), creatorCut, _feeTier(feeIdx));
-
-        int128 specifiedDelta = int128(uint128(creatorCut));
-        return (IHooks.beforeSwap.selector, toBeforeSwapDelta(specifiedDelta, 0), 0);
     }
 
     // -----------------------------------------------------------------------
@@ -566,7 +520,7 @@ contract VolumeDynamicFeeHook is BaseHook {
     function _afterSwap(
         address,
         PoolKey calldata key,
-        SwapParams calldata,
+        SwapParams calldata params,
         BalanceDelta delta,
         bytes calldata
     ) internal override returns (bytes4, int128) {
@@ -591,6 +545,9 @@ contract VolumeDynamicFeeHook is BaseHook {
         ) = _unpackState(_state);
 
         if (periodStart == 0) revert NotInitialized();
+
+        uint24 appliedFeeBips = _feeTier(feeIdx);
+        _accrueCreatorFeeAfterSwap(key, params, delta, appliedFeeBips);
 
         uint64 nowTs = _now64();
         uint64 elapsed = nowTs - periodStart;
@@ -689,7 +646,16 @@ contract VolumeDynamicFeeHook is BaseHook {
             emergencyStreak = emergency;
             feeChanged = feeIdx != oldFeeIdx;
 
-            periodStart = nowTs;
+            uint256 nextPeriodStart = uint256(periodStart) + uint256(periods) * uint256(_config.periodSeconds);
+            if (nextPeriodStart > uint256(nowTs)) {
+                nextPeriodStart = nowTs;
+            }
+            if (nextPeriodStart > type(uint64).max) {
+                periodStart = type(uint64).max;
+            } else {
+                // forge-lint: disable-next-line(unsafe-typecast)
+                periodStart = uint64(nextPeriodStart);
+            }
             periodVol = 0;
         }
 
@@ -828,12 +794,12 @@ contract VolumeDynamicFeeHook is BaseHook {
         return _config.lullResetSeconds;
     }
 
-    function guardian() public view returns (address) {
-        return _guardian;
-    }
-
     function creator() public view returns (address) {
         return _creator;
+    }
+
+    function creatorFeeRecipient() public view returns (address) {
+        return _creatorFeeRecipient;
     }
 
     function creatorFeeBps() public view returns (uint16) {
@@ -908,7 +874,7 @@ contract VolumeDynamicFeeHook is BaseHook {
 
     function claimCreatorFees(address to, uint256 amount0, uint256 amount1) external {
         if (msg.sender != _creator) revert NotCreator();
-        if (to == address(0)) revert InvalidRecipient();
+        if (to != _creatorFeeRecipient || to == address(0)) revert InvalidRecipient();
         if (amount0 > _creatorFees0 || amount1 > _creatorFees1) revert ClaimTooLarge();
         if (amount0 > 0) {
             _creatorFees0 -= amount0;
@@ -923,8 +889,9 @@ contract VolumeDynamicFeeHook is BaseHook {
         }
     }
 
-    function claimAllCreatorFees(address to) external {
+    function claimAllCreatorFees() external {
         if (msg.sender != _creator) revert NotCreator();
+        address to = _creatorFeeRecipient;
         if (to == address(0)) revert InvalidRecipient();
         uint256 amount0 = _creatorFees0;
         uint256 amount1 = _creatorFees1;
@@ -941,30 +908,43 @@ contract VolumeDynamicFeeHook is BaseHook {
         }
     }
 
+    function claimAllCreatorFees(address to) external {
+        if (msg.sender != _creator) revert NotCreator();
+        if (to != _creatorFeeRecipient || to == address(0)) revert InvalidRecipient();
+        uint256 amount0 = _creatorFees0;
+        uint256 amount1 = _creatorFees1;
+        if (amount0 > 0) {
+            _creatorFees0 = 0;
+            poolCurrency0.transfer(to, amount0);
+        }
+        if (amount1 > 0) {
+            _creatorFees1 = 0;
+            poolCurrency1.transfer(to, amount1);
+        }
+        if (amount0 > 0 || amount1 > 0) {
+            emit CreatorFeesClaimed(to, amount0, amount1);
+        }
+    }
+
     function rescueToken(Currency currency, uint256 amount) external {
-        if (msg.sender != _guardian) revert NotGuardian();
+        if (msg.sender != _creator) revert NotCreator();
         if (currency == poolCurrency0 || currency == poolCurrency1) revert InvalidRescueCurrency();
 
         currency.transfer(_creator, amount);
         emit RescueTransfer(Currency.unwrap(currency), amount, _creator);
     }
 
+    function rescueETH(address to, uint256 amount) external onlyCreator {
+        if (to == address(0)) revert InvalidRecipient();
+        if (amount > address(this).balance) revert ClaimTooLarge();
+        (bool ok,) = payable(to).call{value: amount}("");
+        if (!ok) revert EthTransferFailed();
+        emit RescueTransfer(address(0), amount, to);
+    }
+
     // -----------------------------------------------------------------------
     // Admin controls
     // -----------------------------------------------------------------------
-
-    /*
-     * Mutable params summary:
-     * - always creator-mutable: guardian, creator fee address/percent
-     * - requires paused=true: fee tiers + role indices, timing/smoothing
-     * - hot-updatable (pause not required): controller thresholds/holds/confirms/emergency params
-     * - state reset clears periodVol/ema/streaks/holds, sets feeIdx=floorIdx, and sets periodStart=block.timestamp if initialized
-     */
-    function setGuardian(address newGuardian) external onlyCreator {
-        address oldGuardian = _guardian;
-        _setGuardianInternal(newGuardian);
-        emit GuardianUpdated(oldGuardian, newGuardian);
-    }
 
     function setCreatorFeeConfig(address newCreator, uint16 newCreatorFeeBps) external onlyCreator {
         address oldCreator = _creator;
@@ -980,8 +960,14 @@ contract VolumeDynamicFeeHook is BaseHook {
             revert CreatorFeePercentLimitExceeded(newCreatorFeePercent, creatorFeeLimitPercent);
         }
         uint16 newCreatorFeeBps = newCreatorFeePercent * 100;
-        _config.creatorFeeBps = newCreatorFeeBps;
+        _setCreatorFeeBpsInternal(newCreatorFeeBps);
         emit CreatorFeeConfigUpdated(_creator, newCreatorFeeBps);
+    }
+
+    function setCreatorFeeRecipient(address newRecipient) external onlyCreator {
+        address oldRecipient = _creatorFeeRecipient;
+        _setCreatorFeeRecipientInternal(newRecipient);
+        emit CreatorFeeRecipientUpdated(oldRecipient, newRecipient);
     }
 
     function setFeeTiersAndRoles(
@@ -996,7 +982,7 @@ contract VolumeDynamicFeeHook is BaseHook {
         _resetStateToFloor(true, RESET_REASON_ADMIN_TIERS);
     }
 
-    function setControllerParams(ControllerParams calldata p) external onlyCreator {
+    function setControllerParams(ControllerParams calldata p) external onlyCreator whenPaused {
         _setControllerParamsInternal(p);
         emit ControllerParamsUpdated(
             p.minCloseVolToCashUsd6,
@@ -1026,20 +1012,20 @@ contract VolumeDynamicFeeHook is BaseHook {
         _resetStateToFloor(true, RESET_REASON_ADMIN_TIMING);
     }
 
-    function pause() external onlyGuardian {
+    function pause() external onlyCreator {
         if (isPaused()) return;
-        _resetStateToFloor(true, RESET_REASON_GUARDIAN_PAUSE);
+        _resetStateToFloor(true, RESET_REASON_ADMIN_PAUSE);
         emit Paused(_feeTier(_config.floorIdx), _config.floorIdx);
     }
 
-    function unpause() external onlyGuardian {
+    function unpause() external onlyCreator {
         if (!isPaused()) return;
-        _resetStateToFloor(false, RESET_REASON_GUARDIAN_UNPAUSE);
+        _resetStateToFloor(false, RESET_REASON_ADMIN_UNPAUSE);
         emit Unpaused();
     }
 
-    function emergencyResetStateToFloor() external onlyGuardian whenPaused {
-        _resetStateToFloor(true, RESET_REASON_GUARDIAN_EMERGENCY);
+    function emergencyResetStateToFloor() external onlyCreator whenPaused {
+        _resetStateToFloor(true, RESET_REASON_ADMIN_EMERGENCY);
     }
 
     function _poolKey() internal view returns (PoolKey memory key) {
@@ -1120,6 +1106,32 @@ contract VolumeDynamicFeeHook is BaseHook {
         return (lpFeeAmount * uint256(_config.creatorFeeBps)) / BPS_SCALE;
     }
 
+    function _accrueCreatorFeeAfterSwap(
+        PoolKey calldata key,
+        SwapParams calldata params,
+        BalanceDelta delta,
+        uint24 feeBips
+    ) internal {
+        if (_config.creatorFeeBps == 0) return;
+
+        int128 amountInSigned = params.zeroForOne ? delta.amount0() : delta.amount1();
+        uint256 amountIn =
+            amountInSigned < 0 ? uint256(-int256(amountInSigned)) : uint256(uint128(amountInSigned));
+        if (amountIn == 0) return;
+
+        uint256 creatorCut = _computeCreatorFee(amountIn, feeBips);
+        if (creatorCut == 0) return;
+
+        Currency inputCurrency = params.zeroForOne ? key.currency0 : key.currency1;
+        poolManager.take(inputCurrency, address(this), creatorCut);
+        if (inputCurrency == poolCurrency0) {
+            _creatorFees0 += creatorCut;
+        } else {
+            _creatorFees1 += creatorCut;
+        }
+        emit CreatorFeeAccrued(Currency.unwrap(inputCurrency), creatorCut, feeBips);
+    }
+
     // Backward-compatible internal surface for existing test harnesses.
     function _computeNextFeeIdx(uint8 feeIdx, uint8, uint64 closeVol, uint96 emaVol)
         internal
@@ -1158,7 +1170,7 @@ contract VolumeDynamicFeeHook is BaseHook {
         newUpExtremeStreak = upExtremeStreak;
         newDownStreak = downStreak;
         newEmergencyStreak = emergencyStreak;
-        reasonCode = closeVol == 0 ? REASON_NO_SWAPS : REASON_DEADBAND;
+        reasonCode = closeVol == 0 ? REASON_NO_SWAPS : REASON_NO_CHANGE;
 
         // Rule 1: hold counter always decays first.
         if (newHoldRemaining > 0) {
@@ -1191,11 +1203,21 @@ contract VolumeDynamicFeeHook is BaseHook {
         }
 
         uint256 rBps = emaVol == 0 ? 0 : (uint256(closeVol) * BPS_SCALE) / uint256(emaVol);
+        uint256 deadband = uint256(_config.deadbandBps);
+        bool deadbandBlocked;
 
         // Rule 3a: floor -> cash fast jump.
         if (newFeeIdx == _config.floorIdx) {
-            bool canJumpCash = !bootstrapV2 && emaVol != 0 && closeVol >= _config.minCloseVolToCashUsd6
-                && rBps >= uint256(_config.upRToCashBps);
+            bool upCashRaw = rBps >= uint256(_config.upRToCashBps);
+            bool upCashPass = rBps >= uint256(_config.upRToCashBps) + deadband;
+            bool canJumpCash =
+                !bootstrapV2 && emaVol != 0 && closeVol >= _config.minCloseVolToCashUsd6 && upCashPass;
+            if (
+                !bootstrapV2 && emaVol != 0 && closeVol >= _config.minCloseVolToCashUsd6 && upCashRaw
+                    && !upCashPass && newFeeIdx != _config.cashIdx
+            ) {
+                deadbandBlocked = true;
+            }
             if (canJumpCash && newFeeIdx != _config.cashIdx) {
                 newFeeIdx = _config.cashIdx;
                 newHoldRemaining = _config.cashHoldPeriods;
@@ -1216,9 +1238,21 @@ contract VolumeDynamicFeeHook is BaseHook {
 
         // Rule 3b: cash -> extreme jump after consecutive confirmations.
         if (newFeeIdx == _config.cashIdx) {
-            if (closeVol >= _config.minCloseVolToExtremeUsd6 && rBps >= uint256(_config.upRToExtremeBps)) {
+            bool upExtremeRaw =
+                closeVol >= _config.minCloseVolToExtremeUsd6 && rBps >= uint256(_config.upRToExtremeBps);
+            bool upExtremePass = closeVol >= _config.minCloseVolToExtremeUsd6
+                && rBps >= uint256(_config.upRToExtremeBps) + deadband;
+            if (upExtremePass) {
                 newUpExtremeStreak = _incrementStreak(newUpExtremeStreak, MAX_UP_EXTREME_STREAK);
             } else {
+                if (
+                    upExtremeRaw
+                        && _incrementStreak(newUpExtremeStreak, MAX_UP_EXTREME_STREAK)
+                            >= _config.upExtremeConfirmPeriods && !bootstrapV2
+                        && newFeeIdx != _config.extremeIdx
+                ) {
+                    deadbandBlocked = true;
+                }
                 newUpExtremeStreak = 0;
             }
             if (
@@ -1259,9 +1293,21 @@ contract VolumeDynamicFeeHook is BaseHook {
         }
 
         if (newFeeIdx == _config.extremeIdx) {
-            if (rBps <= uint256(_config.downRFromExtremeBps)) {
+            uint256 downExtremeThreshold = uint256(_config.downRFromExtremeBps);
+            uint256 downExtremePassThreshold =
+                downExtremeThreshold > deadband ? downExtremeThreshold - deadband : 0;
+            bool downExtremeRaw = rBps <= downExtremeThreshold;
+            bool downExtremePass = rBps <= downExtremePassThreshold;
+            if (downExtremePass) {
                 newDownStreak = _incrementStreak(newDownStreak, MAX_DOWN_STREAK);
             } else {
+                if (
+                    downExtremeRaw
+                        && _incrementStreak(newDownStreak, MAX_DOWN_STREAK)
+                            >= _config.downExtremeConfirmPeriods && newFeeIdx != _config.cashIdx
+                ) {
+                    deadbandBlocked = true;
+                }
                 newDownStreak = 0;
             }
             if (newDownStreak >= _config.downExtremeConfirmPeriods) {
@@ -1280,9 +1326,20 @@ contract VolumeDynamicFeeHook is BaseHook {
                 }
             }
         } else if (newFeeIdx == _config.cashIdx) {
-            if (rBps <= uint256(_config.downRFromCashBps)) {
+            uint256 downCashThreshold = uint256(_config.downRFromCashBps);
+            uint256 downCashPassThreshold = downCashThreshold > deadband ? downCashThreshold - deadband : 0;
+            bool downCashRaw = rBps <= downCashThreshold;
+            bool downCashPass = rBps <= downCashPassThreshold;
+            if (downCashPass) {
                 newDownStreak = _incrementStreak(newDownStreak, MAX_DOWN_STREAK);
             } else {
+                if (
+                    downCashRaw
+                        && _incrementStreak(newDownStreak, MAX_DOWN_STREAK) >= _config.downCashConfirmPeriods
+                        && newFeeIdx != _config.floorIdx
+                ) {
+                    deadbandBlocked = true;
+                }
                 newDownStreak = 0;
             }
             if (newDownStreak >= _config.downCashConfirmPeriods) {
@@ -1304,6 +1361,9 @@ contract VolumeDynamicFeeHook is BaseHook {
             newDownStreak = 0;
         }
 
+        if (deadbandBlocked) {
+            reasonCode = REASON_DEADBAND;
+        }
         if (bootstrapV2) {
             reasonCode = REASON_EMA_BOOTSTRAP;
         }

@@ -1653,6 +1653,7 @@ render_raw_once() {
   local pool_currency0 pool_currency1 stable_currency pool_tick_spacing
   local initial_idx floor_idx cap_idx pause_idx fee_tier_count
   local period_seconds ema_periods deadband_bps lull_reset_seconds
+  local creator creator_fee_recipient
 
   pool_currency0="$(first_token "$(try_cast_call "${HOOK_ADDRESS}" "poolCurrency0()(address)" || true)")"
   pool_currency1="$(first_token "$(try_cast_call "${HOOK_ADDRESS}" "poolCurrency1()(address)" || true)")"
@@ -1680,7 +1681,8 @@ render_raw_once() {
   ema_periods="$(first_token "$(try_cast_call "${HOOK_ADDRESS}" "emaPeriods()(uint8)" || true)")"
   deadband_bps="$(first_token "$(try_cast_call "${HOOK_ADDRESS}" "deadbandBps()(uint16)" || true)")"
   lull_reset_seconds="$(first_token "$(try_cast_call "${HOOK_ADDRESS}" "lullResetSeconds()(uint32)" || true)")"
-  guardian="$(first_token "$(try_cast_call "${HOOK_ADDRESS}" "guardian()(address)" || true)")"
+  creator="$(first_token "$(try_cast_call "${HOOK_ADDRESS}" "creator()(address)" || true)")"
+  creator_fee_recipient="$(first_token "$(try_cast_call "${HOOK_ADDRESS}" "creatorFeeRecipient()(address)" || true)")"
 
   local paused current_fee
   paused="$(first_token "$(try_cast_call "${HOOK_ADDRESS}" "isPaused()(bool)" || true)")"
@@ -1832,7 +1834,7 @@ render_raw_once() {
   echo "state_view_address=${STATE_VIEW_ADDRESS:-not-set}"
   echo "hook_pool: currency0=${pool_currency0} currency1=${pool_currency1} stable=${stable_currency} tick_spacing=${pool_tick_spacing}"
   echo "hook_balances: native_wei=${native_wei} token0_raw=${token0_balance_raw} token1_raw=${token1_balance_raw} token0_decimals=${balance_token0_decimals} token1_decimals=${balance_token1_decimals} token0=${pool_currency0} token1=${pool_currency1}"
-  echo "hook_params: initial_idx=${initial_idx} floor_idx=${floor_idx} cap_idx=${cap_idx} pause_idx=${pause_idx} period_seconds=${period_seconds} ema_periods=${ema_periods} deadband_bps=${deadband_bps} lull_reset_seconds=${lull_reset_seconds} guardian=${guardian}"
+  echo "hook_params: initial_idx=${initial_idx} floor_idx=${floor_idx} cap_idx=${cap_idx} pause_idx=${pause_idx} period_seconds=${period_seconds} ema_periods=${ema_periods} deadband_bps=${deadband_bps} lull_reset_seconds=${lull_reset_seconds} creator=${creator} creator_fee_recipient=${creator_fee_recipient}"
   echo "fee_tiers_bips=$(IFS=,; echo "${tiers[*]}")"
   echo "hook_state: paused=${paused} current_fee_bips=${current_fee} period_volume_usd6=${pv} ema_volume_usd6=${ema_vol} period_start=${period_start} fee_idx=${fee_idx} last_dir=${last_dir}"
   if [[ -n "${STATE_VIEW_ADDRESS}" ]]; then

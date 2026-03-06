@@ -26,15 +26,12 @@ set -euo pipefail
 #   DOWN_R_FROM_EXTREME_BPS, DOWN_EXTREME_CONFIRM_PERIODS, DOWN_R_FROM_CASH_BPS, DOWN_CASH_CONFIRM_PERIODS
 #   EMERGENCY_FLOOR_CLOSEVOL_USD6, EMERGENCY_CONFIRM_PERIODS
 # Optional:
-#   CREATOR_FEE_ADDRESS (defaults to GUARDIAN)
-#
-# Guardian behavior:
-#   - If GUARDIAN is empty after sourcing config + .env, it defaults to the deployer address.
-#   - If REQUIRE_GUARDIAN_CONTRACT=1, deployment fails when GUARDIAN is an EOA.
+#   CREATOR             (defaults to deployer address)
+#   CREATOR_FEE_ADDRESS (required when CREATOR_FEE_PERCENT > 0)
 #
 # Creator behavior:
-#   - CREATOR_FEE_ADDRESS defines creator-fee receiver/controller.
-#   - If CREATOR_FEE_ADDRESS is empty, it defaults to GUARDIAN.
+#   - CREATOR defines privileged admin account.
+#   - CREATOR_FEE_ADDRESS defines payout recipient for creator fees.
 
 usage() {
   cat <<'EOF'
@@ -94,7 +91,7 @@ if [[ -z "$CHAIN" ]]; then
   exit 1
 fi
 
-# Auto-load .env (repo root) if present, so configs can reference DEFAULT_PRIVATE_KEY, DEFAULT_GUARDIAN, etc.
+# Auto-load .env (repo root) if present, so configs can reference DEFAULT_PRIVATE_KEY, etc.
 if [[ -f "./.env" ]]; then
   # shellcheck disable=SC1091
   source "./.env"
@@ -280,8 +277,12 @@ if [[ -z "${EXTREME_IDX}" ]]; then
   echo "ERROR: EXTREME_TIER=${EXTREME_TIER}% is not present in FEE_TIERS='${FEE_TIERS}'." >&2
   exit 1
 fi
-if (( FLOOR_IDX > CASH_IDX || CASH_IDX > EXTREME_IDX || EXTREME_IDX > CAP_IDX )); then
-  echo "ERROR: tier bounds must satisfy FLOOR <= CASH <= EXTREME <= CAP (by index in FEE_TIERS)." >&2
+if (( FLOOR_IDX >= CASH_IDX || CASH_IDX >= EXTREME_IDX )); then
+  echo "ERROR: tier bounds must satisfy FLOOR < CASH < EXTREME (by index in FEE_TIERS)." >&2
+  exit 1
+fi
+if (( EXTREME_IDX != CAP_IDX )); then
+  echo "ERROR: CAP_TIER must be equal to EXTREME_TIER (capIdx must equal extremeIdx)." >&2
   exit 1
 fi
 
@@ -326,48 +327,22 @@ fi
 CREATOR_FEE_BPS=$((CREATOR_FEE_PERCENT * 100))
 export CREATOR_FEE_BPS
 
-# Default guardian to deployer if empty
 DEPLOYER_ADDR="$(cast wallet address --private-key "${PRIVATE_KEY}" | awk '{print $1}')"
-
-if [[ -z "${GUARDIAN:-}" ]]; then
-  GUARDIAN="${DEPLOYER_ADDR}"
-  export GUARDIAN
-  echo "==> GUARDIAN not set; defaulting to deployer: ${GUARDIAN}"
+if [[ -z "${CREATOR:-}" ]]; then
+  CREATOR="${DEPLOYER_ADDR}"
+  echo "==> CREATOR not set; defaulting to deployer: ${CREATOR}"
 fi
-
-# Use CREATOR_FEE_ADDRESS as canonical creator fee account.
-# Keep CREATOR exported for the current Solidity constructor/input naming.
-if [[ -z "${CREATOR_FEE_ADDRESS:-}" ]]; then
-  if [[ -n "${CREATOR:-}" ]]; then
-    CREATOR_FEE_ADDRESS="${CREATOR}"
-    echo "==> CREATOR_FEE_ADDRESS not set; reusing CREATOR: ${CREATOR_FEE_ADDRESS}"
-  else
-    CREATOR_FEE_ADDRESS="${GUARDIAN}"
-    echo "==> CREATOR_FEE_ADDRESS not set; defaulting to GUARDIAN: ${CREATOR_FEE_ADDRESS}"
-  fi
-fi
-export CREATOR_FEE_ADDRESS
-
-if [[ -n "${CREATOR:-}" && "${CREATOR}" != "${CREATOR_FEE_ADDRESS}" ]]; then
-  echo "ERROR: CREATOR (${CREATOR}) and CREATOR_FEE_ADDRESS (${CREATOR_FEE_ADDRESS}) differ. Use one value." >&2
-  exit 1
-fi
-CREATOR="${CREATOR_FEE_ADDRESS}"
 export CREATOR
 
-# Optional safety: enforce contract-based guardian (e.g. multisig) in strict mode.
-GUARDIAN_CODE="$(cast code "${GUARDIAN}" --rpc-url "${RPC_URL}" 2>/dev/null || true)"
-if [[ -z "${GUARDIAN_CODE}" ]]; then
-  echo "ERROR: failed to fetch bytecode for GUARDIAN=${GUARDIAN}" >&2
-  exit 1
-fi
-if [[ "${GUARDIAN_CODE}" == "0x" ]]; then
-  if [[ "${REQUIRE_GUARDIAN_CONTRACT:-0}" == "1" ]]; then
-    echo "ERROR: GUARDIAN=${GUARDIAN} is an EOA; REQUIRE_GUARDIAN_CONTRACT=1 expects a contract address (recommended multisig)." >&2
+if [[ -z "${CREATOR_FEE_ADDRESS:-}" ]]; then
+  if (( CREATOR_FEE_PERCENT > 0 )); then
+    echo "ERROR: CREATOR_FEE_ADDRESS is required when CREATOR_FEE_PERCENT > 0" >&2
     exit 1
   fi
-  echo "WARN: GUARDIAN=${GUARDIAN} appears to be an EOA. For production, use a multisig contract guardian."
+  CREATOR_FEE_ADDRESS="0x0000000000000000000000000000000000000000"
+  echo "==> CREATOR_FEE_ADDRESS not set and CREATOR_FEE_PERCENT=0; using zero recipient"
 fi
+export CREATOR_FEE_ADDRESS
 
 # Optional safety: verify STABLE_DECIMALS matches on-chain decimals()
 if [[ -z "${SKIP_DECIMALS_CHECK:-}" ]]; then
@@ -405,8 +380,8 @@ CONSTRUCTOR_ARGS_HEX="$(cast abi-encode \
   "${EMA_PERIODS}" \
   "${DEADBAND_BPS}" \
   "${LULL_RESET_SECONDS}" \
-  "${GUARDIAN}" \
   "${CREATOR}" \
+  "${CREATOR_FEE_ADDRESS}" \
   "${CREATOR_FEE_LIMIT}" \
   "${CREATOR_FEE_BPS}" \
   "${CASH_TIER_PIPS}" \
@@ -480,7 +455,7 @@ fi
 
 CONTROLLER_PARAMS_TUPLE="(${MIN_CLOSEVOL_TO_CASH_USD6},${UP_R_TO_CASH_BPS},${CASH_HOLD_PERIODS},${MIN_CLOSEVOL_TO_EXTREME_USD6},${UP_R_TO_EXTREME_BPS},${UP_EXTREME_CONFIRM_PERIODS},${EXTREME_HOLD_PERIODS},${DOWN_R_FROM_EXTREME_BPS},${DOWN_EXTREME_CONFIRM_PERIODS},${DOWN_R_FROM_CASH_BPS},${DOWN_CASH_CONFIRM_PERIODS},${EMERGENCY_FLOOR_CLOSEVOL_USD6},${EMERGENCY_CONFIRM_PERIODS})"
 
-echo "==> On-chain config: pause -> tiers+roles -> timing params -> controller params -> creator fee config -> unpause"
+echo "==> On-chain config: pause -> tiers+roles -> timing params -> controller params -> creator fee recipient -> creator fee config -> unpause"
 cast send "${HOOK_ADDRESS}" "pause()" --rpc-url "${RPC_URL}" --private-key "${PRIVATE_KEY}" >/dev/null
 cast send "${HOOK_ADDRESS}" "setFeeTiersAndRoles(uint24[],uint8,uint8,uint8,uint8)" \
   "${FEE_TIERS_ARG}" "${FLOOR_IDX}" "${CASH_IDX}" "${EXTREME_IDX}" "${CAP_IDX}" \
@@ -490,6 +465,8 @@ cast send "${HOOK_ADDRESS}" "setTimingParams(uint32,uint8,uint32,uint16)" \
   --rpc-url "${RPC_URL}" --private-key "${PRIVATE_KEY}" >/dev/null
 cast send "${HOOK_ADDRESS}" "setControllerParams((uint64,uint16,uint8,uint64,uint16,uint8,uint8,uint16,uint8,uint16,uint8,uint64,uint8))" \
   "${CONTROLLER_PARAMS_TUPLE}" --rpc-url "${RPC_URL}" --private-key "${PRIVATE_KEY}" >/dev/null
+cast send "${HOOK_ADDRESS}" "setCreatorFeeRecipient(address)" \
+  "${CREATOR_FEE_ADDRESS}" --rpc-url "${RPC_URL}" --private-key "${PRIVATE_KEY}" >/dev/null
 cast send "${HOOK_ADDRESS}" "setCreatorFeeConfig(address,uint16)" \
   "${CREATOR}" "${CREATOR_FEE_BPS}" --rpc-url "${RPC_URL}" --private-key "${PRIVATE_KEY}" >/dev/null
 cast send "${HOOK_ADDRESS}" "unpause()" --rpc-url "${RPC_URL}" --private-key "${PRIVATE_KEY}" >/dev/null
