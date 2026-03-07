@@ -712,9 +712,13 @@ deploy_mock_token() {
   local symbol="$2"
   local decimals="$3"
   local bytecode ctor data tx addr code attempt
-  local artifact_path
+  local artifact_path artifact_path_alt
 
   artifact_path="${ROOT_DIR}/out/MockERC20.sol/MockERC20.json"
+  artifact_path_alt="${ROOT_DIR}/out/ops/tests/mocks/MockERC20.sol/MockERC20.json"
+  if [[ ! -f "${artifact_path}" && -f "${artifact_path_alt}" ]]; then
+    artifact_path="${artifact_path_alt}"
+  fi
   if [[ -z "${MOCK_ERC20_BYTECODE}" && -f "${artifact_path}" ]]; then
     MOCK_ERC20_BYTECODE="$(jq -r '.bytecode.object // .bytecode // empty | if type=="string" then . else empty end' "${artifact_path}" 2>/dev/null || true)"
   fi
