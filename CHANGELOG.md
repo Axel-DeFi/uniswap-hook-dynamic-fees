@@ -1,5 +1,11 @@
 # CHANGELOG
 
+## v2.0.2 - 2026-03-10
+
+### Release summary
+- Release notes captured in git history and audit bundle updates.
+
+
 ## v2.0.1 - 2026-03-10
 
 ### Packaging cleanup
