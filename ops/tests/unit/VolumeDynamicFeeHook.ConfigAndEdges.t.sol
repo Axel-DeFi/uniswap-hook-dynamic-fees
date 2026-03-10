@@ -25,8 +25,9 @@ contract VolumeDynamicFeeHookConfigHarness is VolumeDynamicFeeHook {
         int24 _poolTickSpacing,
         Currency _stableCurrency,
         uint8 stableDecimals,
-        uint8 _floorIdx,
-        uint24[] memory _feeTiers,
+        uint24 _floorFee,
+        uint24 _cashFee,
+        uint24 _extremeFee,
         uint32 _periodSeconds,
         uint8 _emaPeriods,
         uint16 _deadbandBps,
@@ -34,11 +35,9 @@ contract VolumeDynamicFeeHookConfigHarness is VolumeDynamicFeeHook {
         address ownerAddr,
         address hookFeeRecipientAddr,
         uint16 hookFeePercent,
-        uint24 _cashTier,
         uint64 _minCloseVolToCashUsd6,
         uint16 _upRToCashBps,
         uint8 _cashHoldPeriods,
-        uint24 _extremeTier,
         uint64 _minCloseVolToExtremeUsd6,
         uint16 _upRToExtremeBps,
         uint8 _upExtremeConfirmPeriods,
@@ -57,8 +56,9 @@ contract VolumeDynamicFeeHookConfigHarness is VolumeDynamicFeeHook {
             _poolTickSpacing,
             _stableCurrency,
             stableDecimals,
-            _floorIdx,
-            _feeTiers,
+            _floorFee,
+            _cashFee,
+            _extremeFee,
             _periodSeconds,
             _emaPeriods,
             _deadbandBps,
@@ -66,11 +66,9 @@ contract VolumeDynamicFeeHookConfigHarness is VolumeDynamicFeeHook {
             ownerAddr,
             hookFeeRecipientAddr,
             hookFeePercent,
-            _cashTier,
             _minCloseVolToCashUsd6,
             _upRToCashBps,
             _cashHoldPeriods,
-            _extremeTier,
             _minCloseVolToExtremeUsd6,
             _upRToExtremeBps,
             _upExtremeConfirmPeriods,
@@ -105,8 +103,9 @@ contract VolumeDynamicFeeHookConfigAndEdgesTest is Test, VolumeDynamicFeeHookV2D
         int24 tickSpacing;
         address stable;
         uint8 stableDecimals;
-        uint8 floorIdx;
-        uint24[] feeTiers;
+        uint24 floorFee;
+        uint24 cashFee;
+        uint24 extremeFee;
         uint32 periodSeconds;
         uint8 emaPeriods;
         uint16 deadbandBps;
@@ -134,8 +133,9 @@ contract VolumeDynamicFeeHookConfigAndEdgesTest is Test, VolumeDynamicFeeHookV2D
             tickSpacing: 10,
             stable: TOKEN0,
             stableDecimals: 6,
-            floorIdx: 0,
-            feeTiers: _defaultFeeTiersV2(),
+            floorFee: V2_DEFAULT_FLOOR_FEE,
+            cashFee: V2_DEFAULT_CASH_FEE,
+            extremeFee: V2_DEFAULT_EXTREME_FEE,
             periodSeconds: PERIOD_SECONDS,
             emaPeriods: 8,
             deadbandBps: 500,
@@ -156,8 +156,9 @@ contract VolumeDynamicFeeHookConfigAndEdgesTest is Test, VolumeDynamicFeeHookV2D
             cfg.tickSpacing,
             Currency.wrap(cfg.stable),
             cfg.stableDecimals,
-            cfg.floorIdx,
-            cfg.feeTiers,
+            cfg.floorFee,
+            cfg.cashFee,
+            cfg.extremeFee,
             cfg.periodSeconds,
             cfg.emaPeriods,
             cfg.deadbandBps,
@@ -165,11 +166,9 @@ contract VolumeDynamicFeeHookConfigAndEdgesTest is Test, VolumeDynamicFeeHookV2D
             cfg.owner,
             cfg.hookFeeRecipient,
             cfg.hookFeePercent,
-            _resolveCashTier(cfg.feeTiers),
             V2_MIN_CLOSEVOL_TO_CASH_USD6,
             V2_UP_R_TO_CASH_BPS,
             V2_CASH_HOLD_PERIODS,
-            _resolveExtremeTier(cfg.feeTiers),
             V2_MIN_CLOSEVOL_TO_EXTREME_USD6,
             V2_UP_R_TO_EXTREME_BPS,
             V2_UP_EXTREME_CONFIRM_PERIODS,
@@ -214,8 +213,9 @@ contract VolumeDynamicFeeHookConfigAndEdgesTest is Test, VolumeDynamicFeeHookV2D
             cfg.tickSpacing,
             Currency.wrap(cfg.stable),
             cfg.stableDecimals,
-            cfg.floorIdx,
-            cfg.feeTiers,
+            cfg.floorFee,
+            cfg.cashFee,
+            cfg.extremeFee,
             cfg.periodSeconds,
             cfg.emaPeriods,
             cfg.deadbandBps,
@@ -223,11 +223,9 @@ contract VolumeDynamicFeeHookConfigAndEdgesTest is Test, VolumeDynamicFeeHookV2D
             cfg.owner,
             cfg.hookFeeRecipient,
             cfg.hookFeePercent,
-            _resolveCashTier(cfg.feeTiers),
             V2_MIN_CLOSEVOL_TO_CASH_USD6,
             V2_UP_R_TO_CASH_BPS,
             V2_CASH_HOLD_PERIODS,
-            _resolveExtremeTier(cfg.feeTiers),
             V2_MIN_CLOSEVOL_TO_EXTREME_USD6,
             V2_UP_R_TO_EXTREME_BPS,
             V2_UP_EXTREME_CONFIRM_PERIODS,
@@ -262,6 +260,27 @@ contract VolumeDynamicFeeHookConfigAndEdgesTest is Test, VolumeDynamicFeeHookV2D
         cfg.stableDecimals = 8;
 
         vm.expectRevert(abi.encodeWithSelector(VolumeDynamicFeeHook.InvalidStableDecimals.selector, uint8(8)));
+        _deploy(cfg);
+    }
+
+    function test_constructor_reverts_when_floor_fee_is_zero() public {
+        DeployCfg memory cfg = _defaultCfg();
+        cfg.floorFee = 0;
+
+        vm.expectRevert(VolumeDynamicFeeHook.InvalidConfig.selector);
+        _deploy(cfg);
+    }
+
+    function test_constructor_reverts_when_fee_order_is_invalid() public {
+        DeployCfg memory cfg = _defaultCfg();
+        cfg.cashFee = cfg.floorFee;
+
+        vm.expectRevert(VolumeDynamicFeeHook.InvalidConfig.selector);
+        _deploy(cfg);
+
+        cfg = _defaultCfg();
+        cfg.extremeFee = cfg.cashFee;
+        vm.expectRevert(VolumeDynamicFeeHook.InvalidConfig.selector);
         _deploy(cfg);
     }
 
@@ -384,17 +403,16 @@ contract VolumeDynamicFeeHookConfigAndEdgesTest is Test, VolumeDynamicFeeHookV2D
         assertEq(nextValue, 10_000_000);
     }
 
-    function test_default_minCountedSwapUsd6_is_4e6() public {
+    function test_default_minCountedSwapUsd6_is_4e6() public view {
         assertEq(hook.minCountedSwapUsd6(), 4_000_000);
         assertEq(hook.minCountedSwapUsd6(), hook.DEFAULT_MIN_COUNTED_SWAP_USD6());
     }
 
-    function test_feeTier_roles_exposed_without_extremeIdx() public view {
-        (uint24[] memory tiers, uint8 floor, uint8 cash, uint8 extreme) = hook.getFeeTiersAndRoles();
-        assertEq(tiers.length, 3);
-        assertEq(floor, 0);
-        assertEq(cash, 1);
-        assertEq(extreme, 2);
+    function test_regimeFees_are_exposed_explicitly() public view {
+        (uint24 floorFee_, uint24 cashFee_, uint24 extremeFee_) = hook.getRegimeFees();
+        assertEq(floorFee_, V2_DEFAULT_FLOOR_FEE);
+        assertEq(cashFee_, V2_DEFAULT_CASH_FEE);
+        assertEq(extremeFee_, V2_DEFAULT_EXTREME_FEE);
     }
 
     function test_rescue_guards() public {

@@ -65,8 +65,6 @@ contract VolumeDynamicFeeHookClaimAccountingIntegrationTest is Test, VolumeDynam
         TestERC20(Currency.unwrap(c0)).approve(address(swapRouter), type(uint256).max);
         TestERC20(Currency.unwrap(c1)).approve(address(swapRouter), type(uint256).max);
 
-        uint24[] memory tiers = _defaultFeeTiersV2();
-
         bytes memory constructorArgs = _constructorArgsV2(
             IPoolManager(address(manager)),
             c0,
@@ -74,8 +72,9 @@ contract VolumeDynamicFeeHookClaimAccountingIntegrationTest is Test, VolumeDynam
             TICK_SPACING,
             c0,
             6,
-            0,
-            tiers,
+            V2_DEFAULT_FLOOR_FEE,
+            V2_DEFAULT_CASH_FEE,
+            V2_DEFAULT_EXTREME_FEE,
             PERIOD_SECONDS,
             EMA_PERIODS,
             DEADBAND_BPS,
@@ -100,8 +99,9 @@ contract VolumeDynamicFeeHookClaimAccountingIntegrationTest is Test, VolumeDynam
             TICK_SPACING,
             c0,
             6,
-            0,
-            tiers,
+            V2_DEFAULT_FLOOR_FEE,
+            V2_DEFAULT_CASH_FEE,
+            V2_DEFAULT_EXTREME_FEE,
             PERIOD_SECONDS,
             EMA_PERIODS,
             DEADBAND_BPS,

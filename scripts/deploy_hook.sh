@@ -15,11 +15,9 @@ set -euo pipefail
 #
 # Required config keys:
 #   POOL_MANAGER, VOLATILE, STABLE, STABLE_DECIMALS, TICK_SPACING
-#   FLOOR_TIER
-#   FEE_TIERS (comma-separated fee levels in percent, for example 0.009,0.04,0.09)
+#   FLOOR_TIER, CASH_TIER, EXTREME_TIER
 #   PERIOD_SECONDS, EMA_PERIODS, DEADBAND_BPS, LULL_RESET_SECONDS
 #   HOOK_FEE_PERCENT
-#   CASH_TIER, EXTREME_TIER
 #   MIN_CLOSEVOL_TO_CASH_USD6, UP_R_TO_CASH_BPS, CASH_HOLD_PERIODS
 #   MIN_CLOSEVOL_TO_EXTREME_USD6, UP_R_TO_EXTREME_BPS, UP_EXTREME_CONFIRM_PERIODS, EXTREME_HOLD_PERIODS
 #   DOWN_R_FROM_EXTREME_BPS, DOWN_EXTREME_CONFIRM_PERIODS, DOWN_R_FROM_CASH_BPS, DOWN_CASH_CONFIRM_PERIODS
@@ -134,10 +132,9 @@ fi
 # Validate required variables
 required=(
   POOL_MANAGER VOLATILE STABLE STABLE_DECIMALS TICK_SPACING
-  FLOOR_TIER FEE_TIERS
+  FLOOR_TIER CASH_TIER EXTREME_TIER
   PERIOD_SECONDS EMA_PERIODS DEADBAND_BPS LULL_RESET_SECONDS
   HOOK_FEE_PERCENT
-  CASH_TIER EXTREME_TIER
   MIN_CLOSEVOL_TO_CASH_USD6 UP_R_TO_CASH_BPS CASH_HOLD_PERIODS
   MIN_CLOSEVOL_TO_EXTREME_USD6 UP_R_TO_EXTREME_BPS UP_EXTREME_CONFIRM_PERIODS EXTREME_HOLD_PERIODS
   DOWN_R_FROM_EXTREME_BPS DOWN_EXTREME_CONFIRM_PERIODS DOWN_R_FROM_CASH_BPS DOWN_CASH_CONFIRM_PERIODS
@@ -171,115 +168,26 @@ require_uint() {
   fi
 }
 
-# Parse fee tiers from percent CSV into hundredths-of-a-bip values expected by the hook.
-# Example: 0.009% -> 90.
-IFS=',' read -r -a FEE_TIER_PCT_ITEMS <<< "${FEE_TIERS}"
-if (( ${#FEE_TIER_PCT_ITEMS[@]} == 0 )); then
-  echo "ERROR: FEE_TIERS must contain at least one value (for example 0.009,0.04,0.09)." >&2
-  exit 1
-fi
-if (( ${#FEE_TIER_PCT_ITEMS[@]} > 255 )); then
-  echo "ERROR: FEE_TIERS has ${#FEE_TIER_PCT_ITEMS[@]} values; max supported is 255." >&2
-  exit 1
-fi
-
-FEE_TIER_COUNT="${#FEE_TIER_PCT_ITEMS[@]}"
-export FEE_TIER_COUNT
-
-declare -a FEE_TIER_PIPS=()
-prev_tier_pips=-1
-for i in "${!FEE_TIER_PCT_ITEMS[@]}"; do
-  tier_pct="$(printf '%s' "${FEE_TIER_PCT_ITEMS[$i]}" | tr -d '[:space:]')"
-  tier_pips="$(percent_to_pips "${tier_pct}" || true)"
-  if [[ -z "${tier_pips}" ]]; then
-    echo "ERROR: FEE_TIERS item '${FEE_TIER_PCT_ITEMS[$i]}' is invalid. Use decimal percent values like 0.09." >&2
-    exit 1
-  fi
-  if (( prev_tier_pips >= 0 && tier_pips <= prev_tier_pips )); then
-    echo "ERROR: FEE_TIERS must be strictly increasing after conversion to pips." >&2
-    exit 1
-  fi
-  prev_tier_pips="${tier_pips}"
-  FEE_TIER_PIPS[$i]="${tier_pips}"
-
-  tier_var="FEE_TIER_${i}"
-  printf -v "${tier_var}" '%s' "${tier_pips}"
-  export "${tier_var}"
-done
-
-floor_tier_pct="$(printf '%s' "${FLOOR_TIER}" | tr -d '[:space:]')"
-cap_tier_pct="$(printf '%s' "${EXTREME_TIER}" | tr -d '[:space:]')"
-floor_tier_pips="$(percent_to_pips "${floor_tier_pct}" || true)"
-cap_tier_pips="$(percent_to_pips "${cap_tier_pct}" || true)"
-if [[ -z "${floor_tier_pips}" ]]; then
+FLOOR_FEE_PIPS="$(percent_to_pips "$(printf '%s' "${FLOOR_TIER}" | tr -d '[:space:]')" || true)"
+CASH_FEE_PIPS="$(percent_to_pips "$(printf '%s' "${CASH_TIER}" | tr -d '[:space:]')" || true)"
+EXTREME_FEE_PIPS="$(percent_to_pips "$(printf '%s' "${EXTREME_TIER}" | tr -d '[:space:]')" || true)"
+if [[ -z "${FLOOR_FEE_PIPS}" ]]; then
   echo "ERROR: FLOOR_TIER='${FLOOR_TIER}' is invalid. Use decimal percent format like 0.04." >&2
   exit 1
 fi
-if [[ -z "${cap_tier_pips}" ]]; then
-  echo "ERROR: EXTREME_TIER='${EXTREME_TIER}' is invalid. Use decimal percent format like 0.45." >&2
-  exit 1
-fi
-
-FLOOR_IDX=""
-EXTREME_IDX=""
-for i in "${!FEE_TIER_PIPS[@]}"; do
-  if [[ "${FEE_TIER_PIPS[$i]}" == "${floor_tier_pips}" ]]; then
-    FLOOR_IDX="${i}"
-  fi
-  if [[ "${FEE_TIER_PIPS[$i]}" == "${cap_tier_pips}" ]]; then
-    EXTREME_IDX="${i}"
-  fi
-done
-
-if [[ -z "${FLOOR_IDX}" ]]; then
-  echo "ERROR: FLOOR_TIER=${FLOOR_TIER}% is not present in FEE_TIERS='${FEE_TIERS}'." >&2
-  exit 1
-fi
-if [[ -z "${EXTREME_IDX}" ]]; then
-  echo "ERROR: EXTREME_TIER=${EXTREME_TIER}% is not present in FEE_TIERS='${FEE_TIERS}'." >&2
-  exit 1
-fi
-if (( FLOOR_IDX > EXTREME_IDX )); then
-  echo "ERROR: FLOOR_TIER index (${FLOOR_IDX}) must be <= EXTREME_TIER index (${EXTREME_IDX})." >&2
-  exit 1
-fi
-
-export FLOOR_IDX EXTREME_IDX
-
-CASH_TIER_PIPS="$(percent_to_pips "$(printf '%s' "${CASH_TIER}" | tr -d '[:space:]')" || true)"
-EXTREME_TIER_PIPS="$(percent_to_pips "$(printf '%s' "${EXTREME_TIER}" | tr -d '[:space:]')" || true)"
-if [[ -z "${CASH_TIER_PIPS}" ]]; then
+if [[ -z "${CASH_FEE_PIPS}" ]]; then
   echo "ERROR: CASH_TIER='${CASH_TIER}' is invalid. Use decimal percent format like 0.25." >&2
   exit 1
 fi
-if [[ -z "${EXTREME_TIER_PIPS}" ]]; then
+if [[ -z "${EXTREME_FEE_PIPS}" ]]; then
   echo "ERROR: EXTREME_TIER='${EXTREME_TIER}' is invalid. Use decimal percent format like 0.90." >&2
   exit 1
 fi
+if (( FLOOR_FEE_PIPS >= CASH_FEE_PIPS || CASH_FEE_PIPS >= EXTREME_FEE_PIPS )); then
+  echo "ERROR: fee bounds must satisfy FLOOR_TIER < CASH_TIER < EXTREME_TIER." >&2
+  exit 1
+fi
 
-CASH_IDX=""
-EXTREME_IDX=""
-for i in "${!FEE_TIER_PIPS[@]}"; do
-  if [[ "${FEE_TIER_PIPS[$i]}" == "${CASH_TIER_PIPS}" ]]; then
-    CASH_IDX="${i}"
-  fi
-  if [[ "${FEE_TIER_PIPS[$i]}" == "${EXTREME_TIER_PIPS}" ]]; then
-    EXTREME_IDX="${i}"
-  fi
-done
-
-if [[ -z "${CASH_IDX}" ]]; then
-  echo "ERROR: CASH_TIER=${CASH_TIER}% is not present in FEE_TIERS='${FEE_TIERS}'." >&2
-  exit 1
-fi
-if [[ -z "${EXTREME_IDX}" ]]; then
-  echo "ERROR: EXTREME_TIER=${EXTREME_TIER}% is not present in FEE_TIERS='${FEE_TIERS}'." >&2
-  exit 1
-fi
-if (( FLOOR_IDX >= CASH_IDX || CASH_IDX >= EXTREME_IDX )); then
-  echo "ERROR: tier bounds must satisfy FLOOR < CASH < EXTREME (by index in FEE_TIERS)." >&2
-  exit 1
-fi
 for n in \
   MIN_CLOSEVOL_TO_CASH_USD6 \
   UP_R_TO_CASH_BPS \
@@ -298,6 +206,10 @@ for n in \
 done
 if (( EMERGENCY_FLOOR_CLOSEVOL_USD6 == 0 )); then
   echo "ERROR: EMERGENCY_FLOOR_CLOSEVOL_USD6 must be > 0." >&2
+  exit 1
+fi
+if (( DEADBAND_BPS >= DOWN_R_FROM_EXTREME_BPS || DEADBAND_BPS >= DOWN_R_FROM_CASH_BPS )); then
+  echo "ERROR: DEADBAND_BPS must be strictly below both DOWN_R_FROM_EXTREME_BPS and DOWN_R_FROM_CASH_BPS." >&2
   exit 1
 fi
 
@@ -345,17 +257,17 @@ export DEPLOY_JSON_PATH="${OUT_PATH}"
 
 # Pre-encode constructor args in bash to avoid IR stack issues in script-level abi.encode.
 read -r POOL_CURRENCY0 POOL_CURRENCY1 <<< "$(sort_pool_tokens "${VOLATILE}" "${STABLE}")"
-FEE_TIERS_ARG="[$(IFS=,; echo "${FEE_TIER_PIPS[*]}")]"
 CONSTRUCTOR_ARGS_HEX="$(cast abi-encode \
-  "constructor(address,address,address,int24,address,uint8,uint8,uint24[],uint32,uint8,uint16,uint32,address,address,uint16,uint24,uint64,uint16,uint8,uint24,uint64,uint16,uint8,uint8,uint16,uint8,uint16,uint8,uint64,uint8)" \
+  "constructor(address,address,address,int24,address,uint8,uint24,uint24,uint24,uint32,uint8,uint16,uint32,address,address,uint16,uint64,uint16,uint8,uint64,uint16,uint8,uint8,uint16,uint8,uint16,uint8,uint64,uint8)" \
   "${POOL_MANAGER}" \
   "${POOL_CURRENCY0}" \
   "${POOL_CURRENCY1}" \
   "${TICK_SPACING}" \
   "${STABLE}" \
   "${STABLE_DECIMALS}" \
-  "${FLOOR_IDX}" \
-  "${FEE_TIERS_ARG}" \
+  "${FLOOR_FEE_PIPS}" \
+  "${CASH_FEE_PIPS}" \
+  "${EXTREME_FEE_PIPS}" \
   "${PERIOD_SECONDS}" \
   "${EMA_PERIODS}" \
   "${DEADBAND_BPS}" \
@@ -363,11 +275,9 @@ CONSTRUCTOR_ARGS_HEX="$(cast abi-encode \
   "${OWNER}" \
   "${HOOK_FEE_ADDRESS}" \
   "${HOOK_FEE_PERCENT}" \
-  "${CASH_TIER_PIPS}" \
   "${MIN_CLOSEVOL_TO_CASH_USD6}" \
   "${UP_R_TO_CASH_BPS}" \
   "${CASH_HOLD_PERIODS}" \
-  "${EXTREME_TIER_PIPS}" \
   "${MIN_CLOSEVOL_TO_EXTREME_USD6}" \
   "${UP_R_TO_EXTREME_BPS}" \
   "${UP_EXTREME_CONFIRM_PERIODS}" \
@@ -434,10 +344,10 @@ fi
 
 CONTROLLER_PARAMS_TUPLE="(${MIN_CLOSEVOL_TO_CASH_USD6},${UP_R_TO_CASH_BPS},${CASH_HOLD_PERIODS},${MIN_CLOSEVOL_TO_EXTREME_USD6},${UP_R_TO_EXTREME_BPS},${UP_EXTREME_CONFIRM_PERIODS},${EXTREME_HOLD_PERIODS},${DOWN_R_FROM_EXTREME_BPS},${DOWN_EXTREME_CONFIRM_PERIODS},${DOWN_R_FROM_CASH_BPS},${DOWN_CASH_CONFIRM_PERIODS},${EMERGENCY_FLOOR_CLOSEVOL_USD6},${EMERGENCY_CONFIRM_PERIODS})"
 
-echo "==> On-chain config: pause -> tiers+roles -> timing params -> controller params -> hook fee recipient -> hook fee schedule -> unpause"
+echo "==> On-chain config: pause -> regime fees -> timing params -> controller params -> hook fee recipient -> hook fee schedule -> unpause"
 cast send "${HOOK_ADDRESS}" "pause()" --rpc-url "${RPC_URL}" --private-key "${PRIVATE_KEY}" >/dev/null
-cast send "${HOOK_ADDRESS}" "setFeeTiersAndRoles(uint24[],uint8,uint8,uint8)" \
-  "${FEE_TIERS_ARG}" "${FLOOR_IDX}" "${CASH_IDX}" "${EXTREME_IDX}" \
+cast send "${HOOK_ADDRESS}" "setRegimeFees(uint24,uint24,uint24)" \
+  "${FLOOR_FEE_PIPS}" "${CASH_FEE_PIPS}" "${EXTREME_FEE_PIPS}" \
   --rpc-url "${RPC_URL}" --private-key "${PRIVATE_KEY}" >/dev/null
 cast send "${HOOK_ADDRESS}" "setTimingParams(uint32,uint8,uint32,uint16)" \
   "${PERIOD_SECONDS}" "${EMA_PERIODS}" "${LULL_RESET_SECONDS}" "${DEADBAND_BPS}" \

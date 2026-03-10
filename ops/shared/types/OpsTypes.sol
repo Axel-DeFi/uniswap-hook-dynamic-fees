@@ -71,9 +71,9 @@ library OpsTypes {
         uint64 periodStart;
         uint8 feeIdx;
         uint24 currentFeeBips;
-        uint8 floorIdx;
-        uint8 cashIdx;
-        uint8 extremeIdx;
+        uint24 floorFeeBips;
+        uint24 cashFeeBips;
+        uint24 extremeFeeBips;
     }
 
     struct HookValidation {

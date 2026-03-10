@@ -32,7 +32,8 @@ contract RunEmergencyChecksLocal is Script {
 
         OpsTypes.PoolSnapshot memory snapshot = PoolStateLib.snapshotHook(cfg.hookAddress);
         require(!snapshot.paused, "hook must end unpaused");
-        require(snapshot.feeIdx == snapshot.floorIdx, "fee idx must be floor after emergency reset");
+        // Explicit three-regime model guarantees FLOOR=0.
+        require(snapshot.feeIdx == 0, "fee idx must be floor after emergency reset");
 
         LoggingLib.ok("emergency checks complete");
     }

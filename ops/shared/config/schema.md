@@ -26,12 +26,11 @@ All values are loaded from environment variables (defaults + scenario overlay + 
 - `LIQ_RANGE_MAX_USD`
 - `MAX_SWAP_FRACTION_BPS`
 
-## Fee tiers
+## Explicit regime fees
 
-- `FEE_TIERS_PIPS` (comma-separated uint24 list, e.g. `400,2500,9000`)
-- `FLOOR_IDX`
-- `CASH_IDX`
-- `EXTREME_IDX`
+- `FLOOR_FEE_PIPS` (uint24)
+- `CASH_FEE_PIPS` (uint24)
+- `EXTREME_FEE_PIPS` (uint24)
 
 ## Timing / controller
 
@@ -56,6 +55,7 @@ All values are loaded from environment variables (defaults + scenario overlay + 
 
 Controller constraint notes:
 - `EMERGENCY_FLOOR_CLOSEVOL_USD6` must be strictly greater than zero.
+- `DEADBAND_BPS` must be strictly lower than both `DOWN_R_FROM_EXTREME_BPS` and `DOWN_R_FROM_CASH_BPS`.
 
 ## Budget safety keys
 

@@ -26,34 +26,9 @@ abstract contract VolumeDynamicFeeHookV2DeployHelper {
 
     uint16 internal constant V2_INITIAL_HOOK_FEE_PERCENT = 3;
 
-    uint24 internal constant V2_DEFAULT_CASH_TIER = 2_500;
-    uint24 internal constant V2_DEFAULT_EXTREME_TIER = 9_000;
-
-    function _defaultFeeTiersV2() internal pure returns (uint24[] memory tiers) {
-        tiers = new uint24[](3);
-        tiers[0] = 400;
-        tiers[1] = 2500;
-        tiers[2] = 9000;
-    }
-
-    function _resolveCashTier(uint24[] memory feeTiers) internal pure returns (uint24 cashTier) {
-        cashTier = V2_DEFAULT_CASH_TIER;
-        uint256 len = feeTiers.length;
-        for (uint256 i = 0; i < len; ++i) {
-            if (feeTiers[i] == V2_DEFAULT_CASH_TIER) return feeTiers[i];
-        }
-        if (len > 1) return feeTiers[1];
-        if (len == 1) return feeTiers[0];
-    }
-
-    function _resolveExtremeTier(uint24[] memory feeTiers) internal pure returns (uint24 extremeTier) {
-        extremeTier = V2_DEFAULT_EXTREME_TIER;
-        uint256 len = feeTiers.length;
-        for (uint256 i = 0; i < len; ++i) {
-            if (feeTiers[i] == V2_DEFAULT_EXTREME_TIER) return feeTiers[i];
-        }
-        if (len > 0) return feeTiers[len - 1];
-    }
+    uint24 internal constant V2_DEFAULT_FLOOR_FEE = 400;
+    uint24 internal constant V2_DEFAULT_CASH_FEE = 2_500;
+    uint24 internal constant V2_DEFAULT_EXTREME_FEE = 9_000;
 
     function _constructorArgsV2(
         IPoolManager poolManager,
@@ -62,8 +37,9 @@ abstract contract VolumeDynamicFeeHookV2DeployHelper {
         int24 tickSpacing,
         Currency stableCurrency,
         uint8 stableDecimals,
-        uint8 floorIdx,
-        uint24[] memory feeTiers,
+        uint24 floorFee,
+        uint24 cashFee,
+        uint24 extremeFee,
         uint32 periodSeconds,
         uint8 emaPeriods,
         uint16 deadbandBps,
@@ -79,8 +55,9 @@ abstract contract VolumeDynamicFeeHookV2DeployHelper {
             tickSpacing,
             stableCurrency,
             stableDecimals,
-            floorIdx,
-            feeTiers,
+            floorFee,
+            cashFee,
+            extremeFee,
             periodSeconds,
             emaPeriods,
             deadbandBps,
@@ -88,11 +65,9 @@ abstract contract VolumeDynamicFeeHookV2DeployHelper {
             owner,
             hookFeeRecipient,
             hookFeePercent,
-            _resolveCashTier(feeTiers),
             V2_MIN_CLOSEVOL_TO_CASH_USD6,
             V2_UP_R_TO_CASH_BPS,
             V2_CASH_HOLD_PERIODS,
-            _resolveExtremeTier(feeTiers),
             V2_MIN_CLOSEVOL_TO_EXTREME_USD6,
             V2_UP_R_TO_EXTREME_BPS,
             V2_UP_EXTREME_CONFIRM_PERIODS,
@@ -113,8 +88,9 @@ abstract contract VolumeDynamicFeeHookV2DeployHelper {
         int24 tickSpacing,
         Currency stableCurrency,
         uint8 stableDecimals,
-        uint8 floorIdx,
-        uint24[] memory feeTiers,
+        uint24 floorFee,
+        uint24 cashFee,
+        uint24 extremeFee,
         uint32 periodSeconds,
         uint8 emaPeriods,
         uint16 deadbandBps,
@@ -130,8 +106,9 @@ abstract contract VolumeDynamicFeeHookV2DeployHelper {
             tickSpacing,
             stableCurrency,
             stableDecimals,
-            floorIdx,
-            feeTiers,
+            floorFee,
+            cashFee,
+            extremeFee,
             periodSeconds,
             emaPeriods,
             deadbandBps,
@@ -139,11 +116,9 @@ abstract contract VolumeDynamicFeeHookV2DeployHelper {
             owner,
             hookFeeRecipient,
             hookFeePercent,
-            _resolveCashTier(feeTiers),
             V2_MIN_CLOSEVOL_TO_CASH_USD6,
             V2_UP_R_TO_CASH_BPS,
             V2_CASH_HOLD_PERIODS,
-            _resolveExtremeTier(feeTiers),
             V2_MIN_CLOSEVOL_TO_EXTREME_USD6,
             V2_UP_R_TO_EXTREME_BPS,
             V2_UP_EXTREME_CONFIRM_PERIODS,
@@ -165,8 +140,9 @@ abstract contract VolumeDynamicFeeHookV2DeployHelper {
         int24 tickSpacing,
         Currency stableCurrency,
         uint8 stableDecimals,
-        uint8 floorIdx,
-        uint24[] memory feeTiers,
+        uint24 floorFee,
+        uint24 cashFee,
+        uint24 extremeFee,
         uint32 periodSeconds,
         uint8 emaPeriods,
         uint16 deadbandBps,
@@ -182,8 +158,9 @@ abstract contract VolumeDynamicFeeHookV2DeployHelper {
             tickSpacing,
             stableCurrency,
             stableDecimals,
-            floorIdx,
-            feeTiers,
+            floorFee,
+            cashFee,
+            extremeFee,
             periodSeconds,
             emaPeriods,
             deadbandBps,
@@ -191,11 +168,9 @@ abstract contract VolumeDynamicFeeHookV2DeployHelper {
             owner,
             hookFeeRecipient,
             hookFeePercent,
-            _resolveCashTier(feeTiers),
             V2_MIN_CLOSEVOL_TO_CASH_USD6,
             V2_UP_R_TO_CASH_BPS,
             V2_CASH_HOLD_PERIODS,
-            _resolveExtremeTier(feeTiers),
             V2_MIN_CLOSEVOL_TO_EXTREME_USD6,
             V2_UP_R_TO_EXTREME_BPS,
             V2_UP_EXTREME_CONFIRM_PERIODS,

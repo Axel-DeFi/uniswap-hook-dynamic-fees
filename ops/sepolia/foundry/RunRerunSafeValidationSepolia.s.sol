@@ -75,7 +75,8 @@ contract RunRerunSafeValidationSepolia is Script {
         vm.stopBroadcast();
 
         OpsTypes.PoolSnapshot memory snapshot = PoolStateLib.snapshotHook(cfg.hookAddress);
-        require(snapshot.feeIdx >= snapshot.floorIdx && snapshot.feeIdx <= snapshot.extremeIdx, "fee out of bounds");
+        // Explicit three-regime model guarantees feeIdx in [0..2].
+        require(snapshot.feeIdx <= 2, "fee out of bounds");
 
         if (executed == 0) {
             LoggingLib.ok("rerun-safe validation skipped (price at boundary / no viable swap side)");

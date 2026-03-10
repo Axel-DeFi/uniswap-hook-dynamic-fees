@@ -11,6 +11,7 @@ via_ir = true
 evm_version = "cancun"
 bytecode_hash = "ipfs"
 gas_reports = ["VolumeDynamicFeeHook"]
+offline = true
 
 # Store forge script broadcast artifacts under scripts/out as well.
 broadcast = "scripts/out/broadcast"
@@ -39,6 +40,7 @@ via_ir = true
 evm_version = "cancun"
 bytecode_hash = "ipfs"
 gas_reports = ["VolumeDynamicFeeHook"]
+offline = true
 broadcast = "scripts/out/broadcast"
 auto_detect_remappings = false
 fs_permissions = [
@@ -53,3 +55,6 @@ runs = 5000
 
 [fmt]
 line_length = 110
+
+[lint]
+lint_on_build = false

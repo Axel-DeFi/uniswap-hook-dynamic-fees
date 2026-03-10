@@ -17,7 +17,7 @@ Deployment/mining must include:
 - `OWNER`: admin role for hook configuration and emergency actions.
 - `HOOK_FEE_ADDRESS`: claim recipient for accrued HookFees.
 - `HOOK_FEE_PERCENT`: HookFee percent (0..10, timelocked in contract).
-- `FEE_TIERS`, `FLOOR_TIER`, `CASH_TIER`, `EXTREME_TIER`: LP fee tier model.
+- `FLOOR_TIER`, `CASH_TIER`, `EXTREME_TIER`: explicit LP fee regime model.
 - `STABLE`, `STABLE_DECIMALS`: telemetry quote token and scaling mode.
 
 ## Main flows

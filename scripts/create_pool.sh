@@ -15,7 +15,7 @@ set -euo pipefail
 #
 # Requires in config:
 #   POOL_MANAGER, VOLATILE, STABLE, STABLE_DECIMALS, TICK_SPACING
-#   For --chain optimism, v2 strategy keys must also be present (CASH_TIER/EXTREME_TIER and thresholds/holds).
+#   For --chain optimism, explicit regime fee keys must also be present (FLOOR_TIER/CASH_TIER/EXTREME_TIER and thresholds/holds).
 #
 # INIT_PRICE_USD:
 #   - interpreted as STABLE per 1 VOLATILE token
@@ -118,10 +118,9 @@ done
 
 if [[ "$CHAIN" == "optimism" ]]; then
   required_v2=(
-    FLOOR_TIER EXTREME_TIER FEE_TIERS
+    FLOOR_TIER CASH_TIER EXTREME_TIER
     PERIOD_SECONDS EMA_PERIODS LULL_RESET_SECONDS DEADBAND_BPS
     HOOK_FEE_PERCENT
-    CASH_TIER EXTREME_TIER
     MIN_CLOSEVOL_TO_CASH_USD6 UP_R_TO_CASH_BPS CASH_HOLD_PERIODS
     MIN_CLOSEVOL_TO_EXTREME_USD6 UP_R_TO_EXTREME_BPS UP_EXTREME_CONFIRM_PERIODS EXTREME_HOLD_PERIODS
     DOWN_R_FROM_EXTREME_BPS DOWN_EXTREME_CONFIRM_PERIODS DOWN_R_FROM_CASH_BPS DOWN_CASH_CONFIRM_PERIODS
@@ -237,7 +236,7 @@ if [[ -n "${FLOOR_TIER:-}" ]]; then
       echo "ERROR: initial fee mismatch: currentFeeBips=${current_fee}, expected floor=${floor_tier_pips}" >&2
       exit 1
     else
-      echo "==> Verified initial fee is floor tier (${current_fee})"
+      echo "==> Verified initial fee is floor regime fee (${current_fee})"
     fi
   fi
 fi

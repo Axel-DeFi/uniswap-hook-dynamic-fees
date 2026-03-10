@@ -7,7 +7,7 @@ Contract NatSpec in `src/VolumeDynamicFeeHook.sol` is primary. `docs/SPEC.md` mi
 ## Can I change parameters without redeploy?
 
 Yes, Owner can update runtime config onchain:
-- `setFeeTiersAndRoles(...)` (paused only)
+- `setRegimeFees(...)` (paused only)
 - `setControllerParams(...)` (paused only)
 - `setTimingParams(...)` (paused only)
 - `setHookFeeRecipient(...)`
@@ -39,7 +39,7 @@ Timelock transparency is intentional; the main exposed effect is HookFee timing.
 `pause()` freezes controller evolution but does not reset to floor by default.
 It preserves fee regime and EMA, clears only open period volume, and restarts period clock.
 It does not stop swaps and does not stop HookFee accrual.
-The active LP fee tier stays frozen until `unpause()` or explicit paused-mode emergency reset.
+The active LP fee regime stays frozen until `unpause()` or explicit paused-mode emergency reset.
 
 ## How do hold periods work?
 
@@ -106,10 +106,10 @@ No. It is approximate telemetry for regime analytics.
 No. Residual manipulation risk remains (especially competitor-funded distortion / fee-poisoning in low-cost, adversarial routing environments).
 Operational mitigations are conservative defaults plus monitoring of `PeriodClosed` and alerting on repeated abnormal regime escalations.
 
-## Does `setFeeTiersAndRoles(...)` reset EMA?
+## Does `setRegimeFees(...)` reset EMA?
 
-No. EMA preservation is intentional for minor fee-ladder maintenance.
-For material fee-ladder/controller changes, keep paused, apply maintenance updates, run explicit emergency reset-to-floor, then unpause.
+No. `setRegimeFees(...)` preserves EMA intentionally.
+While paused, it resets hold/streak counters, starts a fresh open period, and keeps the current regime id.
 
 ## How does EMA bootstrap work after init/reset?
 

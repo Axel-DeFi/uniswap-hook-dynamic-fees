@@ -75,17 +75,12 @@ TOKEN0=""
 TOKEN1=""
 STABLE_IS_TOKEN0="0"
 
-FLOOR_IDX=""
-CASH_IDX=""
-EXTREME_IDX=""
-EXTREME_IDX=""
-FEE_TIERS_BY_IDX=()
-CFG_FEE_TIER_PIPS=()
-CFG_FEE_TIERS_ARG=""
-CFG_FLOOR_IDX=""
-CFG_CASH_IDX=""
-CFG_EXTREME_IDX=""
-CFG_EXTREME_IDX=""
+REGIME_FLOOR="0"
+REGIME_CASH="1"
+REGIME_EXTREME="2"
+FLOOR_FEE_PIPS=""
+CASH_FEE_PIPS=""
+EXTREME_FEE_PIPS=""
 CFG_HOOK_FEE_PERCENT=""
 
 CP_MIN_CLOSEVOL_TO_CASH_USD6=""
@@ -184,61 +179,22 @@ hook_fee_percent_from_percent() {
     }' 2>/dev/null
 }
 
-config_tier_index_by_pips() {
-  local target="$1"
-  local idx count
-  count="${#CFG_FEE_TIER_PIPS[@]}"
-  for ((idx = 0; idx < count; idx++)); do
-    if [[ "${CFG_FEE_TIER_PIPS[${idx}]}" == "${target}" ]]; then
-      printf '%s\n' "${idx}"
-      return 0
-    fi
-  done
-  return 1
-}
-
 build_config_runtime_args() {
-  local floor_pips cash_pips extreme_pips item pips prev
-  local -a raw_items
-
-  CFG_FEE_TIER_PIPS=()
-  CFG_FEE_TIERS_ARG=""
-  CFG_FLOOR_IDX=""
-  CFG_CASH_IDX=""
-  CFG_EXTREME_IDX=""
+  local floor_pips cash_pips extreme_pips
   CFG_HOOK_FEE_PERCENT=""
-
-  IFS=',' read -r -a raw_items <<<"${FEE_TIERS:-}"
-  if (( ${#raw_items[@]} == 0 )); then
-    return 1
-  fi
-
-  prev="-1"
-  for item in "${raw_items[@]}"; do
-    item="$(printf '%s' "${item}" | tr -d '[:space:]')"
-    pips="$(percent_to_pips "${item}" || true)"
-    [[ -n "${pips}" ]] || return 1
-    if (( prev >= 0 && pips <= prev )); then
-      return 1
-    fi
-    prev="${pips}"
-    CFG_FEE_TIER_PIPS+=("${pips}")
-  done
 
   floor_pips="$(percent_to_pips "$(printf '%s' "${FLOOR_TIER:-}" | tr -d '[:space:]')" || true)"
   cash_pips="$(percent_to_pips "$(printf '%s' "${CASH_TIER:-}" | tr -d '[:space:]')" || true)"
   extreme_pips="$(percent_to_pips "$(printf '%s' "${EXTREME_TIER:-}" | tr -d '[:space:]')" || true)"
   [[ -n "${floor_pips}" && -n "${cash_pips}" && -n "${extreme_pips}" ]] || return 1
 
-  CFG_FLOOR_IDX="$(config_tier_index_by_pips "${floor_pips}" || true)"
-  CFG_CASH_IDX="$(config_tier_index_by_pips "${cash_pips}" || true)"
-  CFG_EXTREME_IDX="$(config_tier_index_by_pips "${extreme_pips}" || true)"
-  [[ -n "${CFG_FLOOR_IDX}" && -n "${CFG_CASH_IDX}" && -n "${CFG_EXTREME_IDX}" ]] || return 1
-  if (( CFG_FLOOR_IDX >= CFG_CASH_IDX || CFG_CASH_IDX >= CFG_EXTREME_IDX )); then
+  if (( floor_pips >= cash_pips || cash_pips >= extreme_pips )); then
     return 1
   fi
 
-  CFG_FEE_TIERS_ARG="[$(IFS=,; echo "${CFG_FEE_TIER_PIPS[*]}")]"
+  FLOOR_FEE_PIPS="${floor_pips}"
+  CASH_FEE_PIPS="${cash_pips}"
+  EXTREME_FEE_PIPS="${extreme_pips}"
 
   CFG_HOOK_FEE_PERCENT="$(hook_fee_percent_from_percent "$(printf '%s' "${HOOK_FEE_PERCENT:-}" | tr -d '[:space:]')" || true)"
   [[ -n "${CFG_HOOK_FEE_PERCENT}" ]] || return 1
@@ -570,8 +526,9 @@ init_coverage_catalogs() {
   exclude_reason "REASON_ZERO_EMA_DECAY" "legacy v1 reason constant; not emitted by _computeNextFeeIdxV2"
 
   # Constructor-only path cannot be reached from mutable runtime admin surface.
-  exclude_error "TierNotFound" "constructor-only validation path; deploy script pre-validates tiers"
   exclude_error "EthTransferFailed" "requires deliberately reverting ETH receiver contract; excluded from preflight runtime scope"
+  exclude_error "InvalidStableDecimals" "constructor-only validation; not reachable from mutable runtime preflight flow"
+  exclude_error "InvalidUnlockData" "requires malformed PoolManager unlock payload; excluded from standard preflight runtime path"
 }
 
 snapshot_enabled() {
@@ -658,7 +615,7 @@ load_config() {
   RPC_URL="${ANVIL_RPC_URL}"
   export RPC_URL
 
-  build_config_runtime_args || die "Invalid local config tiers/indices/hook fee values in ${CONFIG_PATH}"
+  build_config_runtime_args || die "Invalid local config regime fee or hook fee values in ${CONFIG_PATH}"
 }
 
 wait_for_rpc() {
@@ -914,8 +871,8 @@ ensure_hook_runtime_configured() {
   fi
 
   cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" \
-    "setFeeTiersAndRoles(uint24[],uint8,uint8,uint8)" \
-    "${CFG_FEE_TIERS_ARG}" "${CFG_FLOOR_IDX}" "${CFG_CASH_IDX}" "${CFG_EXTREME_IDX}" >/dev/null || return 1
+    "setRegimeFees(uint24,uint24,uint24)" \
+    "${FLOOR_FEE_PIPS}" "${CASH_FEE_PIPS}" "${EXTREME_FEE_PIPS}" >/dev/null || return 1
 
   cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" \
     "setTimingParams(uint32,uint8,uint32,uint16)" \
@@ -1016,31 +973,24 @@ setup_local_environment() {
   bootstrap_liquidity
 }
 
-load_fee_tiers() {
-  local count i tier
-  FEE_TIERS_BY_IDX=()
-
-  count="$(cast_call_single "${HOOK_ADDRESS}" "feeTierCount()(uint16)" || true)"
-  [[ "${count}" =~ ^[0-9]+$ ]] || return 1
-  (( count > 0 )) || return 1
-
-  for i in $(seq 0 $((count - 1))); do
-    tier="$(cast_call_single "${HOOK_ADDRESS}" "feeTiers(uint256)(uint24)" "${i}" || true)"
-    [[ "${tier}" =~ ^[0-9]+$ ]] || return 1
-    FEE_TIERS_BY_IDX+=("${tier}")
-  done
-
-  FLOOR_IDX="$(cast_call_single "${HOOK_ADDRESS}" "floorIdx()(uint8)" || true)"
-  CASH_IDX="$(cast_call_single "${HOOK_ADDRESS}" "cashIdx()(uint8)" || true)"
-  EXTREME_IDX="$(cast_call_single "${HOOK_ADDRESS}" "extremeIdx()(uint8)" || true)"
-  EXTREME_IDX="$(cast_call_single "${HOOK_ADDRESS}" "extremeIdx()(uint8)" || true)"
-
-  [[ "${FLOOR_IDX}" =~ ^[0-9]+$ && "${CASH_IDX}" =~ ^[0-9]+$ && "${EXTREME_IDX}" =~ ^[0-9]+$ && "${EXTREME_IDX}" =~ ^[0-9]+$ ]]
+load_regime_fees() {
+  FLOOR_FEE_PIPS="$(cast_call_single "${HOOK_ADDRESS}" "floorFee()(uint24)" || true)"
+  CASH_FEE_PIPS="$(cast_call_single "${HOOK_ADDRESS}" "cashFee()(uint24)" || true)"
+  EXTREME_FEE_PIPS="$(cast_call_single "${HOOK_ADDRESS}" "extremeFee()(uint24)" || true)"
+  [[ "${FLOOR_FEE_PIPS}" =~ ^[0-9]+$ ]] || return 1
+  [[ "${CASH_FEE_PIPS}" =~ ^[0-9]+$ ]] || return 1
+  [[ "${EXTREME_FEE_PIPS}" =~ ^[0-9]+$ ]] || return 1
+  (( FLOOR_FEE_PIPS > 0 && FLOOR_FEE_PIPS < CASH_FEE_PIPS && CASH_FEE_PIPS < EXTREME_FEE_PIPS ))
 }
 
-tier_by_idx() {
-  local idx="$1"
-  printf '%s\n' "${FEE_TIERS_BY_IDX[${idx}]}"
+regime_fee_by_id() {
+  local id="$1"
+  case "${id}" in
+    0) printf '%s\n' "${FLOOR_FEE_PIPS}" ;;
+    1) printf '%s\n' "${CASH_FEE_PIPS}" ;;
+    2) printf '%s\n' "${EXTREME_FEE_PIPS}" ;;
+    *) return 1 ;;
+  esac
 }
 
 state_debug_json() {
@@ -1144,6 +1094,23 @@ set_controller_params() {
     cover_function "unpause()"
     cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" "unpause()" >/dev/null || return 1
   fi
+  return 0
+}
+
+set_min_counted_swap_usd6_and_apply() {
+  local new_value="$1"
+  local seed_amount="${2:-1000000}"
+  local applied
+
+  cover_function "scheduleMinCountedSwapUsd6Change(uint64)"
+  cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" \
+    "scheduleMinCountedSwapUsd6Change(uint64)" \
+    "${new_value}" >/dev/null || return 1
+
+  close_period_with_seed "${seed_amount}" >/dev/null || return 1
+
+  applied="$(cast_call_single "${HOOK_ADDRESS}" "minCountedSwapUsd6()(uint64)" || true)"
+  assert_eq "minCountedSwapUsd6 applied" "${applied}" "${new_value}" || return 1
   return 0
 }
 
@@ -1540,8 +1507,8 @@ run_test_case() {
 test_t00_smoke() {
   local floor_fee current_fee
 
-  load_fee_tiers || return 1
-  floor_fee="$(tier_by_idx "${FLOOR_IDX}")"
+  load_regime_fees || return 1
+  floor_fee="$(regime_fee_by_id "${REGIME_FLOOR}")"
 
   cover_function "currentFeeBips()"
   current_fee="$(cast_call_single "${HOOK_ADDRESS}" "currentFeeBips()(uint24)")"
@@ -1573,17 +1540,6 @@ test_t01_abi_view_pure_sweep() {
     args_part="${sig#*(}"
     args_part="${args_part%)}"
 
-    if [[ "${sig}" == "feeTiers(uint256)" ]]; then
-      cover_function "${sig}"
-      cast_call_single "${HOOK_ADDRESS}" "feeTiers(uint256)(uint24)" 0 >/dev/null || return 1
-
-      cover_function "${sig}"
-      expect_revert_custom "T01 feeTiers invalid index" \
-        "cast call --rpc-url \"${RPC_URL}\" \"${HOOK_ADDRESS}\" \"feeTiers(uint256)(uint24)\" 255" \
-        "InvalidFeeIndex" || return 1
-      continue
-    fi
-
     if [[ -z "${args_part}" ]]; then
       cover_function "${sig}"
       cast_call_retry_raw "${HOOK_ADDRESS}" "${sig}" >/dev/null || return 1
@@ -1606,27 +1562,27 @@ test_t01_abi_view_pure_sweep() {
   sync_runtime_config
 
   tc_checkpoint "abi_view_sweep_done" || return 1
-  TC_REASON="Покрыты все view/pure функции ABI; проверены валидный и невалидный индексы"
+  TC_REASON="Покрыты все view/pure функции ABI explicit three-regime модели"
   return 0
 }
 
 test_t02_access_control_matrix() {
-  local tiers_arg timing_period timing_ema timing_lull timing_deadband ctrl_tuple
+  local timing_period timing_ema timing_lull timing_deadband ctrl_tuple new_owner
 
   ensure_unpaused || return 1
-  load_fee_tiers || return 1
+  load_regime_fees || return 1
   load_controller_params || return 1
 
-  tiers_arg="[$(IFS=,; echo "${FEE_TIERS_BY_IDX[*]}")]"
   timing_period="$(cast_call_single "${HOOK_ADDRESS}" "periodSeconds()(uint32)")"
   timing_ema="$(cast_call_single "${HOOK_ADDRESS}" "emaPeriods()(uint8)")"
   timing_lull="$(cast_call_single "${HOOK_ADDRESS}" "lullResetSeconds()(uint32)")"
   timing_deadband="$(cast_call_single "${HOOK_ADDRESS}" "deadbandBps()(uint16)")"
   ctrl_tuple="$(controller_tuple)"
+  new_owner="${ATTACKER_ADDR}"
 
-  cover_function "setFeeTiersAndRoles(uint24[],uint8,uint8,uint8)"
-  expect_revert_custom "T02 attacker setFeeTiersAndRoles" \
-    "cast call --rpc-url \"${RPC_URL}\" --from \"${ATTACKER_ADDR}\" \"${HOOK_ADDRESS}\" \"setFeeTiersAndRoles(uint24[],uint8,uint8,uint8)\" \"${tiers_arg}\" \"${FLOOR_IDX}\" \"${CASH_IDX}\" \"${EXTREME_IDX}\"" \
+  cover_function "setRegimeFees(uint24,uint24,uint24)"
+  expect_revert_custom "T02 attacker setRegimeFees" \
+    "cast call --rpc-url \"${RPC_URL}\" --from \"${ATTACKER_ADDR}\" \"${HOOK_ADDRESS}\" \"setRegimeFees(uint24,uint24,uint24)\" \"${FLOOR_FEE_PIPS}\" \"${CASH_FEE_PIPS}\" \"${EXTREME_FEE_PIPS}\"" \
     "NotOwner" || return 1
 
   cover_function "setTimingParams(uint32,uint8,uint32,uint16)"
@@ -1659,6 +1615,31 @@ test_t02_access_control_matrix() {
     "cast call --rpc-url \"${RPC_URL}\" --from \"${ATTACKER_ADDR}\" \"${HOOK_ADDRESS}\" \"pause()\"" \
     "NotOwner" || return 1
 
+  cover_function "proposeNewOwner(address)"
+  expect_revert_custom "T02 attacker proposeNewOwner" \
+    "cast call --rpc-url \"${RPC_URL}\" --from \"${ATTACKER_ADDR}\" \"${HOOK_ADDRESS}\" \"proposeNewOwner(address)\" \"${ATTACKER_ADDR}\"" \
+    "NotOwner" || return 1
+
+  cover_function "cancelOwnerTransfer()"
+  expect_revert_custom "T02 attacker cancelOwnerTransfer" \
+    "cast call --rpc-url \"${RPC_URL}\" --from \"${ATTACKER_ADDR}\" \"${HOOK_ADDRESS}\" \"cancelOwnerTransfer()\"" \
+    "NotOwner" || return 1
+
+  cover_function "scheduleMinCountedSwapUsd6Change(uint64)"
+  expect_revert_custom "T02 attacker scheduleMinCountedSwapUsd6Change" \
+    "cast call --rpc-url \"${RPC_URL}\" --from \"${ATTACKER_ADDR}\" \"${HOOK_ADDRESS}\" \"scheduleMinCountedSwapUsd6Change(uint64)\" 1000000" \
+    "NotOwner" || return 1
+
+  cover_function "cancelMinCountedSwapUsd6Change()"
+  expect_revert_custom "T02 attacker cancelMinCountedSwapUsd6Change" \
+    "cast call --rpc-url \"${RPC_URL}\" --from \"${ATTACKER_ADDR}\" \"${HOOK_ADDRESS}\" \"cancelMinCountedSwapUsd6Change()\"" \
+    "NotOwner" || return 1
+
+  cover_function "acceptOwner()"
+  expect_revert_custom "T02 attacker acceptOwner without pending" \
+    "cast call --rpc-url \"${RPC_URL}\" --from \"${ATTACKER_ADDR}\" \"${HOOK_ADDRESS}\" \"acceptOwner()\"" \
+    "NotPendingOwner" || return 1
+
   cover_function "pause()"
   cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" "pause()" >/dev/null || return 1
   cover_function "unpause()"
@@ -1667,10 +1648,10 @@ test_t02_access_control_matrix() {
   cover_function "pause()"
   cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" "pause()" >/dev/null || return 1
 
-  cover_function "setFeeTiersAndRoles(uint24[],uint8,uint8,uint8)"
+  cover_function "setRegimeFees(uint24,uint24,uint24)"
   cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" \
-    "setFeeTiersAndRoles(uint24[],uint8,uint8,uint8)" \
-    "${tiers_arg}" "${FLOOR_IDX}" "${CASH_IDX}" "${EXTREME_IDX}" >/dev/null || return 1
+    "setRegimeFees(uint24,uint24,uint24)" \
+    "${FLOOR_FEE_PIPS}" "${CASH_FEE_PIPS}" "${EXTREME_FEE_PIPS}" >/dev/null || return 1
 
   cover_function "setTimingParams(uint32,uint8,uint32,uint16)"
   cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" \
@@ -1682,11 +1663,37 @@ test_t02_access_control_matrix() {
   cover_function "scheduleHookFeePercentChange(uint16)"
   cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" "scheduleHookFeePercentChange(uint16)" 10 >/dev/null || return 1
 
-  cover_function "scheduleHookFeePercentChange(uint16)"
+  cover_function "cancelHookFeePercentChange()"
   cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" "cancelHookFeePercentChange()" >/dev/null || return 1
 
   cover_function "setHookFeeRecipient(address)"
   cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" "setHookFeeRecipient(address)" "${OWNER_ADDR}" >/dev/null || return 1
+
+  cover_function "scheduleMinCountedSwapUsd6Change(uint64)"
+  cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" "scheduleMinCountedSwapUsd6Change(uint64)" 1500000 >/dev/null || return 1
+  cover_function "cancelMinCountedSwapUsd6Change()"
+  cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" "cancelMinCountedSwapUsd6Change()" >/dev/null || return 1
+
+  cover_function "proposeNewOwner(address)"
+  expect_revert_custom "T02 owner propose zero owner" \
+    "cast call --rpc-url \"${RPC_URL}\" --from \"${OWNER_ADDR}\" \"${HOOK_ADDRESS}\" \"proposeNewOwner(address)\" 0x0000000000000000000000000000000000000000" \
+    "InvalidOwner" || return 1
+
+  cover_function "cancelOwnerTransfer()"
+  expect_revert_custom "T02 owner cancelOwnerTransfer without pending" \
+    "cast call --rpc-url \"${RPC_URL}\" --from \"${OWNER_ADDR}\" \"${HOOK_ADDRESS}\" \"cancelOwnerTransfer()\"" \
+    "NoPendingOwnerTransfer" || return 1
+
+  cover_function "proposeNewOwner(address)"
+  cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" "proposeNewOwner(address)" "${new_owner}" >/dev/null || return 1
+
+  cover_function "proposeNewOwner(address)"
+  expect_revert_custom "T02 owner propose while pending" \
+    "cast call --rpc-url \"${RPC_URL}\" --from \"${OWNER_ADDR}\" \"${HOOK_ADDRESS}\" \"proposeNewOwner(address)\" \"${VOLATILE}\"" \
+    "PendingOwnerExists" || return 1
+
+  cover_function "cancelOwnerTransfer()"
+  cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" "cancelOwnerTransfer()" >/dev/null || return 1
 
   cover_function "unpause()"
   cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" "unpause()" >/dev/null || return 1
@@ -1697,14 +1704,14 @@ test_t02_access_control_matrix() {
 }
 
 test_t03_pause_gating_cold_updates() {
-  local tiers_arg floor_fee now_ts state_json period ema lull deadband
+  local floor_fee now_ts state_json period ema lull deadband
   local fee_idx hold ups downs ems period_start ema_vol
+  local before_fee_idx before_hold before_ups before_downs before_ems before_ema_vol
 
   ensure_unpaused || return 1
-  load_fee_tiers || return 1
+  load_regime_fees || return 1
 
-  tiers_arg="[$(IFS=,; echo "${FEE_TIERS_BY_IDX[*]}")]"
-  floor_fee="$(tier_by_idx "${FLOOR_IDX}")"
+  floor_fee="$(regime_fee_by_id "${REGIME_FLOOR}")"
   period="$(cast_call_single "${HOOK_ADDRESS}" "periodSeconds()(uint32)")"
   ema="$(cast_call_single "${HOOK_ADDRESS}" "emaPeriods()(uint8)")"
   lull="$(cast_call_single "${HOOK_ADDRESS}" "lullResetSeconds()(uint32)")"
@@ -1712,19 +1719,27 @@ test_t03_pause_gating_cold_updates() {
 
   tc_checkpoint "before_pause" || return 1
 
-  cover_function "setFeeTiersAndRoles(uint24[],uint8,uint8,uint8)"
-  expect_revert_custom "T03 setFeeTiersAndRoles requires paused" \
-    "cast call --rpc-url \"${RPC_URL}\" --from \"${OWNER_ADDR}\" \"${HOOK_ADDRESS}\" \"setFeeTiersAndRoles(uint24[],uint8,uint8,uint8)\" \"${tiers_arg}\" \"${FLOOR_IDX}\" \"${CASH_IDX}\" \"${EXTREME_IDX}\"" \
+  cover_function "setRegimeFees(uint24,uint24,uint24)"
+  expect_revert_custom "T03 setRegimeFees requires paused" \
+    "cast call --rpc-url \"${RPC_URL}\" --from \"${OWNER_ADDR}\" \"${HOOK_ADDRESS}\" \"setRegimeFees(uint24,uint24,uint24)\" \"${FLOOR_FEE_PIPS}\" \"${CASH_FEE_PIPS}\" \"${EXTREME_FEE_PIPS}\"" \
     "RequiresPaused" || return 1
 
   cover_function "pause()"
   cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" "pause()" >/dev/null || return 1
   tc_checkpoint "after_pause" || return 1
 
-  cover_function "setFeeTiersAndRoles(uint24[],uint8,uint8,uint8)"
+  state_json="$(state_debug_json)"
+  before_fee_idx="$(jq -r '.[0]' <<<"${state_json}")"
+  before_hold="$(jq -r '.[1]' <<<"${state_json}")"
+  before_ups="$(jq -r '.[2]' <<<"${state_json}")"
+  before_downs="$(jq -r '.[3]' <<<"${state_json}")"
+  before_ems="$(jq -r '.[4]' <<<"${state_json}")"
+  before_ema_vol="$(jq -r '.[7]' <<<"${state_json}")"
+
+  cover_function "setRegimeFees(uint24,uint24,uint24)"
   cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" \
-    "setFeeTiersAndRoles(uint24[],uint8,uint8,uint8)" \
-    "${tiers_arg}" "${FLOOR_IDX}" "${CASH_IDX}" "${EXTREME_IDX}" >/dev/null || return 1
+    "setRegimeFees(uint24,uint24,uint24)" \
+    "${FLOOR_FEE_PIPS}" "${CASH_FEE_PIPS}" "${EXTREME_FEE_PIPS}" >/dev/null || return 1
 
   now_ts="$(block_timestamp)"
   state_json="$(state_debug_json)"
@@ -1736,17 +1751,17 @@ test_t03_pause_gating_cold_updates() {
   period_start="$(jq -r '.[5]' <<<"${state_json}")"
   ema_vol="$(jq -r '.[7]' <<<"${state_json}")"
 
-  assert_eq "T03 reset feeIdx" "${fee_idx}" "${FLOOR_IDX}" || return 1
+  assert_eq "T03 keep feeIdx" "${fee_idx}" "${before_fee_idx}" || return 1
   assert_eq "T03 reset hold" "${hold}" "0" || return 1
   assert_eq "T03 reset up streak" "${ups}" "0" || return 1
   assert_eq "T03 reset down streak" "${downs}" "0" || return 1
   assert_eq "T03 reset emergency streak" "${ems}" "0" || return 1
-  assert_eq "T03 reset ema" "${ema_vol}" "0" || return 1
+  assert_eq "T03 preserve ema" "${ema_vol}" "${before_ema_vol}" || return 1
   if (( period_start > now_ts + 2 || period_start + 2 < now_ts )); then
-    set_case_fail "T03 periodStart mismatch after setFeeTiersAndRoles update"
+    set_case_fail "T03 periodStart mismatch after setRegimeFees update"
     return 1
   fi
-  tc_checkpoint "after_setFeeTiersAndRoles_expect_reset_floor" "${floor_fee}" || return 1
+  tc_checkpoint "after_setRegimeFees" || return 1
 
   cover_function "unpause()"
   cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" "unpause()" >/dev/null || return 1
@@ -1774,18 +1789,18 @@ test_t03_pause_gating_cold_updates() {
   period_start="$(jq -r '.[5]' <<<"${state_json}")"
   ema_vol="$(jq -r '.[7]' <<<"${state_json}")"
 
-  assert_eq "T03 timing reset feeIdx" "${fee_idx}" "${FLOOR_IDX}" || return 1
-  assert_eq "T03 timing reset hold" "${hold}" "0" || return 1
-  assert_eq "T03 timing reset up streak" "${ups}" "0" || return 1
-  assert_eq "T03 timing reset down streak" "${downs}" "0" || return 1
-  assert_eq "T03 timing reset emergency streak" "${ems}" "0" || return 1
-  assert_eq "T03 timing reset ema" "${ema_vol}" "0" || return 1
+  assert_eq "T03 timing keeps feeIdx" "${fee_idx}" "${before_fee_idx}" || return 1
+  assert_eq "T03 timing keeps hold" "${hold}" "0" || return 1
+  assert_eq "T03 timing keeps up streak" "${ups}" "0" || return 1
+  assert_eq "T03 timing keeps down streak" "${downs}" "0" || return 1
+  assert_eq "T03 timing keeps emergency streak" "${ems}" "0" || return 1
+  assert_eq "T03 timing keeps ema" "${ema_vol}" "${before_ema_vol}" || return 1
   if (( period_start > now_ts + 2 || period_start + 2 < now_ts )); then
     set_case_fail "T03 periodStart mismatch after setTimingParams reset"
     return 1
   fi
 
-  tc_checkpoint "after_setTimingParams_expect_reset_floor" "${floor_fee}" || return 1
+  tc_checkpoint "after_setTimingParams" || return 1
 
   cover_function "unpause()"
   cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" "unpause()" >/dev/null || return 1
@@ -1795,54 +1810,46 @@ test_t03_pause_gating_cold_updates() {
   return 0
 }
 
-test_t04_invalid_tiers_roles() {
-  local tiers_arg before_count before_floor before_cash before_extreme
+test_t04_invalid_regime_fees() {
+  local before_floor_fee before_cash_fee before_extreme_fee
 
-  load_fee_tiers || return 1
-  tiers_arg="[$(IFS=,; echo "${FEE_TIERS_BY_IDX[*]}")]"
-  before_count="$(cast_call_single "${HOOK_ADDRESS}" "feeTierCount()(uint16)")"
-  before_floor="${FLOOR_IDX}"
-  before_cash="${CASH_IDX}"
-  before_extreme="${EXTREME_IDX}"
+  load_regime_fees || return 1
+  before_floor_fee="${FLOOR_FEE_PIPS}"
+  before_cash_fee="${CASH_FEE_PIPS}"
+  before_extreme_fee="${EXTREME_FEE_PIPS}"
 
   cover_function "pause()"
   cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" "pause()" >/dev/null || return 1
 
-  cover_function "setFeeTiersAndRoles(uint24[],uint8,uint8,uint8)"
-  expect_revert_custom "T04 non-increasing tiers" \
-    "cast call --rpc-url \"${RPC_URL}\" --from \"${OWNER_ADDR}\" \"${HOOK_ADDRESS}\" \"setFeeTiersAndRoles(uint24[],uint8,uint8,uint8)\" \"[400,400,9000]\" 0 1 2" \
+  cover_function "setRegimeFees(uint24,uint24,uint24)"
+  expect_revert_custom "T04 floor fee zero" \
+    "cast call --rpc-url \"${RPC_URL}\" --from \"${OWNER_ADDR}\" \"${HOOK_ADDRESS}\" \"setRegimeFees(uint24,uint24,uint24)\" 0 2500 9000" \
     "InvalidConfig" || return 1
 
-  cover_function "setFeeTiersAndRoles(uint24[],uint8,uint8,uint8)"
-  expect_revert_custom "T04 invalid tier bounds" \
-    "cast call --rpc-url \"${RPC_URL}\" --from \"${OWNER_ADDR}\" \"${HOOK_ADDRESS}\" \"setFeeTiersAndRoles(uint24[],uint8,uint8,uint8)\" \"${tiers_arg}\" 2 1 2" \
-    "InvalidTierBounds" || return 1
-
-  cover_function "setFeeTiersAndRoles(uint24[],uint8,uint8,uint8)"
-  expect_revert_custom "T04 empty tiers" \
-    "cast call --rpc-url \"${RPC_URL}\" --from \"${OWNER_ADDR}\" \"${HOOK_ADDRESS}\" \"setFeeTiersAndRoles(uint24[],uint8,uint8,uint8)\" \"[]\" 0 0 0" \
+  cover_function "setRegimeFees(uint24,uint24,uint24)"
+  expect_revert_custom "T04 non-increasing regime fees" \
+    "cast call --rpc-url \"${RPC_URL}\" --from \"${OWNER_ADDR}\" \"${HOOK_ADDRESS}\" \"setRegimeFees(uint24,uint24,uint24)\" 400 400 9000" \
     "InvalidConfig" || return 1
 
-  cover_function "setFeeTiersAndRoles(uint24[],uint8,uint8,uint8)"
-  expect_revert_custom "T04 too many tiers" \
-    "cast call --rpc-url \"${RPC_URL}\" --from \"${OWNER_ADDR}\" \"${HOOK_ADDRESS}\" \"setFeeTiersAndRoles(uint24[],uint8,uint8,uint8)\" \"[100,200,300,400,500,600,700,800,900,1000,1100,1200,1300,1400,1500,1600,1700]\" 0 1 2" \
+  cover_function "setRegimeFees(uint24,uint24,uint24)"
+  expect_revert_custom "T04 cash not below extreme" \
+    "cast call --rpc-url \"${RPC_URL}\" --from \"${OWNER_ADDR}\" \"${HOOK_ADDRESS}\" \"setRegimeFees(uint24,uint24,uint24)\" 400 9000 9000" \
     "InvalidConfig" || return 1
 
-  cover_function "setFeeTiersAndRoles(uint24[],uint8,uint8,uint8)"
-  expect_revert_custom "T04 extreme idx out of range" \
-    "cast call --rpc-url \"${RPC_URL}\" --from \"${OWNER_ADDR}\" \"${HOOK_ADDRESS}\" \"setFeeTiersAndRoles(uint24[],uint8,uint8,uint8)\" \"${tiers_arg}\" 0 1 99" \
-    "InvalidFeeIndex" || return 1
+  cover_function "setRegimeFees(uint24,uint24,uint24)"
+  expect_revert_custom "T04 extreme exceeds max fee" \
+    "cast call --rpc-url \"${RPC_URL}\" --from \"${OWNER_ADDR}\" \"${HOOK_ADDRESS}\" \"setRegimeFees(uint24,uint24,uint24)\" 400 2500 1000001" \
+    "InvalidConfig" || return 1
 
-  assert_eq "T04 feeTierCount unchanged" "$(cast_call_single "${HOOK_ADDRESS}" "feeTierCount()(uint16)")" "${before_count}" || return 1
-  assert_eq "T04 floorIdx unchanged" "$(cast_call_single "${HOOK_ADDRESS}" "floorIdx()(uint8)")" "${before_floor}" || return 1
-  assert_eq "T04 cashIdx unchanged" "$(cast_call_single "${HOOK_ADDRESS}" "cashIdx()(uint8)")" "${before_cash}" || return 1
-  assert_eq "T04 extremeIdx unchanged" "$(cast_call_single "${HOOK_ADDRESS}" "extremeIdx()(uint8)")" "${before_extreme}" || return 1
+  assert_eq "T04 floorFee unchanged" "$(cast_call_single "${HOOK_ADDRESS}" "floorFee()(uint24)")" "${before_floor_fee}" || return 1
+  assert_eq "T04 cashFee unchanged" "$(cast_call_single "${HOOK_ADDRESS}" "cashFee()(uint24)")" "${before_cash_fee}" || return 1
+  assert_eq "T04 extremeFee unchanged" "$(cast_call_single "${HOOK_ADDRESS}" "extremeFee()(uint24)")" "${before_extreme_fee}" || return 1
 
   cover_function "unpause()"
   cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" "unpause()" >/dev/null || return 1
 
-  tc_checkpoint "tiers_invalid_done" || return 1
-  TC_REASON="Некорректные tiers/roles отклоняются, состояние не меняется"
+  tc_checkpoint "regime_fees_invalid_done" || return 1
+  TC_REASON="Некорректные explicit regime fee значения отклоняются, состояние не меняется"
   return 0
 }
 
@@ -1966,9 +1973,12 @@ test_t06_invalid_controller_params() {
   CP_DOWN_EXTREME_CONFIRM_PERIODS="1"
   CP_DOWN_R_FROM_CASH_BPS="10000"
   CP_DOWN_CASH_CONFIRM_PERIODS="1"
-  CP_EMERGENCY_FLOOR_CLOSEVOL_USD6="0"
+  CP_EMERGENCY_FLOOR_CLOSEVOL_USD6="1"
   CP_EMERGENCY_CONFIRM_PERIODS="1"
   set_controller_params || return 1
+
+  # Keep state-machine reason checks deterministic with dust-threshold-aware amounts.
+  set_min_counted_swap_usd6_and_apply "1000000" "1000000" || return 1
 
   reset_state_floor_unpaused || return 1
   swap_close_expect_reason_stable "2000000" "1000" "REASON_EMA_BOOTSTRAP" "T06 bootstrap" || return 1
@@ -1977,7 +1987,7 @@ test_t06_invalid_controller_params() {
   swap_close_expect_reason_stable "2000000" "1000" "REASON_JUMP_CASH" "T06 jump cash" || return 1
   tx="${LAST_CLOSE_TX}"
 
-  swap_close_expect_reason_stable "100" "1000" "REASON_HOLD" "T06 hold reason" || return 1
+  swap_close_expect_reason_stable "1000000" "1000" "REASON_HOLD" "T06 hold reason" || return 1
   tx="${LAST_CLOSE_TX}"
 
   # Deadband path: floor->cash raw threshold is met, but deadband blocks the transition.
@@ -1992,9 +2002,17 @@ test_t06_invalid_controller_params() {
   CP_DOWN_EXTREME_CONFIRM_PERIODS="1"
   CP_DOWN_R_FROM_CASH_BPS="10000"
   CP_DOWN_CASH_CONFIRM_PERIODS="1"
-  CP_EMERGENCY_FLOOR_CLOSEVOL_USD6="0"
+  CP_EMERGENCY_FLOOR_CLOSEVOL_USD6="1"
   CP_EMERGENCY_CONFIRM_PERIODS="1"
   set_controller_params || return 1
+
+  # Start deadband scenario from clean EMA to keep ratio path deterministic.
+  cover_function "pause()"
+  cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" "pause()" >/dev/null || return 1
+  cover_function "emergencyResetToFloor()"
+  cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" "emergencyResetToFloor()" >/dev/null || return 1
+  cover_function "unpause()"
+  cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" "unpause()" >/dev/null || return 1
 
   reset_state_floor_unpaused || return 1
   swap_close_expect_reason_stable "1000000000" "1000" "REASON_EMA_BOOTSTRAP" "T06 deadband bootstrap" || return 1
@@ -2020,7 +2038,7 @@ test_t06_invalid_controller_params() {
   set_controller_params || return 1
 
   reset_state_floor_unpaused || return 1
-  swap_close_expect_reason_stable "2000000" "1000" "REASON_EMA_BOOTSTRAP" "T06 no-change bootstrap" || return 1
+  swap_close_expect_reason_stable "2000000" "1000" "REASON_NO_CHANGE" "T06 no-change bootstrap" || return 1
   tx="${LAST_CLOSE_TX}"
   swap_close_expect_reason_stable "2000000" "1000" "REASON_NO_CHANGE" "T06 no-change" || return 1
   tx="${LAST_CLOSE_TX}"
@@ -2089,6 +2107,11 @@ test_t07_direct_call_protection() {
     "cast call --rpc-url \"${RPC_URL}\" --from \"${ATTACKER_ADDR}\" \"${HOOK_ADDRESS}\" \"afterSwap(address,(address,address,uint24,int24,address),(bool,int256,uint160),int256,bytes)\" \"${ATTACKER_ADDR}\" \"${POOL_KEY}\" \"${swap_params}\" 0 0x" \
     "${err_not_pool}" || return 1
 
+  cover_function "unlockCallback(bytes)"
+  expect_revert "T07 unlockCallback direct" \
+    "cast call --rpc-url \"${RPC_URL}\" --from \"${ATTACKER_ADDR}\" \"${HOOK_ADDRESS}\" \"unlockCallback(bytes)(bytes)\" 0x" \
+    "${err_not_pool}" || return 1
+
   # Try to trigger hook key validation errors through genuine PoolManager->hook callback flow.
   read -r bad0 bad1 <<<"$(sort_tokens "${VOLATILE}" "${RESCUE_TOKEN}")"
   if ! expect_revert_custom "T07 bad key init" \
@@ -2118,40 +2141,41 @@ test_t08_state_machine_strict_reasons() {
   local floor_fee cash_fee extreme_fee tx
 
   ensure_unpaused || return 1
-  load_fee_tiers || return 1
+  load_regime_fees || return 1
 
-  floor_fee="$(tier_by_idx "${FLOOR_IDX}")"
-  cash_fee="$(tier_by_idx "${CASH_IDX}")"
-  extreme_fee="$(tier_by_idx "${EXTREME_IDX}")"
+  floor_fee="$(regime_fee_by_id "${REGIME_FLOOR}")"
+  cash_fee="$(regime_fee_by_id "${REGIME_CASH}")"
+  extreme_fee="$(regime_fee_by_id "${REGIME_EXTREME}")"
 
   restore_base_controller || return 1
+  set_min_counted_swap_usd6_and_apply "1000000" "1000000" || return 1
   reset_state_floor_unpaused || return 1
 
   tc_checkpoint "before_bootstrap" || return 1
 
   swap_close_expect_reason_stable "2000000" "1000" "REASON_EMA_BOOTSTRAP" "T08 bootstrap close" || return 1
   tx="${LAST_CLOSE_TX}"
-  assert_eq "T08 bootstrap stays floor" "$(jq -r '.[0]' <<<"$(state_debug_json)")" "${FLOOR_IDX}" || return 1
+  assert_eq "T08 bootstrap stays floor" "$(jq -r '.[0]' <<<"$(state_debug_json)")" "${REGIME_FLOOR}" || return 1
   tc_checkpoint "after_bootstrap_close" || return 1
 
   swap_close_expect_reason_stable "8000000" "1000" "REASON_JUMP_CASH" "T08 enter cash" || return 1
   tx="${LAST_CLOSE_TX}"
-  assert_eq "T08 fee idx cash" "$(jq -r '.[0]' <<<"$(state_debug_json)")" "${CASH_IDX}" || return 1
+  assert_eq "T08 fee idx cash" "$(jq -r '.[0]' <<<"$(state_debug_json)")" "${REGIME_CASH}" || return 1
   tc_checkpoint "enter_cash" "${cash_fee}" || return 1
 
   swap_close_expect_reason_stable "8000000" "1000" "REASON_JUMP_EXTREME" "T08 enter extreme" || return 1
   tx="${LAST_CLOSE_TX}"
-  assert_eq "T08 fee idx extreme" "$(jq -r '.[0]' <<<"$(state_debug_json)")" "${EXTREME_IDX}" || return 1
+  assert_eq "T08 fee idx extreme" "$(jq -r '.[0]' <<<"$(state_debug_json)")" "${REGIME_EXTREME}" || return 1
   tc_checkpoint "enter_extreme" "${extreme_fee}" || return 1
 
   swap_close_expect_reason_stable "1200000" "1000" "REASON_DOWN_TO_CASH" "T08 down to cash" || return 1
   tx="${LAST_CLOSE_TX}"
-  assert_eq "T08 fee idx down cash" "$(jq -r '.[0]' <<<"$(state_debug_json)")" "${CASH_IDX}" || return 1
+  assert_eq "T08 fee idx down cash" "$(jq -r '.[0]' <<<"$(state_debug_json)")" "${REGIME_CASH}" || return 1
   tc_checkpoint "down_to_cash" "${cash_fee}" || return 1
 
   swap_close_expect_reason_stable "1200000" "1000" "REASON_DOWN_TO_FLOOR" "T08 down to floor" || return 1
   tx="${LAST_CLOSE_TX}"
-  assert_eq "T08 fee idx down floor" "$(jq -r '.[0]' <<<"$(state_debug_json)")" "${FLOOR_IDX}" || return 1
+  assert_eq "T08 fee idx down floor" "$(jq -r '.[0]' <<<"$(state_debug_json)")" "${REGIME_FLOOR}" || return 1
   tc_checkpoint "down_to_floor" "${floor_fee}" || return 1
 
   swap_close_expect_reason_stable "8000000" "1000" "REASON_JUMP_CASH" "T08 re-enter cash for emergency" || return 1
@@ -2159,7 +2183,7 @@ test_t08_state_machine_strict_reasons() {
 
   swap_close_expect_reason_stable "100" "100" "REASON_EMERGENCY_FLOOR" "T08 emergency floor" || return 1
   tx="${LAST_CLOSE_TX}"
-  assert_eq "T08 emergency to floor" "$(jq -r '.[0]' <<<"$(state_debug_json)")" "${FLOOR_IDX}" || return 1
+  assert_eq "T08 emergency to floor" "$(jq -r '.[0]' <<<"$(state_debug_json)")" "${REGIME_FLOOR}" || return 1
   tc_checkpoint "emergency_floor" "${floor_fee}" || return 1
 
   TC_REASON="Переходы FLOOR->CASH->EXTREME->CASH->FLOOR и emergency floor подтверждены со строгой проверкой reason-кодов"
@@ -2178,7 +2202,7 @@ test_t09_multi_period_close_loop() {
   assert_true "T09 multiple PeriodClosed events" "[[ ${events_count} -ge 2 ]]" || return 1
 
   fee_idx="$(jq -r '.[0]' <<<"$(state_debug_json)")"
-  assert_true "T09 fee idx in bounds" "[[ ${fee_idx} -ge ${FLOOR_IDX} && ${fee_idx} -le ${EXTREME_IDX} ]]" || return 1
+  assert_true "T09 fee idx in bounds" "[[ ${fee_idx} -ge ${REGIME_FLOOR} && ${fee_idx} -le ${REGIME_EXTREME} ]]" || return 1
 
   tc_checkpoint "multi_period_after_swap" || return 1
   TC_REASON="Мульти-периодный close-loop отрабатывает без revert/OOG, состояние консистентно"
@@ -2189,11 +2213,12 @@ test_t10_lull_reset_strict() {
   local cash_fee floor_fee lull tx
 
   ensure_unpaused || return 1
-  load_fee_tiers || return 1
-  cash_fee="$(tier_by_idx "${CASH_IDX}")"
-  floor_fee="$(tier_by_idx "${FLOOR_IDX}")"
+  load_regime_fees || return 1
+  cash_fee="$(regime_fee_by_id "${REGIME_CASH}")"
+  floor_fee="$(regime_fee_by_id "${REGIME_FLOOR}")"
 
   restore_base_controller || return 1
+  set_min_counted_swap_usd6_and_apply "1000000" "1000000" || return 1
   reset_state_floor_unpaused || return 1
 
   swap_close_expect_reason_stable "2000000" "1000" "REASON_EMA_BOOTSTRAP" "T10 bootstrap" || return 1
@@ -2215,11 +2240,12 @@ test_t10_lull_reset_strict() {
 }
 
 test_t11_paused_behavior() {
-  local floor_fee before_state after_state before_fee_idx after_fee_idx before_period after_period
+  local floor_fee cash_fee before_state after_state before_fee_idx after_fee_idx before_period after_period
 
   ensure_unpaused || return 1
-  load_fee_tiers || return 1
-  floor_fee="$(tier_by_idx "${FLOOR_IDX}")"
+  load_regime_fees || return 1
+  floor_fee="$(regime_fee_by_id "${REGIME_FLOOR}")"
+  cash_fee="$(regime_fee_by_id "${REGIME_CASH}")"
 
   # Move from floor to cash first, then pause and verify forced-floor behavior.
   swap_exact_in_stable "1000000" >/dev/null || return 1
@@ -2245,8 +2271,13 @@ test_t11_paused_behavior() {
   assert_eq "T11 paused fee idx unchanged" "${after_fee_idx}" "${before_fee_idx}" || return 1
   assert_eq "T11 paused periodVol unchanged" "${after_period}" "${before_period}" || return 1
 
+  cover_function "emergencyResetToCash()"
+  cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" "emergencyResetToCash()" >/dev/null || return 1
+  tc_checkpoint "paused_emergency_to_cash" "${cash_fee}" || return 1
+
   cover_function "emergencyResetToFloor()"
   cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" "emergencyResetToFloor()" >/dev/null || return 1
+  tc_checkpoint "paused_emergency_to_floor" "${floor_fee}" || return 1
 
   cover_function "unpause()"
   cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" "unpause()" >/dev/null || return 1
@@ -2259,14 +2290,44 @@ test_t11_paused_behavior() {
 }
 
 test_t12_hook_fee_e2e() {
-  local limit b0_after b1_after
+  local limit b0_after b1_after min_counted
   local accrued_before0 accrued_before1 accrued_mid0 accrued_mid1
+  local accrued_live0 accrued_live1
 
   ensure_unpaused || return 1
+
+  cover_function "setHookFeeRecipient(address)"
+  cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" "setHookFeeRecipient(address)" "${OWNER_ADDR}" >/dev/null || return 1
 
   cover_function "MAX_HOOK_FEE_PERCENT()"
   limit="$(cast_call_single "${HOOK_ADDRESS}" "MAX_HOOK_FEE_PERCENT()(uint16)")"
   assert_eq "T12 hook fee limit" "${limit}" "10" || return 1
+
+  cover_function "executeHookFeePercentChange()"
+  expect_revert_custom "T12 execute hook fee without pending" \
+    "cast call --rpc-url \"${RPC_URL}\" --from \"${OWNER_ADDR}\" \"${HOOK_ADDRESS}\" \"executeHookFeePercentChange()\"" \
+    "NoPendingHookFeePercentChange" || return 1
+
+  cover_function "scheduleHookFeePercentChange(uint16)"
+  cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" "scheduleHookFeePercentChange(uint16)" 0 >/dev/null || return 1
+
+  cover_function "scheduleHookFeePercentChange(uint16)"
+  expect_revert_custom "T12 pending hook fee schedule exists" \
+    "cast call --rpc-url \"${RPC_URL}\" --from \"${OWNER_ADDR}\" \"${HOOK_ADDRESS}\" \"scheduleHookFeePercentChange(uint16)\" 1" \
+    "PendingHookFeePercentChangeExists" || return 1
+
+  cover_function "executeHookFeePercentChange()"
+  expect_revert_custom "T12 execute hook fee too early" \
+    "cast call --rpc-url \"${RPC_URL}\" --from \"${OWNER_ADDR}\" \"${HOOK_ADDRESS}\" \"executeHookFeePercentChange()\"" \
+    "HookFeePercentChangeNotReady" || return 1
+
+  cover_function "cancelHookFeePercentChange()"
+  cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" "cancelHookFeePercentChange()" >/dev/null || return 1
+
+  cover_function "cancelHookFeePercentChange()"
+  expect_revert_custom "T12 cancel hook fee without pending" \
+    "cast call --rpc-url \"${RPC_URL}\" --from \"${OWNER_ADDR}\" \"${HOOK_ADDRESS}\" \"cancelHookFeePercentChange()\"" \
+    "NoPendingHookFeePercentChange" || return 1
 
   cover_function "scheduleHookFeePercentChange(uint16)"
   cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" "scheduleHookFeePercentChange(uint16)" 0 >/dev/null || return 1
@@ -2293,12 +2354,33 @@ test_t12_hook_fee_e2e() {
   assert_eq "T12 accrued token0 unchanged at zero fee" "${accrued_mid0}" "${accrued_before0}" || return 1
   assert_eq "T12 accrued token1 unchanged at zero fee" "${accrued_mid1}" "${accrued_before1}" || return 1
 
+  cover_function "scheduleHookFeePercentChange(uint16)"
+  cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" "scheduleHookFeePercentChange(uint16)" 10 >/dev/null || return 1
+  warp_seconds 172801
+  cover_function "executeHookFeePercentChange()"
+  cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" "executeHookFeePercentChange()" >/dev/null || return 1
+
+  swap_exact_in_stable "5000000" >/dev/null || return 1
+  read -r accrued_live0 accrued_live1 <<<"$(cast_call_json "${HOOK_ADDRESS}" "hookFeesAccrued()(uint256,uint256)" | jq -r '.[0],.[1]' | xargs)"
+  assert_true "T12 accrued fees present for HookFeesAccrued guard" "[[ ${accrued_live0} -gt 0 || ${accrued_live1} -gt 0 ]]" || return 1
+
+  cover_function "setHookFeeRecipient(address)"
+  expect_revert_custom "T12 hook fee recipient zero with accrued fees" \
+    "cast call --rpc-url \"${RPC_URL}\" --from \"${OWNER_ADDR}\" \"${HOOK_ADDRESS}\" \"setHookFeeRecipient(address)\" 0x0000000000000000000000000000000000000000" \
+    "HookFeesAccrued" || return 1
+
   cover_function "claimAllHookFees()"
   cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" "claimAllHookFees()" >/dev/null || return 1
 
   read -r b0_after b1_after <<<"$(cast_call_json "${HOOK_ADDRESS}" "hookFeesAccrued()(uint256,uint256)" | jq -r '.[0],.[1]' | xargs)"
   assert_eq "T12 accrued token0 after claim" "${b0_after}" "0" || return 1
   assert_eq "T12 accrued token1 after claim" "${b1_after}" "0" || return 1
+
+  cover_function "scheduleHookFeePercentChange(uint16)"
+  cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" "scheduleHookFeePercentChange(uint16)" 0 >/dev/null || return 1
+  warp_seconds 172801
+  cover_function "executeHookFeePercentChange()"
+  cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" "executeHookFeePercentChange()" >/dev/null || return 1
 
   # Edge checks.
   cover_function "setHookFeeRecipient(address)"
@@ -2330,6 +2412,35 @@ test_t12_hook_fee_e2e() {
   expect_revert_custom "T12 claimHookFees zero recipient" \
     "cast call --rpc-url \"${RPC_URL}\" --from \"${OWNER_ADDR}\" \"${HOOK_ADDRESS}\" \"claimHookFees(address,uint256,uint256)\" 0x0000000000000000000000000000000000000000 0 0" \
     "InvalidRecipient" || return 1
+
+  cover_function "scheduleMinCountedSwapUsd6Change(uint64)"
+  expect_revert_custom "T12 minCounted below lower bound" \
+    "cast call --rpc-url \"${RPC_URL}\" --from \"${OWNER_ADDR}\" \"${HOOK_ADDRESS}\" \"scheduleMinCountedSwapUsd6Change(uint64)\" 999999" \
+    "InvalidMinCountedSwapUsd6" || return 1
+
+  cover_function "cancelMinCountedSwapUsd6Change()"
+  expect_revert_custom "T12 cancel minCounted without pending" \
+    "cast call --rpc-url \"${RPC_URL}\" --from \"${OWNER_ADDR}\" \"${HOOK_ADDRESS}\" \"cancelMinCountedSwapUsd6Change()\"" \
+    "NoPendingMinCountedSwapUsd6Change" || return 1
+
+  cover_function "scheduleMinCountedSwapUsd6Change(uint64)"
+  cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" "scheduleMinCountedSwapUsd6Change(uint64)" 1000000 >/dev/null || return 1
+
+  cover_function "scheduleMinCountedSwapUsd6Change(uint64)"
+  expect_revert_custom "T12 minCounted pending exists" \
+    "cast call --rpc-url \"${RPC_URL}\" --from \"${OWNER_ADDR}\" \"${HOOK_ADDRESS}\" \"scheduleMinCountedSwapUsd6Change(uint64)\" 1500000" \
+    "PendingMinCountedSwapUsd6ChangeExists" || return 1
+
+  cover_function "cancelMinCountedSwapUsd6Change()"
+  cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" "cancelMinCountedSwapUsd6Change()" >/dev/null || return 1
+
+  cover_function "scheduleMinCountedSwapUsd6Change(uint64)"
+  cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" "scheduleMinCountedSwapUsd6Change(uint64)" 1500000 >/dev/null || return 1
+  close_period_with_seed "2000000" >/dev/null || return 1
+
+  cover_function "minCountedSwapUsd6()"
+  min_counted="$(cast_call_single "${HOOK_ADDRESS}" "minCountedSwapUsd6()(uint64)" || true)"
+  assert_eq "T12 minCounted applied on period boundary" "${min_counted}" "1500000" || return 1
 
   # deterministic no-op when accrued==0
   cover_function "claimAllHookFees()"
@@ -2371,6 +2482,10 @@ test_t13_rescue_token() {
 
   cover_function "rescueETH(uint256)"
   cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" "rescueETH(uint256)" 0 >/dev/null || return 1
+
+  expect_revert_custom "T13 direct ETH transfer rejected" \
+    "cast send --rpc-url \"${RPC_URL}\" --private-key \"${OWNER_PK}\" --value 1 \"${HOOK_ADDRESS}\"" \
+    "EthReceiveRejected" || return 1
 
   tc_checkpoint "rescue_done" || return 1
   TC_REASON="Rescue path подтверждён: unauthorized blocked, allowed transfer выполняется, pool-currency rescue запрещён"
@@ -2509,7 +2624,7 @@ main() {
   log "modify_helper=${MODIFY_HELPER}"
 
   init_coverage_catalogs
-  load_fee_tiers || die "Failed to load fee tiers"
+  load_regime_fees || die "Failed to load regime fees"
   persist_base_controller || die "Failed to read base controller params"
 
   if ! init_base_snapshot; then
@@ -2520,7 +2635,7 @@ main() {
   run_test_case "T01" "ABI view/pure sweep + invalid getter index" test_t01_abi_view_pure_sweep
   run_test_case "T02" "Матрица доступа (owner-only admin + attacker)" test_t02_access_control_matrix
   run_test_case "T03" "Pause gating для cold updates + reset semantics" test_t03_pause_gating_cold_updates
-  run_test_case "T04" "Аномалии tiers/roles" test_t04_invalid_tiers_roles
+  run_test_case "T04" "Аномалии explicit regime fees" test_t04_invalid_regime_fees
   run_test_case "T05" "Аномалии timing params" test_t05_invalid_timing
   run_test_case "T06" "Аномалии controller params + deterministic paths" test_t06_invalid_controller_params
   run_test_case "T07" "Direct-call защита callback-функций" test_t07_direct_call_protection

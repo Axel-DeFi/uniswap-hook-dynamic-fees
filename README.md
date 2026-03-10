@@ -1,7 +1,7 @@
 # Uniswap v4 VolumeDynamicFeeHook
 
 `VolumeDynamicFeeHook` is a single-pool Uniswap v4 hook that:
-- updates dynamic LP fee tiers from stable-side volume telemetry,
+- updates dynamic LP fee across explicit FLOOR/CASH/EXTREME regimes from stable-side volume telemetry,
 - charges an additional trader-facing `HookFee` in `afterSwap` via return delta,
 - keeps state compact and operational controls explicit.
 
@@ -29,8 +29,8 @@ See `LICENSE` for full terms.
 - HookFee accrual is persisted as PoolManager ERC6909 claims and claimed via `unlock` + `burn` + `take`.
 - Claim-all path is single and explicit: `claimAllHookFees()` always pays to current `hookFeeRecipient`.
 - For native-asset pools (`token0 == address(0)` or `token1 == address(0)`), deploy/ensure/preflight flows validate that `hookFeeRecipient` can accept native payout from the hook claim path.
-- `pause()/unpause()` freeze/resume regulator transitions at the current LP fee tier (no automatic floor reset, no swap stop, no HookFee stop).
-- `setFeeTiersAndRoles(...)` intentionally preserves EMA for minor fee-ladder maintenance; material fee-ladder/controller reconfiguration should follow paused maintenance + explicit `emergencyResetToFloor()` before `unpause()`.
+- `pause()/unpause()` freeze/resume regulator transitions at the current LP fee regime (no automatic floor reset, no swap stop, no HookFee stop).
+- `setRegimeFees(...)` (paused-only) preserves EMA, resets hold/streak counters, starts a fresh open period, and updates current LP fee immediately if active regime fee changed.
 - Emergency resets are explicit and available only while paused:
   - `emergencyResetToFloor()`
   - `emergencyResetToCash()`
@@ -40,6 +40,8 @@ See `LICENSE` for full terms.
   - `minCloseVolToCashUsd6 <= minCloseVolToExtremeUsd6`
   - `upRToCashBps <= upRToExtremeBps`
   - `downRFromCashBps >= downRFromExtremeBps`
+  - `deadbandBps < downRFromExtremeBps`
+  - `deadbandBps < downRFromCashBps`
   - `emergencyFloorCloseVolUsd6 > 0`
 - Pool key validation requires exact dynamic-fee flag: `key.fee == LPFeeLibrary.DYNAMIC_FEE_FLAG`.
 - Telemetry fields are explicit:

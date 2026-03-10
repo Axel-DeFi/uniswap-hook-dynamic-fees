@@ -152,8 +152,6 @@ abstract contract VolumeDynamicFeeHookInvariantBase is
     PoolKey internal key;
     VolumeDynamicFeeHookHandler internal handler;
 
-    uint8 internal constant FLOOR_IDX = 0;
-
     uint32 internal constant PERIOD_SECONDS = 300;
     uint8 internal constant EMA_PERIODS = 8;
     uint16 internal constant DEADBAND_BPS = 500;
@@ -173,7 +171,6 @@ abstract contract VolumeDynamicFeeHookInvariantBase is
         Currency c0 = Currency.wrap(token0);
         Currency c1 = Currency.wrap(token1);
         Currency usd = stableIsCurrency0() ? c0 : c1;
-        uint24[] memory feeTiers = _defaultFeeTiersV2();
 
         handler = new VolumeDynamicFeeHookHandler();
 
@@ -188,8 +185,9 @@ abstract contract VolumeDynamicFeeHookInvariantBase is
             tickSpacing(),
             usd,
             STABLE_DECIMALS,
-            FLOOR_IDX,
-            feeTiers,
+            V2_DEFAULT_FLOOR_FEE,
+            V2_DEFAULT_CASH_FEE,
+            V2_DEFAULT_EXTREME_FEE,
             PERIOD_SECONDS,
             EMA_PERIODS,
             DEADBAND_BPS,
@@ -210,8 +208,9 @@ abstract contract VolumeDynamicFeeHookInvariantBase is
             tickSpacing(),
             usd,
             STABLE_DECIMALS,
-            FLOOR_IDX,
-            feeTiers,
+            V2_DEFAULT_FLOOR_FEE,
+            V2_DEFAULT_CASH_FEE,
+            V2_DEFAULT_EXTREME_FEE,
             PERIOD_SECONDS,
             EMA_PERIODS,
             DEADBAND_BPS,
@@ -252,20 +251,12 @@ abstract contract VolumeDynamicFeeHookInvariantBase is
     function invariant_feeIdxAlwaysWithinBounds() public view {
         (,, uint64 ps, uint8 feeIdx) = hook.unpackedState();
         assertTrue(ps != 0, "not initialized");
-        assertTrue(feeIdx < hook.feeTierCount(), "feeIdx >= feeTierCount");
-        assertTrue(feeIdx >= hook.floorIdx() && feeIdx <= hook.extremeIdx(), "feeIdx out of range");
+        assertTrue(feeIdx <= hook.REGIME_EXTREME(), "feeIdx out of range");
     }
 
-    function invariant_roleOrderingAlwaysStrict() public view {
-        assertTrue(hook.floorIdx() < hook.cashIdx(), "floor !< cash");
-        assertTrue(hook.cashIdx() < hook.extremeIdx(), "cash !< extreme");
-    }
-
-    function invariant_tiersStrictlyIncreasing() public view {
-        uint16 n = hook.feeTierCount();
-        for (uint256 i = 1; i < n; ++i) {
-            assertTrue(hook.feeTiers(i - 1) < hook.feeTiers(i), "tiers not strictly increasing");
-        }
+    function invariant_regimeFeeOrderingAlwaysStrict() public view {
+        assertTrue(hook.floorFee() < hook.cashFee(), "floor !< cash");
+        assertTrue(hook.cashFee() < hook.extremeFee(), "cash !< extreme");
     }
 
     function invariant_packedStateFieldBounds() public view {
@@ -277,7 +268,7 @@ abstract contract VolumeDynamicFeeHookInvariantBase is
             uint8 emergencyStreak,,,,
         ) = hook.getStateDebug();
 
-        assertTrue(feeIdx < hook.feeTierCount(), "packed feeIdx overflow");
+        assertTrue(feeIdx <= hook.REGIME_EXTREME(), "packed feeIdx overflow");
         assertTrue(holdRemaining <= 31, "packed hold overflow");
         assertTrue(upExtremeStreak <= 3, "packed up overflow");
         assertTrue(downStreak <= 7, "packed down overflow");

@@ -8,6 +8,7 @@ import {HookMiner} from "@uniswap/v4-hooks-public/src/utils/HookMiner.sol";
 import {Hooks} from "@uniswap/v4-core/src/libraries/Hooks.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
+import {LPFeeLibrary} from "@uniswap/v4-core/src/libraries/LPFeeLibrary.sol";
 
 import {VolumeDynamicFeeHook} from "src/VolumeDynamicFeeHook.sol";
 
@@ -53,24 +54,22 @@ contract DeployHookLocal is Script {
         uint256 pk = cfg.privateKey;
         require(pk != 0, "PRIVATE_KEY missing");
 
-        uint24[] memory feeTiers = _loadFeeTiers();
-        uint8 floorIdx = uint8(vm.envUint("FLOOR_IDX"));
-        uint8 cashIdx = uint8(vm.envUint("CASH_IDX"));
-        uint8 extremeIdx = uint8(vm.envUint("EXTREME_IDX"));
-
+        uint24 floorFee = uint24(vm.envUint("FLOOR_FEE_PIPS"));
+        uint24 cashFee = uint24(vm.envUint("CASH_FEE_PIPS"));
+        uint24 extremeFee = uint24(vm.envUint("EXTREME_FEE_PIPS"));
         require(
-            floorIdx < feeTiers.length && cashIdx < feeTiers.length && extremeIdx < feeTiers.length,
-            "tier index out of range"
+            floorFee > 0 && floorFee < cashFee && cashFee < extremeFee && extremeFee <= LPFeeLibrary.MAX_LP_FEE,
+            "invalid fee bounds"
         );
-        require(floorIdx < cashIdx && cashIdx < extremeIdx, "invalid tier order");
-
-        uint24 cashTier = feeTiers[cashIdx];
-        uint24 extremeTier = feeTiers[extremeIdx];
 
         address owner = vm.envOr("OWNER", vm.addr(pk));
         uint16 hookFeePercent = uint16(vm.envUint("HOOK_FEE_PERCENT"));
         address hookFeeRecipient = vm.envOr("HOOK_FEE_ADDRESS", owner);
         require(hookFeeRecipient != address(0), "HOOK_FEE_ADDRESS invalid");
+        uint16 deadbandBps = uint16(vm.envUint("DEADBAND_BPS"));
+        uint16 downRFromExtremeBps = uint16(vm.envUint("DOWN_R_FROM_EXTREME_BPS"));
+        uint16 downRFromCashBps = uint16(vm.envUint("DOWN_R_FROM_CASH_BPS"));
+        require(deadbandBps < downRFromExtremeBps && deadbandBps < downRFromCashBps, "invalid deadband thresholds");
 
         bytes memory constructorArgs = abi.encode(
             IPoolManager(cfg.poolManager),
@@ -79,27 +78,26 @@ contract DeployHookLocal is Script {
             cfg.tickSpacing,
             Currency.wrap(cfg.stableToken),
             cfg.stableDecimals,
-            floorIdx,
-            feeTiers,
+            floorFee,
+            cashFee,
+            extremeFee,
             uint32(vm.envUint("PERIOD_SECONDS")),
             uint8(vm.envUint("EMA_PERIODS")),
-            uint16(vm.envUint("DEADBAND_BPS")),
+            deadbandBps,
             uint32(vm.envUint("LULL_RESET_SECONDS")),
             owner,
             hookFeeRecipient,
             hookFeePercent,
-            cashTier,
             uint64(vm.envUint("MIN_CLOSEVOL_TO_CASH_USD6")),
             uint16(vm.envUint("UP_R_TO_CASH_BPS")),
             uint8(vm.envUint("CASH_HOLD_PERIODS")),
-            extremeTier,
             uint64(vm.envUint("MIN_CLOSEVOL_TO_EXTREME_USD6")),
             uint16(vm.envUint("UP_R_TO_EXTREME_BPS")),
             uint8(vm.envUint("UP_EXTREME_CONFIRM_PERIODS")),
             uint8(vm.envUint("EXTREME_HOLD_PERIODS")),
-            uint16(vm.envUint("DOWN_R_FROM_EXTREME_BPS")),
+            downRFromExtremeBps,
             uint8(vm.envUint("DOWN_EXTREME_CONFIRM_PERIODS")),
-            uint16(vm.envUint("DOWN_R_FROM_CASH_BPS")),
+            downRFromCashBps,
             uint8(vm.envUint("DOWN_CASH_CONFIRM_PERIODS")),
             uint64(vm.envUint("EMERGENCY_FLOOR_CLOSEVOL_USD6")),
             uint8(vm.envUint("EMERGENCY_CONFIRM_PERIODS"))
@@ -133,20 +131,5 @@ contract DeployHookLocal is Script {
         JsonReportLib.writeAddressState(statePath, cfg.poolManager, mined, cfg.volatileToken, cfg.stableToken);
 
         console2.log("hook deployed", mined);
-    }
-
-    function _loadFeeTiers() private view returns (uint24[] memory tiers) {
-        uint256[] memory raw = vm.envUint("FEE_TIERS_PIPS", ",");
-        require(raw.length > 1, "FEE_TIERS_PIPS requires >=2 tiers");
-
-        tiers = new uint24[](raw.length);
-        uint24 prev = 0;
-        for (uint256 i = 0; i < raw.length; i++) {
-            require(raw[i] > 0 && raw[i] <= type(uint24).max, "tier out of range");
-            uint24 tier = uint24(raw[i]);
-            if (i > 0) require(tier > prev, "tiers must increase");
-            tiers[i] = tier;
-            prev = tier;
-        }
     }
 }

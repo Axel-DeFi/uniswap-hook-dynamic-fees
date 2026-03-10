@@ -6,7 +6,7 @@ This document follows contract NatSpec in `src/VolumeDynamicFeeHook.sol` and is 
 
 `VolumeDynamicFeeHook` is a single-pool Uniswap v4 hook that:
 - tracks stable-side notional volume (`USD6`) per period,
-- updates LP fee tiers using a regime controller,
+- updates LP fee using an explicit three-regime controller,
 - charges an additional HookFee to traders via `afterSwap` return delta,
 - persists accrued HookFees in PoolManager ERC6909 claims and allows explicit owner-driven claim.
 
@@ -42,7 +42,7 @@ LP fee remains dynamic and is updated through the existing regime logic.
 ### HookFee
 
 - HookFee is a separate trader charge returned from `afterSwap` delta path.
-- HookFee is numerically tied to currently applied LP fee tier.
+- HookFee is numerically tied to currently applied LP fee for active regime.
 - HookFee is derived from an approximate LP-fee estimate, not from an exact LP-fee accounting replica.
 - Estimation base is the unspecified side selected by current execution path (exact-input vs exact-output).
 - Small systematic deviation between exact-input and exact-output paths is expected by design.
@@ -109,6 +109,8 @@ Controller params are validated with cross-invariants:
 - `minCloseVolToCashUsd6 <= minCloseVolToExtremeUsd6`
 - `upRToCashBps <= upRToExtremeBps`
 - `downRFromCashBps >= downRFromExtremeBps`
+- `deadbandBps < downRFromExtremeBps`
+- `deadbandBps < downRFromCashBps`
 - `emergencyFloorCloseVolUsd6 > 0`
 
 Invalid combinations revert with `InvalidConfig`.
@@ -122,7 +124,7 @@ Freeze semantics only:
 - keeps EMA,
 - clears only open-period volume,
 - restarts period boundary (`periodStart`) for clean resume.
-- freezes regulator transitions at the last active LP fee tier until `unpause()` or explicit paused-mode emergency reset.
+- freezes regulator transitions at the last active LP fee regime until `unpause()` or explicit paused-mode emergency reset.
 - does not disable swaps,
 - does not disable HookFee accrual,
 - does not zero HookFee.
@@ -140,12 +142,12 @@ Resume semantics:
 - `emergencyResetToCash()`
 
 Both explicitly:
-- set target fee index,
+- set target regime id,
 - reset EMA to zero,
 - clear hold/streak counters,
 - reset `periodVol` and restart `periodStart`,
 - keep contract paused.
-- when target tier equals current tier, reset still happens but no `FeeUpdated` event is emitted.
+- when target regime equals current regime, reset still happens but no `FeeUpdated` event is emitted.
 
 `resetToCash` is generally preferred as default emergency option when total floor reset is not required.
 Monitoring must consume `EmergencyResetToFloorApplied` / `EmergencyResetToCashApplied`, not only `FeeUpdated`.
@@ -202,12 +204,15 @@ Saturation behavior:
 ## State model cleanup
 
 Removed legacy entities:
+- arbitrary fee-tier arrays and index-driven tier-role plumbing
 - legacy cap index field
 - legacy direction marker field
 - legacy next-fee wrapper function
 
-Controller invariant remains:
-- `floorIdx < cashIdx < extremeIdx`
+Controller model now uses fixed regime ids:
+- `0 = FLOOR`
+- `1 = CASH`
+- `2 = EXTREME`
 
 Bit-packing note:
 - packed `_state` layout is retained intentionally for gas/storage efficiency.
@@ -261,7 +266,7 @@ All admin state transitions emit events, including:
 - threshold schedule/cancel/apply,
 - pause/unpause,
 - emergency resets,
-- controller/tier/timing updates.
+- controller/regime/timing updates.
 
 ## Accepted risks in current scope
 
@@ -278,8 +283,8 @@ All admin state transitions emit events, including:
 - monitor `PeriodClosed` and alert on repeated abnormal regime escalations.
 - monitor recipient-change events (`HookFeeRecipientUpdated`) as a mandatory operational control.
 - for native-asset pools, any governance update to `hookFeeRecipient` must preserve native payout compatibility.
-- EMA preservation across `setFeeTiersAndRoles(...)` is intentional for minor fee-ladder maintenance updates.
-- for material fee-ladder or controller reconfiguration, keep paused, apply maintenance updates, run explicit emergency reset-to-floor, then unpause.
+- EMA preservation across `setRegimeFees(...)` is intentional for paused maintenance updates.
+- for material controller reconfiguration, keep paused, apply maintenance updates, run explicit emergency reset-to-floor, then unpause.
 
 ## Hook key validation
 

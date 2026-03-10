@@ -1652,6 +1652,7 @@ render_raw_once() {
 
   local pool_currency0 pool_currency1 stable_currency pool_tick_spacing
   local initial_idx floor_idx extreme_idx pause_idx fee_tier_count
+  local floor_fee_bips cash_fee_bips extreme_fee_bips
   local period_seconds ema_periods deadband_bps lull_reset_seconds
   local owner hook_fee_recipient
 
@@ -1672,11 +1673,14 @@ render_raw_once() {
     pool_tick_spacing="${TICK_SPACING}"
   fi
 
-  floor_idx="$(first_token "$(try_cast_call "${HOOK_ADDRESS}" "floorIdx()(uint8)" || true)")"
-  extreme_idx="$(first_token "$(try_cast_call "${HOOK_ADDRESS}" "extremeIdx()(uint8)" || true)")"
-  initial_idx="${floor_idx}"
-  pause_idx="${floor_idx}"
-  fee_tier_count="$(first_token "$(try_cast_call "${HOOK_ADDRESS}" "feeTierCount()(uint16)" || true)")"
+  floor_fee_bips="$(first_token "$(try_cast_call "${HOOK_ADDRESS}" "floorFee()(uint24)" || true)")"
+  cash_fee_bips="$(first_token "$(try_cast_call "${HOOK_ADDRESS}" "cashFee()(uint24)" || true)")"
+  extreme_fee_bips="$(first_token "$(try_cast_call "${HOOK_ADDRESS}" "extremeFee()(uint24)" || true)")"
+  floor_idx=0
+  initial_idx=0
+  pause_idx=0
+  extreme_idx=2
+  fee_tier_count=3
   period_seconds="$(first_token "$(try_cast_call "${HOOK_ADDRESS}" "periodSeconds()(uint32)" || true)")"
   ema_periods="$(first_token "$(try_cast_call "${HOOK_ADDRESS}" "emaPeriods()(uint8)" || true)")"
   deadband_bps="$(first_token "$(try_cast_call "${HOOK_ADDRESS}" "deadbandBps()(uint16)" || true)")"
@@ -1700,14 +1704,9 @@ render_raw_once() {
   fee_idx="$(printf '%s\n' "${unpack_raw}" | sed -n '4p' | awk '{print $1}')"
 
   local tiers=()
-  local i tier_val
-  if ! [[ "${fee_tier_count}" =~ ^[0-9]+$ ]]; then
-    fee_tier_count=$((extreme_idx + 1))
-  fi
-  for ((i = 0; i < fee_tier_count; ++i)); do
-    tier_val="$(first_token "$(try_cast_call "${HOOK_ADDRESS}" "feeTiers(uint256)(uint24)" "${i}" || true)")"
-    tiers+=("${i}:${tier_val:-?}")
-  done
+  tiers+=("0:${floor_fee_bips:-?}")
+  tiers+=("1:${cash_fee_bips:-?}")
+  tiers+=("2:${extreme_fee_bips:-?}")
 
   local slot0_raw sqrt_price tick protocol_fee lp_fee liquidity price token0_decimals token1_decimals stable_is_token1 pool_tvl_usd6 cache_last_sqrt
   local native_wei token0_balance_raw token1_balance_raw balance_token0_decimals balance_token1_decimals dec_try

@@ -22,8 +22,9 @@ contract VolumeDynamicFeeHookScriptHarness is VolumeDynamicFeeHook {
         int24 _poolTickSpacing,
         Currency _stableCurrency,
         uint8 stableDecimals,
-        uint8 _floorIdx,
-        uint24[] memory _feeTiers,
+        uint24 _floorFee,
+        uint24 _cashFee,
+        uint24 _extremeFee,
         uint32 _periodSeconds,
         uint8 _emaPeriods,
         uint16 _deadbandBps,
@@ -31,11 +32,9 @@ contract VolumeDynamicFeeHookScriptHarness is VolumeDynamicFeeHook {
         address ownerAddr,
         address hookFeeRecipientAddr,
         uint16 hookFeePercent,
-        uint24 _cashTier,
         uint64 _minCloseVolToCashUsd6,
         uint16 _upRToCashBps,
         uint8 _cashHoldPeriods,
-        uint24 _extremeTier,
         uint64 _minCloseVolToExtremeUsd6,
         uint16 _upRToExtremeBps,
         uint8 _upExtremeConfirmPeriods,
@@ -54,8 +53,9 @@ contract VolumeDynamicFeeHookScriptHarness is VolumeDynamicFeeHook {
             _poolTickSpacing,
             _stableCurrency,
             stableDecimals,
-            _floorIdx,
-            _feeTiers,
+            _floorFee,
+            _cashFee,
+            _extremeFee,
             _periodSeconds,
             _emaPeriods,
             _deadbandBps,
@@ -63,11 +63,9 @@ contract VolumeDynamicFeeHookScriptHarness is VolumeDynamicFeeHook {
             ownerAddr,
             hookFeeRecipientAddr,
             hookFeePercent,
-            _cashTier,
             _minCloseVolToCashUsd6,
             _upRToCashBps,
             _cashHoldPeriods,
-            _extremeTier,
             _minCloseVolToExtremeUsd6,
             _upRToExtremeBps,
             _upExtremeConfirmPeriods,
@@ -97,11 +95,6 @@ contract MeasureGasLocal is Script {
         uint32 lullResetSeconds = PERIOD_SECONDS * MAX_LULL_PERIODS;
         uint256 worstCaseCatchUpWarpSeconds = uint256(lullResetSeconds) - 1;
 
-        uint24[] memory tiers = new uint24[](3);
-        tiers[0] = 400;
-        tiers[1] = 2500;
-        tiers[2] = 9000;
-
         vm.startBroadcast(pk);
 
         MockPoolManager manager = new MockPoolManager();
@@ -113,8 +106,9 @@ contract MeasureGasLocal is Script {
             10,
             Currency.wrap(TOKEN0),
             6,
-            0,
-            tiers,
+            400,
+            2500,
+            9000,
             PERIOD_SECONDS,
             8,
             500,
@@ -122,11 +116,9 @@ contract MeasureGasLocal is Script {
             owner,
             owner,
             3,
-            2500,
             1_000 * 1e6,
             18_000,
             4,
-            9000,
             4_000 * 1e6,
             40_000,
             2,

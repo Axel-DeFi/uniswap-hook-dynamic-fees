@@ -29,8 +29,6 @@ contract VolumeDynamicFeeHookFuzzTest is Test, VolumeDynamicFeeHookV2DeployHelpe
     MockPoolManager internal manager;
     Scenario[] internal scenarios;
 
-    uint8 internal constant FLOOR_IDX = 0;
-
     uint32 internal constant PERIOD_SECONDS = 300;
     uint8 internal constant EMA_PERIODS = 8;
     uint16 internal constant DEADBAND_BPS = 500;
@@ -55,7 +53,6 @@ contract VolumeDynamicFeeHookFuzzTest is Test, VolumeDynamicFeeHookV2DeployHelpe
 
     function _deployScenario(Currency c0, Currency c1, bool stableIsCurrency0, int24 tickSpacing) internal {
         Currency usd = stableIsCurrency0 ? c0 : c1;
-        uint24[] memory feeTiers = _defaultFeeTiersV2();
 
         uint160 flags = uint160(
             Hooks.AFTER_INITIALIZE_FLAG | Hooks.AFTER_SWAP_FLAG | Hooks.AFTER_SWAP_RETURNS_DELTA_FLAG
@@ -68,8 +65,9 @@ contract VolumeDynamicFeeHookFuzzTest is Test, VolumeDynamicFeeHookV2DeployHelpe
             tickSpacing,
             usd,
             STABLE_DECIMALS,
-            FLOOR_IDX,
-            feeTiers,
+            V2_DEFAULT_FLOOR_FEE,
+            V2_DEFAULT_CASH_FEE,
+            V2_DEFAULT_EXTREME_FEE,
             PERIOD_SECONDS,
             EMA_PERIODS,
             DEADBAND_BPS,
@@ -90,8 +88,9 @@ contract VolumeDynamicFeeHookFuzzTest is Test, VolumeDynamicFeeHookV2DeployHelpe
             tickSpacing,
             usd,
             STABLE_DECIMALS,
-            FLOOR_IDX,
-            feeTiers,
+            V2_DEFAULT_FLOOR_FEE,
+            V2_DEFAULT_CASH_FEE,
+            V2_DEFAULT_EXTREME_FEE,
             PERIOD_SECONDS,
             EMA_PERIODS,
             DEADBAND_BPS,
@@ -146,15 +145,18 @@ contract VolumeDynamicFeeHookFuzzTest is Test, VolumeDynamicFeeHookV2DeployHelpe
 
     function _assertInvariants(Scenario storage s) internal view {
         (uint64 pv, uint96 ema, uint64 ps, uint8 feeIdx) = s.hook.unpackedState();
-        (uint8 f, uint8 c, uint8 e) = (s.hook.floorIdx(), s.hook.cashIdx(), s.hook.extremeIdx());
 
         assertTrue(ps != 0, "periodStart==0");
-        assertTrue(feeIdx < s.hook.feeTierCount(), "feeIdx >= feeTierCount");
-        assertTrue(f < c && c < e, "invalid role ordering");
-        assertTrue(feeIdx >= f && feeIdx <= e, "feeIdx out of range");
+        assertTrue(feeIdx <= s.hook.REGIME_EXTREME(), "feeIdx out of range");
 
         uint24 fee = s.hook.currentFeeBips();
-        assertEq(fee, s.hook.feeTiers(uint256(feeIdx)), "fee tier mismatch");
+        if (feeIdx == s.hook.REGIME_FLOOR()) {
+            assertEq(fee, s.hook.floorFee(), "floor fee mismatch");
+        } else if (feeIdx == s.hook.REGIME_CASH()) {
+            assertEq(fee, s.hook.cashFee(), "cash fee mismatch");
+        } else {
+            assertEq(fee, s.hook.extremeFee(), "extreme fee mismatch");
+        }
 
         // Packed fields must stay inside bit-width bounds.
         (
