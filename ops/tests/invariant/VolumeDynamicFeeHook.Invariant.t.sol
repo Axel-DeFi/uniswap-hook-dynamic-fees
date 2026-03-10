@@ -177,8 +177,9 @@ abstract contract VolumeDynamicFeeHookInvariantBase is
 
         handler = new VolumeDynamicFeeHookHandler();
 
-        uint160 flags =
-            uint160(Hooks.AFTER_INITIALIZE_FLAG | Hooks.AFTER_SWAP_FLAG | Hooks.AFTER_SWAP_RETURNS_DELTA_FLAG);
+        uint160 flags = uint160(
+            Hooks.AFTER_INITIALIZE_FLAG | Hooks.AFTER_SWAP_FLAG | Hooks.AFTER_SWAP_RETURNS_DELTA_FLAG
+        );
 
         bytes memory constructorArgs = _constructorArgsV2(
             IPoolManager(address(manager)),
@@ -268,8 +269,13 @@ abstract contract VolumeDynamicFeeHookInvariantBase is
     }
 
     function invariant_packedStateFieldBounds() public view {
-        (uint8 feeIdx, uint8 holdRemaining, uint8 upExtremeStreak, uint8 downStreak, uint8 emergencyStreak,,,,) =
-            hook.getStateDebug();
+        (
+            uint8 feeIdx,
+            uint8 holdRemaining,
+            uint8 upExtremeStreak,
+            uint8 downStreak,
+            uint8 emergencyStreak,,,,
+        ) = hook.getStateDebug();
 
         assertTrue(feeIdx < hook.feeTierCount(), "packed feeIdx overflow");
         assertTrue(holdRemaining <= 31, "packed hold overflow");

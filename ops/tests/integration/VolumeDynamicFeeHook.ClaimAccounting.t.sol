@@ -85,8 +85,9 @@ contract VolumeDynamicFeeHookClaimAccountingIntegrationTest is Test, VolumeDynam
             V2_INITIAL_HOOK_FEE_PERCENT
         );
 
-        uint160 flags =
-            uint160(Hooks.AFTER_INITIALIZE_FLAG | Hooks.AFTER_SWAP_FLAG | Hooks.AFTER_SWAP_RETURNS_DELTA_FLAG);
+        uint160 flags = uint160(
+            Hooks.AFTER_INITIALIZE_FLAG | Hooks.AFTER_SWAP_FLAG | Hooks.AFTER_SWAP_RETURNS_DELTA_FLAG
+        );
 
         (address mined, bytes32 salt) =
             HookMiner.find(address(this), flags, type(VolumeDynamicFeeHook).creationCode, constructorArgs);

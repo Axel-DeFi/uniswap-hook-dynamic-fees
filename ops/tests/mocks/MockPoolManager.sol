@@ -132,6 +132,7 @@ contract MockPoolManager {
         lastZeroForOne = params.zeroForOne;
         lastAmountSpecified = params.amountSpecified;
 
-        (observedPeriodVolUsd6, observedEmaVolUsd6Scaled, observedPeriodStart, observedFeeIdx) = hook.unpackedState();
+        (observedPeriodVolUsd6, observedEmaVolUsd6Scaled, observedPeriodStart, observedFeeIdx) =
+            hook.unpackedState();
     }
 }

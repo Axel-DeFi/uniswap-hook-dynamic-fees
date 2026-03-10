@@ -57,8 +57,9 @@ contract VolumeDynamicFeeHookFuzzTest is Test, VolumeDynamicFeeHookV2DeployHelpe
         Currency usd = stableIsCurrency0 ? c0 : c1;
         uint24[] memory feeTiers = _defaultFeeTiersV2();
 
-        uint160 flags =
-            uint160(Hooks.AFTER_INITIALIZE_FLAG | Hooks.AFTER_SWAP_FLAG | Hooks.AFTER_SWAP_RETURNS_DELTA_FLAG);
+        uint160 flags = uint160(
+            Hooks.AFTER_INITIALIZE_FLAG | Hooks.AFTER_SWAP_FLAG | Hooks.AFTER_SWAP_RETURNS_DELTA_FLAG
+        );
 
         bytes memory constructorArgs = _constructorArgsV2(
             IPoolManager(address(manager)),
@@ -117,7 +118,11 @@ contract VolumeDynamicFeeHookFuzzTest is Test, VolumeDynamicFeeHookV2DeployHelpe
         );
     }
 
-    function _deltaStableAbs(bool stableIsCurrency0, uint128 amountStable6) internal pure returns (BalanceDelta) {
+    function _deltaStableAbs(bool stableIsCurrency0, uint128 amountStable6)
+        internal
+        pure
+        returns (BalanceDelta)
+    {
         // keep one deterministic shape for fuzz; mock manager allows synthetic deltas
         uint128 otherSide = uint128((uint256(amountStable6) * 95) / 100);
         if (stableIsCurrency0) {
@@ -152,8 +157,13 @@ contract VolumeDynamicFeeHookFuzzTest is Test, VolumeDynamicFeeHookV2DeployHelpe
         assertEq(fee, s.hook.feeTiers(uint256(feeIdx)), "fee tier mismatch");
 
         // Packed fields must stay inside bit-width bounds.
-        (uint8 dFeeIdx, uint8 holdRemaining, uint8 upExtremeStreak, uint8 downStreak, uint8 emergencyStreak,,,,) =
-            s.hook.getStateDebug();
+        (
+            uint8 dFeeIdx,
+            uint8 holdRemaining,
+            uint8 upExtremeStreak,
+            uint8 downStreak,
+            uint8 emergencyStreak,,,,
+        ) = s.hook.getStateDebug();
         assertEq(dFeeIdx, feeIdx, "debug fee idx mismatch");
         assertTrue(holdRemaining <= 31, "hold overflow");
         assertTrue(upExtremeStreak <= 3, "up streak overflow");
