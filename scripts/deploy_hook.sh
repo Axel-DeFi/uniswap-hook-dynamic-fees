@@ -15,23 +15,22 @@ set -euo pipefail
 #
 # Required config keys:
 #   POOL_MANAGER, VOLATILE, STABLE, STABLE_DECIMALS, TICK_SPACING
-#   FLOOR_TIER, CAP_TIER
+#   FLOOR_TIER
 #   FEE_TIERS (comma-separated fee levels in percent, for example 0.009,0.04,0.09)
 #   PERIOD_SECONDS, EMA_PERIODS, DEADBAND_BPS, LULL_RESET_SECONDS
-#   CREATOR_FEE_PERCENT
-#   CREATOR_FEE_LIMIT
+#   HOOK_FEE_PERCENT
 #   CASH_TIER, EXTREME_TIER
 #   MIN_CLOSEVOL_TO_CASH_USD6, UP_R_TO_CASH_BPS, CASH_HOLD_PERIODS
 #   MIN_CLOSEVOL_TO_EXTREME_USD6, UP_R_TO_EXTREME_BPS, UP_EXTREME_CONFIRM_PERIODS, EXTREME_HOLD_PERIODS
 #   DOWN_R_FROM_EXTREME_BPS, DOWN_EXTREME_CONFIRM_PERIODS, DOWN_R_FROM_CASH_BPS, DOWN_CASH_CONFIRM_PERIODS
 #   EMERGENCY_FLOOR_CLOSEVOL_USD6, EMERGENCY_CONFIRM_PERIODS
 # Optional:
-#   CREATOR             (defaults to deployer address)
-#   CREATOR_FEE_ADDRESS (required when CREATOR_FEE_PERCENT > 0)
+#   OWNER             (defaults to deployer address)
+#   HOOK_FEE_ADDRESS (required when HOOK_FEE_PERCENT > 0)
 #
-# Creator behavior:
-#   - CREATOR defines privileged admin account.
-#   - CREATOR_FEE_ADDRESS defines payout recipient for creator fees.
+# Owner behavior:
+#   - OWNER defines privileged admin account.
+#   - HOOK_FEE_ADDRESS defines payout recipient for hook fees.
 
 usage() {
   cat <<'EOF'
@@ -135,9 +134,9 @@ fi
 # Validate required variables
 required=(
   POOL_MANAGER VOLATILE STABLE STABLE_DECIMALS TICK_SPACING
-  FLOOR_TIER CAP_TIER FEE_TIERS
+  FLOOR_TIER FEE_TIERS
   PERIOD_SECONDS EMA_PERIODS DEADBAND_BPS LULL_RESET_SECONDS
-  CREATOR_FEE_PERCENT CREATOR_FEE_LIMIT
+  HOOK_FEE_PERCENT
   CASH_TIER EXTREME_TIER
   MIN_CLOSEVOL_TO_CASH_USD6 UP_R_TO_CASH_BPS CASH_HOLD_PERIODS
   MIN_CLOSEVOL_TO_EXTREME_USD6 UP_R_TO_EXTREME_BPS UP_EXTREME_CONFIRM_PERIODS EXTREME_HOLD_PERIODS
@@ -209,7 +208,7 @@ for i in "${!FEE_TIER_PCT_ITEMS[@]}"; do
 done
 
 floor_tier_pct="$(printf '%s' "${FLOOR_TIER}" | tr -d '[:space:]')"
-cap_tier_pct="$(printf '%s' "${CAP_TIER}" | tr -d '[:space:]')"
+cap_tier_pct="$(printf '%s' "${EXTREME_TIER}" | tr -d '[:space:]')"
 floor_tier_pips="$(percent_to_pips "${floor_tier_pct}" || true)"
 cap_tier_pips="$(percent_to_pips "${cap_tier_pct}" || true)"
 if [[ -z "${floor_tier_pips}" ]]; then
@@ -217,18 +216,18 @@ if [[ -z "${floor_tier_pips}" ]]; then
   exit 1
 fi
 if [[ -z "${cap_tier_pips}" ]]; then
-  echo "ERROR: CAP_TIER='${CAP_TIER}' is invalid. Use decimal percent format like 0.45." >&2
+  echo "ERROR: EXTREME_TIER='${EXTREME_TIER}' is invalid. Use decimal percent format like 0.45." >&2
   exit 1
 fi
 
 FLOOR_IDX=""
-CAP_IDX=""
+EXTREME_IDX=""
 for i in "${!FEE_TIER_PIPS[@]}"; do
   if [[ "${FEE_TIER_PIPS[$i]}" == "${floor_tier_pips}" ]]; then
     FLOOR_IDX="${i}"
   fi
   if [[ "${FEE_TIER_PIPS[$i]}" == "${cap_tier_pips}" ]]; then
-    CAP_IDX="${i}"
+    EXTREME_IDX="${i}"
   fi
 done
 
@@ -236,16 +235,16 @@ if [[ -z "${FLOOR_IDX}" ]]; then
   echo "ERROR: FLOOR_TIER=${FLOOR_TIER}% is not present in FEE_TIERS='${FEE_TIERS}'." >&2
   exit 1
 fi
-if [[ -z "${CAP_IDX}" ]]; then
-  echo "ERROR: CAP_TIER=${CAP_TIER}% is not present in FEE_TIERS='${FEE_TIERS}'." >&2
+if [[ -z "${EXTREME_IDX}" ]]; then
+  echo "ERROR: EXTREME_TIER=${EXTREME_TIER}% is not present in FEE_TIERS='${FEE_TIERS}'." >&2
   exit 1
 fi
-if (( FLOOR_IDX > CAP_IDX )); then
-  echo "ERROR: FLOOR_TIER index (${FLOOR_IDX}) must be <= CAP_TIER index (${CAP_IDX})." >&2
+if (( FLOOR_IDX > EXTREME_IDX )); then
+  echo "ERROR: FLOOR_TIER index (${FLOOR_IDX}) must be <= EXTREME_TIER index (${EXTREME_IDX})." >&2
   exit 1
 fi
 
-export FLOOR_IDX CAP_IDX
+export FLOOR_IDX EXTREME_IDX
 
 CASH_TIER_PIPS="$(percent_to_pips "$(printf '%s' "${CASH_TIER}" | tr -d '[:space:]')" || true)"
 EXTREME_TIER_PIPS="$(percent_to_pips "$(printf '%s' "${EXTREME_TIER}" | tr -d '[:space:]')" || true)"
@@ -281,11 +280,6 @@ if (( FLOOR_IDX >= CASH_IDX || CASH_IDX >= EXTREME_IDX )); then
   echo "ERROR: tier bounds must satisfy FLOOR < CASH < EXTREME (by index in FEE_TIERS)." >&2
   exit 1
 fi
-if (( EXTREME_IDX != CAP_IDX )); then
-  echo "ERROR: CAP_TIER must be equal to EXTREME_TIER (capIdx must equal extremeIdx)." >&2
-  exit 1
-fi
-
 for n in \
   MIN_CLOSEVOL_TO_CASH_USD6 \
   UP_R_TO_CASH_BPS \
@@ -304,45 +298,32 @@ for n in \
 done
 
 # Human-friendly percent input in config (10 means 10%).
-if ! [[ "${CREATOR_FEE_PERCENT}" =~ ^[0-9]+$ ]]; then
-  echo "ERROR: CREATOR_FEE_PERCENT must be an integer in [0..100]" >&2
+if ! [[ "${HOOK_FEE_PERCENT}" =~ ^[0-9]+$ ]]; then
+  echo "ERROR: HOOK_FEE_PERCENT must be an integer in [0..10]" >&2
   exit 1
 fi
-if (( CREATOR_FEE_PERCENT > 100 )); then
-  echo "ERROR: CREATOR_FEE_PERCENT=${CREATOR_FEE_PERCENT} out of range [0..100]" >&2
+if (( HOOK_FEE_PERCENT > 10 )); then
+  echo "ERROR: HOOK_FEE_PERCENT=${HOOK_FEE_PERCENT} out of range [0..10]" >&2
   exit 1
 fi
-if ! [[ "${CREATOR_FEE_LIMIT}" =~ ^[0-9]+$ ]]; then
-  echo "ERROR: CREATOR_FEE_LIMIT must be an integer in [0..100]" >&2
-  exit 1
-fi
-if (( CREATOR_FEE_LIMIT > 100 )); then
-  echo "ERROR: CREATOR_FEE_LIMIT=${CREATOR_FEE_LIMIT} out of range [0..100]" >&2
-  exit 1
-fi
-if (( CREATOR_FEE_PERCENT > CREATOR_FEE_LIMIT )); then
-  echo "ERROR: CREATOR_FEE_PERCENT=${CREATOR_FEE_PERCENT} exceeds CREATOR_FEE_LIMIT=${CREATOR_FEE_LIMIT}" >&2
-  exit 1
-fi
-CREATOR_FEE_BPS=$((CREATOR_FEE_PERCENT * 100))
-export CREATOR_FEE_BPS
+export HOOK_FEE_PERCENT
 
 DEPLOYER_ADDR="$(cast wallet address --private-key "${PRIVATE_KEY}" | awk '{print $1}')"
-if [[ -z "${CREATOR:-}" ]]; then
-  CREATOR="${DEPLOYER_ADDR}"
-  echo "==> CREATOR not set; defaulting to deployer: ${CREATOR}"
+if [[ -z "${OWNER:-}" ]]; then
+  OWNER="${DEPLOYER_ADDR}"
+  echo "==> OWNER not set; defaulting to deployer: ${OWNER}"
 fi
-export CREATOR
+export OWNER
 
-if [[ -z "${CREATOR_FEE_ADDRESS:-}" ]]; then
-  if (( CREATOR_FEE_PERCENT > 0 )); then
-    echo "ERROR: CREATOR_FEE_ADDRESS is required when CREATOR_FEE_PERCENT > 0" >&2
+if [[ -z "${HOOK_FEE_ADDRESS:-}" ]]; then
+  if (( HOOK_FEE_PERCENT > 0 )); then
+    echo "ERROR: HOOK_FEE_ADDRESS is required when HOOK_FEE_PERCENT > 0" >&2
     exit 1
   fi
-  CREATOR_FEE_ADDRESS="0x0000000000000000000000000000000000000000"
-  echo "==> CREATOR_FEE_ADDRESS not set and CREATOR_FEE_PERCENT=0; using zero recipient"
+  HOOK_FEE_ADDRESS="0x0000000000000000000000000000000000000000"
+  echo "==> HOOK_FEE_ADDRESS not set and HOOK_FEE_PERCENT=0; using zero recipient"
 fi
-export CREATOR_FEE_ADDRESS
+export HOOK_FEE_ADDRESS
 
 # Optional safety: verify STABLE_DECIMALS matches on-chain decimals()
 if [[ -z "${SKIP_DECIMALS_CHECK:-}" ]]; then
@@ -366,7 +347,7 @@ export DEPLOY_JSON_PATH="${OUT_PATH}"
 read -r POOL_CURRENCY0 POOL_CURRENCY1 <<< "$(sort_pool_tokens "${VOLATILE}" "${STABLE}")"
 FEE_TIERS_ARG="[$(IFS=,; echo "${FEE_TIER_PIPS[*]}")]"
 CONSTRUCTOR_ARGS_HEX="$(cast abi-encode \
-  "constructor(address,address,address,int24,address,uint8,uint8,uint8,uint24[],uint32,uint8,uint16,uint32,address,address,uint16,uint16,uint24,uint64,uint16,uint8,uint24,uint64,uint16,uint8,uint8,uint16,uint8,uint16,uint8,uint64,uint8)" \
+  "constructor(address,address,address,int24,address,uint8,uint8,uint24[],uint32,uint8,uint16,uint32,address,address,uint16,uint24,uint64,uint16,uint8,uint24,uint64,uint16,uint8,uint8,uint16,uint8,uint16,uint8,uint64,uint8)" \
   "${POOL_MANAGER}" \
   "${POOL_CURRENCY0}" \
   "${POOL_CURRENCY1}" \
@@ -374,16 +355,14 @@ CONSTRUCTOR_ARGS_HEX="$(cast abi-encode \
   "${STABLE}" \
   "${STABLE_DECIMALS}" \
   "${FLOOR_IDX}" \
-  "${CAP_IDX}" \
   "${FEE_TIERS_ARG}" \
   "${PERIOD_SECONDS}" \
   "${EMA_PERIODS}" \
   "${DEADBAND_BPS}" \
   "${LULL_RESET_SECONDS}" \
-  "${CREATOR}" \
-  "${CREATOR_FEE_ADDRESS}" \
-  "${CREATOR_FEE_LIMIT}" \
-  "${CREATOR_FEE_BPS}" \
+  "${OWNER}" \
+  "${HOOK_FEE_ADDRESS}" \
+  "${HOOK_FEE_PERCENT}" \
   "${CASH_TIER_PIPS}" \
   "${MIN_CLOSEVOL_TO_CASH_USD6}" \
   "${UP_R_TO_CASH_BPS}" \
@@ -446,29 +425,29 @@ PY
 
 echo "==> Hook deployed at ${HOOK_ADDRESS}"
 
-if [[ "$(lower "${CREATOR}")" != "$(lower "${DEPLOYER_ADDR}")" ]]; then
-  echo "WARN: CREATOR=${CREATOR} differs from signer ${DEPLOYER_ADDR}; skipping post-deploy on-chain setter calls."
-  echo "      Run pause/setter/unpause from the CREATOR account to finish configuration."
+if [[ "$(lower "${OWNER}")" != "$(lower "${DEPLOYER_ADDR}")" ]]; then
+  echo "WARN: OWNER=${OWNER} differs from signer ${DEPLOYER_ADDR}; skipping post-deploy on-chain setter calls."
+  echo "      Run pause/setter/unpause from the OWNER account to finish configuration."
   echo "==> Wrote ${OUT_PATH}"
   exit 0
 fi
 
 CONTROLLER_PARAMS_TUPLE="(${MIN_CLOSEVOL_TO_CASH_USD6},${UP_R_TO_CASH_BPS},${CASH_HOLD_PERIODS},${MIN_CLOSEVOL_TO_EXTREME_USD6},${UP_R_TO_EXTREME_BPS},${UP_EXTREME_CONFIRM_PERIODS},${EXTREME_HOLD_PERIODS},${DOWN_R_FROM_EXTREME_BPS},${DOWN_EXTREME_CONFIRM_PERIODS},${DOWN_R_FROM_CASH_BPS},${DOWN_CASH_CONFIRM_PERIODS},${EMERGENCY_FLOOR_CLOSEVOL_USD6},${EMERGENCY_CONFIRM_PERIODS})"
 
-echo "==> On-chain config: pause -> tiers+roles -> timing params -> controller params -> creator fee recipient -> creator fee config -> unpause"
+echo "==> On-chain config: pause -> tiers+roles -> timing params -> controller params -> hook fee recipient -> hook fee schedule -> unpause"
 cast send "${HOOK_ADDRESS}" "pause()" --rpc-url "${RPC_URL}" --private-key "${PRIVATE_KEY}" >/dev/null
-cast send "${HOOK_ADDRESS}" "setFeeTiersAndRoles(uint24[],uint8,uint8,uint8,uint8)" \
-  "${FEE_TIERS_ARG}" "${FLOOR_IDX}" "${CASH_IDX}" "${EXTREME_IDX}" "${CAP_IDX}" \
+cast send "${HOOK_ADDRESS}" "setFeeTiersAndRoles(uint24[],uint8,uint8,uint8)" \
+  "${FEE_TIERS_ARG}" "${FLOOR_IDX}" "${CASH_IDX}" "${EXTREME_IDX}" \
   --rpc-url "${RPC_URL}" --private-key "${PRIVATE_KEY}" >/dev/null
 cast send "${HOOK_ADDRESS}" "setTimingParams(uint32,uint8,uint32,uint16)" \
   "${PERIOD_SECONDS}" "${EMA_PERIODS}" "${LULL_RESET_SECONDS}" "${DEADBAND_BPS}" \
   --rpc-url "${RPC_URL}" --private-key "${PRIVATE_KEY}" >/dev/null
 cast send "${HOOK_ADDRESS}" "setControllerParams((uint64,uint16,uint8,uint64,uint16,uint8,uint8,uint16,uint8,uint16,uint8,uint64,uint8))" \
   "${CONTROLLER_PARAMS_TUPLE}" --rpc-url "${RPC_URL}" --private-key "${PRIVATE_KEY}" >/dev/null
-cast send "${HOOK_ADDRESS}" "setCreatorFeeRecipient(address)" \
-  "${CREATOR_FEE_ADDRESS}" --rpc-url "${RPC_URL}" --private-key "${PRIVATE_KEY}" >/dev/null
-cast send "${HOOK_ADDRESS}" "setCreatorFeeConfig(address,uint16)" \
-  "${CREATOR}" "${CREATOR_FEE_BPS}" --rpc-url "${RPC_URL}" --private-key "${PRIVATE_KEY}" >/dev/null
+cast send "${HOOK_ADDRESS}" "setHookFeeRecipient(address)" \
+  "${HOOK_FEE_ADDRESS}" --rpc-url "${RPC_URL}" --private-key "${PRIVATE_KEY}" >/dev/null
+cast send "${HOOK_ADDRESS}" "scheduleHookFeePercentChange(uint16)" \
+  "${HOOK_FEE_PERCENT}" --rpc-url "${RPC_URL}" --private-key "${PRIVATE_KEY}" >/dev/null
 cast send "${HOOK_ADDRESS}" "unpause()" --rpc-url "${RPC_URL}" --private-key "${PRIVATE_KEY}" >/dev/null
 
 echo "==> Wrote ${OUT_PATH}"

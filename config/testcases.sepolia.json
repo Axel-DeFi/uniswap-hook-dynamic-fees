@@ -96,27 +96,27 @@
     },
     {
       "id": "T20",
-      "name_ru": "Creator fee accrual + claim",
-      "description_ru": "Accrual растёт, claim обнуляет accrued и увеличивает баланс recipient; percent above limit даёт revert",
+      "name_ru": "HookFee accrual + claim",
+      "description_ru": "HookFee accrual растёт, claim обнуляет accrued и увеличивает баланс recipient; percent above limit даёт revert",
       "mandatory": true,
       "steps": [
-        { "op": "set_creator_fee_address_to_creator" },
-        { "op": "read_state", "capture_creator_fees": true },
+        { "op": "set_hook_fee_recipient_to_owner" },
+        { "op": "read_state", "capture_hook_fees": true },
         { "op": "sleep_periods", "n": 1 },
         { "op": "swap_exact_in", "direction": "stable_to_volatile", "amount": 12000000 },
         { "op": "sleep_periods", "n": 1 },
         { "op": "swap_exact_in", "direction": "stable_to_volatile", "amount": 14000000 },
         { "op": "sleep_periods", "n": 1 },
         { "op": "swap_exact_in", "direction": "stable_to_volatile", "amount": 16000000 },
-        { "op": "assert_creator_fee_accrued", "min_delta_any": 1 },
-        { "op": "claim_creator_fee_and_assert" },
+        { "op": "assert_hook_fee_accrued", "min_delta_any": 1 },
+        { "op": "claim_hook_fee_and_assert" },
         {
           "op": "expect_revert",
           "call": {
-            "op": "set_creator_fee_percent",
+            "op": "set_hook_fee_percent",
             "value_percent": 11
           },
-          "expected": "CreatorFeePercentLimitExceeded"
+          "expected": "HookFeePercentLimitExceeded"
         },
         { "op": "read_state" }
       ]

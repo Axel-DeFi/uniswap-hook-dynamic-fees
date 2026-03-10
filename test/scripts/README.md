@@ -16,13 +16,11 @@ Default run profile:
 - hook address is read from `config/hook.sepolia.conf` (`HOOK_ADDRESS`) with optional override.
 
 `cases` mode flow (high-level):
-- Ramped `UP` volume that crosses deadband upper threshold and pushes fee toward cap.
-- Cap clamp probes.
-- Reversal lock probe (opposite direction after directional memory, away from cap/floor).
-- Ramped `DOWN` volume that crosses deadband lower threshold and pushes fee toward floor.
-- Floor clamp probes.
-- Deadband no-change probe.
-- Lull reset probe (`lullReset + 3s` wait, then trigger swap).
+- EMA bootstrap from zero-volume baseline.
+- v2 controller transitions: `JUMP_CASH`, `JUMP_EXTREME`, `HOLD`, `DOWN_TO_CASH`, `DOWN_TO_FLOOR`.
+- Runtime safety transitions: `DEADBAND`, `NO_SWAPS`, `EMERGENCY_FLOOR`, `LULL_RESET`.
+- Governance and monetization checks: pause/unpause/freeze-resume, hook fee accrue/claim.
+- Defensive anomaly checks (revert paths) via `eth_call`.
 
 `cases` mode accounting:
 - Case completion is strict per current run cycle: a scenario is counted only when observed in its expected stage.
@@ -34,7 +32,10 @@ Default run profile:
   3) unpause
   4) post-unpause resume probe (qualifying swap must move level again)
   5) monetization accrue/claim
+  6) anomaly matrix checks
 - If run starts already at cap, `up_to_cap` is skipped and run starts from `cap_probe`.
+
+Detailed matrix: `docs/sepolia_simulate_fee_cycle_test_matrix.md`.
 
 Run control:
 - `--cases-runs <N>`: run deterministic suite `N` times.

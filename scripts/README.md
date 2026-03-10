@@ -1,135 +1,55 @@
 # Scripts
 
-This repository uses a small set of shell + Foundry scripts to:
-1) deploy the Uniswap v4 hook (CREATE2 mined address with hook flags),
-2) create + initialize a dynamic-fee pool,
-3) run the same test suite across environments.
+Shell + Foundry scripts are used to:
+1) deploy the hook at a mined CREATE2 address,
+2) initialize pool and liquidity,
+3) run operational checks.
 
-## Configuration
+## Required hook flags
 
-All scripts read dotenv-style config files from `./config/`.
+Deployment/mining must include:
+- `AFTER_INITIALIZE`
+- `AFTER_SWAP`
+- `AFTER_SWAP_RETURNS_DELTA`
 
-### Pool binding (explicit roles)
+## Core config concepts
 
-We **do not** rely on `TOKEN0/TOKEN1` in configs anymore. Use:
+- `OWNER`: admin role for hook configuration and emergency actions.
+- `HOOK_FEE_ADDRESS`: claim recipient for accrued HookFees.
+- `HOOK_FEE_PERCENT`: HookFee percent (0..10, timelocked in contract).
+- `FEE_TIERS`, `FLOOR_TIER`, `CASH_TIER`, `EXTREME_TIER`: LP fee tier model.
+- `STABLE`, `STABLE_DECIMALS`: telemetry quote token and scaling mode.
 
-- `VOLATILE` — the risky asset (e.g. WETH)
-- `STABLE` — USD-like token used as the unit for `INIT_PRICE_USD`
-- `STABLE_DECIMALS` — decimals for `STABLE` (usually 6)
-- `TICK_SPACING` — pool tick spacing
-
-### Init price
-
-Use a human price:
-
-- `INIT_PRICE_USD` — interpreted as **STABLE per 1 VOLATILE**
-
-Scripts will automatically:
-- sort currencies by address to derive `currency0/currency1` (PoolKey ordering),
-- convert `INIT_PRICE_USD` into `INIT_SQRT_PRICE_X96` for pool initialization.
-
-### Secrets
-
-Secrets should live in `./.env` (repo root). Typical variables:
-
-- `DEFAULT_PRIVATE_KEY` — deployer key (used by configs via `PRIVATE_KEY=${DEFAULT_PRIVATE_KEY:-}`)
-- `DEFAULT_CREATOR` — optional explicit creator/admin address
-
-### Strategy / monetization params
-
-- `FEE_TIERS` — comma-separated fee levels in percent (for example `0.009,0.04,0.09,0.25,0.45,0.90`)
-- `FLOOR_TIER`, `CAP_TIER` — floor/cap fee levels in percent (must match one of `FEE_TIERS`)
-- `CREATOR_FEE_PERCENT` — creator fee share in percent (for example `10` = 10%)
-- `CREATOR_FEE_ADDRESS` — explicit payout recipient for creator fees (required when `CREATOR_FEE_PERCENT > 0`)
-
-Note:
-- Fee tiers and controller/timing params are mutable on-chain via creator setters.
-- `deploy_hook.sh` now applies config values through setters immediately after deployment (pause -> configure -> unpause).
-- Floor tier is used as start fee and pause fee.
-
-## Unified test runner
-
-Single entry point:
-
-- `./test/scripts/test_run.sh <local|sepolia|prod> <fast|full> [chain] [--dry-run] [--anvil-port <port>]`
-
-Examples:
-
-- Local (Anvil fork of Sepolia):
-  - `./test/scripts/test_run.sh local fast`
-  - `./test/scripts/test_run.sh local full --anvil-port 8546`
-
-- Sepolia (live):
-  - `./test/scripts/test_run.sh sepolia fast --dry-run`
-  - `./test/scripts/test_run.sh sepolia fast`
-
-Notes:
-- `fast` is a quick pre-deploy gate.
-- `full` is a deeper run (more coverage / stress).
-
-## Core scripts
+## Main flows
 
 ### Deploy hook
 
-`./scripts/deploy_hook.sh --chain <chain> --rpc-url <url> --private-key <pk> --broadcast`
+```bash
+./scripts/deploy_hook.sh --chain <chain> --rpc-url <url> --private-key <pk> --broadcast
+```
 
-This runs the Foundry script:
-
+Uses:
 - `scripts/foundry/DeployHook.s.sol`
-
-Outputs:
-- `./scripts/out/deploy.<chain>.json` (contains the deployed hook address)
-
-Post-deploy actions in the same script:
-- pauses the hook,
-- applies fee tiers/roles + controller params + timing params + creator fee config via on-chain setters,
-- unpauses the hook.
 
 ### Create + initialize pool
 
-`./scripts/create_pool.sh --chain <chain> --rpc-url <url> --private-key <pk> --broadcast`
-
-This:
-- reads `VOLATILE/STABLE/INIT_PRICE_USD` from config,
-- computes `INIT_SQRT_PRICE_X96`,
-- reads hook address from `./scripts/out/deploy.<chain>.json` if `HOOK_ADDRESS` is not set,
-- runs the Foundry script:
-  - `scripts/foundry/CreatePool.s.sol`
-
-### Hook + pool status
-
-`./scripts/hook_status.sh --chain <chain> [--watch-seconds <int>]`
-
-This script prints:
-- hook immutable params and current runtime state,
-- computed `pool_id` for the bound pool key,
-- pool slot0 + liquidity (if `StateView` is available),
-- live TVL estimate in USD (mark-to-market at current pool price),
-- pool activity from on-chain logs: lifetime + rolling windows (`24h/7d/30d/90d/180d/365d`).
-- fee-level activity split (swaps/volume/fees by fee tier).
-
-Notes:
-- `lpProviders` is counted by unique transaction senders (`tx.from`) in `ModifyLiquidity` calls for this pool over lifetime.
-
-Optional env tuning:
-- `HOOK_STATUS_START_BLOCK` — optional manual start block for lifetime activity (if unset, script tries CreatePool artifact and falls back to `0`).
-- `HOOK_STATUS_CHUNK_BLOCKS` — max block span per `eth_getLogs` chunk for lifetime backfill (default: `50000`).
-
-Output mode:
-- interactive terminal (TTY): dashboard view with screen redraw (no scrolling in watch mode),
-- piped/non-interactive: raw `key=value` lines (stable format for script integrations).
-
-Examples:
-
 ```bash
-./scripts/hook_status.sh --chain optimism
-./scripts/hook_status.sh --chain optimism --watch-seconds 15
+./scripts/create_pool.sh --chain <chain> --rpc-url <url> --private-key <pk> --broadcast
 ```
 
-## Outputs
+### Inspect hook state
 
-Runtime artifacts are stored under:
+```bash
+./scripts/hook_status.sh --chain <chain>
+./scripts/hook_status.sh --chain <chain> --watch-seconds 15
+```
 
-- `./scripts/out/` — deploy JSON and Forge broadcast/cache outputs
+## Operational notes
 
-These are runtime outputs and typically should not be committed.
+- `pause()`/`unpause()` are freeze/resume semantics (not swap stop, not HookFee stop).
+- Emergency resets are paused-only and explicit (`toFloor` / `toCash`).
+- `minCountedSwapUsd6` is telemetry-only dust filtering, not a swap gate.
+- Threshold updates are pending-state only, bounded to `1e6..10e6`, and activate at next period boundary.
+- Threshold updates intentionally have no timelock; recalibration target cadence is 5 days offchain.
+- Claim payout path uses PoolManager accounting withdrawal (`unlock` -> `burn` -> `take`).
+- `approxLpFeesUsd6` is approximate analytics, not accounting output.

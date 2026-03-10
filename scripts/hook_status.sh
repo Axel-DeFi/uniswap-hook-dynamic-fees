@@ -1160,7 +1160,7 @@ compute_last_hour_fee_change_lines() {
   local ema_periods="${4:-12}"
   local current_ema_usd6="${5:-?}"
   local floor_idx="${6:-?}"
-  local cap_idx="${7:-?}"
+  local extreme_idx="${7:-?}"
   local current_fee_idx="${8:-?}"
   local lookback_blocks="${HOOK_STATUS_LAST_HOUR_LOOKBACK_BLOCKS:-20000}"
   if ! [[ "${latest_block}" =~ ^[0-9]+$ ]]; then
@@ -1185,8 +1185,8 @@ compute_last_hour_fee_change_lines() {
   if ! [[ "${floor_idx}" =~ ^[0-9]+$ ]]; then
     floor_idx="?"
   fi
-  if ! [[ "${cap_idx}" =~ ^[0-9]+$ ]]; then
-    cap_idx="?"
+  if ! [[ "${extreme_idx}" =~ ^[0-9]+$ ]]; then
+    extreme_idx="?"
   fi
   if ! [[ "${current_fee_idx}" =~ ^[0-9]+$ ]]; then
     current_fee_idx="?"
@@ -1195,7 +1195,7 @@ compute_last_hour_fee_change_lines() {
   if (( latest_block > lookback_blocks )); then
     from_block=$((latest_block - lookback_blocks))
   fi
-  python3 - "${RPC_URL}" "${HOOK_ADDRESS}" "${from_block}" "${latest_block}" "${period_seconds}" "${current_fee_bips}" "${ema_periods}" "${current_ema_usd6}" "${floor_idx}" "${cap_idx}" "${current_fee_idx}" <<'PY'
+  python3 - "${RPC_URL}" "${HOOK_ADDRESS}" "${from_block}" "${latest_block}" "${period_seconds}" "${current_fee_bips}" "${ema_periods}" "${current_ema_usd6}" "${floor_idx}" "${extreme_idx}" "${current_fee_idx}" <<'PY'
 import json
 import subprocess
 import sys
@@ -1211,7 +1211,7 @@ current_fee_bips = sys.argv[6]
 ema_periods = int(sys.argv[7])
 current_ema_usd6_raw = sys.argv[8]
 floor_idx_raw = sys.argv[9]
-cap_idx_raw = sys.argv[10]
+extreme_idx_raw = sys.argv[10]
 current_fee_idx_raw = sys.argv[11]
 fee_updated_topic = "0x7a7cee7d3375d08c4510b71462006ecbba16bc2e5f4fecc9fc41c22e43714924"
 period_closed_topic = "0x3497b7d706817e8171c86d5c4c9657261e6fcfb36b9ae85c1cd7b3e840dce2c3"
@@ -1651,9 +1651,9 @@ render_raw_once() {
   ts="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 
   local pool_currency0 pool_currency1 stable_currency pool_tick_spacing
-  local initial_idx floor_idx cap_idx pause_idx fee_tier_count
+  local initial_idx floor_idx extreme_idx pause_idx fee_tier_count
   local period_seconds ema_periods deadband_bps lull_reset_seconds
-  local creator creator_fee_recipient
+  local owner hook_fee_recipient
 
   pool_currency0="$(first_token "$(try_cast_call "${HOOK_ADDRESS}" "poolCurrency0()(address)" || true)")"
   pool_currency1="$(first_token "$(try_cast_call "${HOOK_ADDRESS}" "poolCurrency1()(address)" || true)")"
@@ -1673,7 +1673,7 @@ render_raw_once() {
   fi
 
   floor_idx="$(first_token "$(try_cast_call "${HOOK_ADDRESS}" "floorIdx()(uint8)" || true)")"
-  cap_idx="$(first_token "$(try_cast_call "${HOOK_ADDRESS}" "capIdx()(uint8)" || true)")"
+  extreme_idx="$(first_token "$(try_cast_call "${HOOK_ADDRESS}" "extremeIdx()(uint8)" || true)")"
   initial_idx="${floor_idx}"
   pause_idx="${floor_idx}"
   fee_tier_count="$(first_token "$(try_cast_call "${HOOK_ADDRESS}" "feeTierCount()(uint16)" || true)")"
@@ -1681,8 +1681,8 @@ render_raw_once() {
   ema_periods="$(first_token "$(try_cast_call "${HOOK_ADDRESS}" "emaPeriods()(uint8)" || true)")"
   deadband_bps="$(first_token "$(try_cast_call "${HOOK_ADDRESS}" "deadbandBps()(uint16)" || true)")"
   lull_reset_seconds="$(first_token "$(try_cast_call "${HOOK_ADDRESS}" "lullResetSeconds()(uint32)" || true)")"
-  creator="$(first_token "$(try_cast_call "${HOOK_ADDRESS}" "creator()(address)" || true)")"
-  creator_fee_recipient="$(first_token "$(try_cast_call "${HOOK_ADDRESS}" "creatorFeeRecipient()(address)" || true)")"
+  owner="$(first_token "$(try_cast_call "${HOOK_ADDRESS}" "owner()(address)" || true)")"
+  hook_fee_recipient="$(first_token "$(try_cast_call "${HOOK_ADDRESS}" "hookFeeRecipient()(address)" || true)")"
 
   local paused current_fee
   paused="$(first_token "$(try_cast_call "${HOOK_ADDRESS}" "isPaused()(bool)" || true)")"
@@ -1692,18 +1692,17 @@ render_raw_once() {
     current_fee="NOT_INITIALIZED"
   fi
 
-  local unpack_raw pv ema_vol period_start fee_idx last_dir
-  unpack_raw="$(try_cast_call "${HOOK_ADDRESS}" "unpackedState()(uint64,uint96,uint64,uint8,uint8)" || true)"
+  local unpack_raw pv ema_vol period_start fee_idx
+  unpack_raw="$(try_cast_call "${HOOK_ADDRESS}" "unpackedState()(uint64,uint96,uint64,uint8)" || true)"
   pv="$(printf '%s\n' "${unpack_raw}" | sed -n '1p' | awk '{print $1}')"
   ema_vol="$(printf '%s\n' "${unpack_raw}" | sed -n '2p' | awk '{print $1}')"
   period_start="$(printf '%s\n' "${unpack_raw}" | sed -n '3p' | awk '{print $1}')"
   fee_idx="$(printf '%s\n' "${unpack_raw}" | sed -n '4p' | awk '{print $1}')"
-  last_dir="$(printf '%s\n' "${unpack_raw}" | sed -n '5p' | awk '{print $1}')"
 
   local tiers=()
   local i tier_val
   if ! [[ "${fee_tier_count}" =~ ^[0-9]+$ ]]; then
-    fee_tier_count=$((cap_idx + 1))
+    fee_tier_count=$((extreme_idx + 1))
   fi
   for ((i = 0; i < fee_tier_count; ++i)); do
     tier_val="$(first_token "$(try_cast_call "${HOOK_ADDRESS}" "feeTiers(uint256)(uint24)" "${i}" || true)")"
@@ -1748,7 +1747,7 @@ render_raw_once() {
   latest_block="$(rpc_block_number || true)"
   if [[ "${latest_block}" =~ ^[0-9]+$ ]]; then
     activity_line="$(compute_pool_activity_lifetime_line "${POOL_ACTIVITY_START_BLOCK}" "${latest_block}" "${stable_is_token1}" "${STABLE_DECIMALS}" "${activity_cache_file}" "${POOL_ACTIVITY_CHUNK_BLOCKS}")"
-    last_hour_lines="$(compute_last_hour_fee_change_lines "${latest_block}" "${period_seconds}" "${current_fee}" "${ema_periods}" "${ema_vol}" "${floor_idx}" "${cap_idx}" "${fee_idx}")"
+    last_hour_lines="$(compute_last_hour_fee_change_lines "${latest_block}" "${period_seconds}" "${current_fee}" "${ema_periods}" "${ema_vol}" "${floor_idx}" "${extreme_idx}" "${fee_idx}")"
   else
     activity_line="$(pool_activity_line_from_cache "${activity_cache_file}" "${POOL_ACTIVITY_START_BLOCK}" "block_number_unavailable")"
     last_hour_lines="last_hour_status: status=ERROR error=block_number_unavailable from_block=? to_block=? changes=0 periods=0"
@@ -1802,8 +1801,8 @@ render_raw_once() {
   fi
 
   local fee_bounds="n/a"
-  if [[ "${fee_idx}" =~ ^[0-9]+$ && "${floor_idx}" =~ ^[0-9]+$ && "${cap_idx}" =~ ^[0-9]+$ ]]; then
-    if (( fee_idx >= floor_idx && fee_idx <= cap_idx )); then
+  if [[ "${fee_idx}" =~ ^[0-9]+$ && "${floor_idx}" =~ ^[0-9]+$ && "${extreme_idx}" =~ ^[0-9]+$ ]]; then
+    if (( fee_idx >= floor_idx && fee_idx <= extreme_idx )); then
       fee_bounds="OK"
     else
       fee_bounds="OUT_OF_RANGE"
@@ -1834,9 +1833,9 @@ render_raw_once() {
   echo "state_view_address=${STATE_VIEW_ADDRESS:-not-set}"
   echo "hook_pool: currency0=${pool_currency0} currency1=${pool_currency1} stable=${stable_currency} tick_spacing=${pool_tick_spacing}"
   echo "hook_balances: native_wei=${native_wei} token0_raw=${token0_balance_raw} token1_raw=${token1_balance_raw} token0_decimals=${balance_token0_decimals} token1_decimals=${balance_token1_decimals} token0=${pool_currency0} token1=${pool_currency1}"
-  echo "hook_params: initial_idx=${initial_idx} floor_idx=${floor_idx} cap_idx=${cap_idx} pause_idx=${pause_idx} period_seconds=${period_seconds} ema_periods=${ema_periods} deadband_bps=${deadband_bps} lull_reset_seconds=${lull_reset_seconds} creator=${creator} creator_fee_recipient=${creator_fee_recipient}"
+  echo "hook_params: initial_idx=${initial_idx} floor_idx=${floor_idx} extreme_idx=${extreme_idx} pause_idx=${pause_idx} period_seconds=${period_seconds} ema_periods=${ema_periods} deadband_bps=${deadband_bps} lull_reset_seconds=${lull_reset_seconds} owner=${owner} hook_fee_recipient=${hook_fee_recipient}"
   echo "fee_tiers_bips=$(IFS=,; echo "${tiers[*]}")"
-  echo "hook_state: paused=${paused} current_fee_bips=${current_fee} period_volume_usd6=${pv} ema_volume_usd6=${ema_vol} period_start=${period_start} fee_idx=${fee_idx} last_dir=${last_dir}"
+  echo "hook_state: paused=${paused} current_fee_bips=${current_fee} period_volume_usd6=${pv} ema_volume_usd6_scaled=${ema_vol} period_start=${period_start} fee_idx=${fee_idx}"
   if [[ -n "${STATE_VIEW_ADDRESS}" ]]; then
     echo "pool_state: sqrt_price_x96=${sqrt_price:-?} tick=${tick:-?} protocol_fee=${protocol_fee:-?} lp_fee=${lp_fee:-?} liquidity=${liquidity:-?} price_stable_per_volatile=${price:-?}"
   fi
@@ -2206,8 +2205,8 @@ render_dashboard_once() {
   local last_hour_status_line last_hour_period_lines last_hour_change_lines
   local window_24h_line window_7d_line window_30d_line window_90d_line window_180d_line window_365d_line
   local ts chain chain_id hook_addr pool_manager pool_id state_view
-  local tick_spacing initial_idx floor_idx cap_idx pause_idx period_seconds ema_periods deadband_bps lull_reset_seconds
-  local fee_tiers paused current_fee pv ema_vol fee_idx last_dir
+  local tick_spacing initial_idx floor_idx extreme_idx pause_idx period_seconds ema_periods deadband_bps lull_reset_seconds
+  local fee_tiers paused current_fee pv ema_vol fee_idx direction_flag
   local tick protocol_fee lp_fee liquidity price pool_tvl_usd6
   local activity_swaps activity_volume activity_fees activity_lp activity_status
   local a24_swaps a24_volume a24_fees a7_swaps a7_volume a7_fees a30_swaps a30_volume a30_fees
@@ -2228,7 +2227,7 @@ render_dashboard_once() {
   local hook_token0_addr hook_token1_addr hook_native_eth hook_token0_amount hook_token1_amount hook_token0_short hook_token1_short
   local hook_token0_is_native hook_token1_is_native balance_line
   local ts_local
-  local live_period_vol live_last_dir
+  local live_period_vol live_direction_flag
   local lh_status lh_change_count lh_time lh_direction lh_from_bips lh_to_bips lh_from_pct lh_to_pct lh_change lh_ema lh_volume lh_reason
   local lh_ema_raw lh_volume_raw period_estimate
   local lh_time_cell lh_change_cell lh_ema_cell lh_volume_cell lh_reason_cell
@@ -2250,7 +2249,7 @@ render_dashboard_once() {
   tick_spacing="$(inline_value "${raw}" "tick_spacing")"
   initial_idx="$(inline_value "${raw}" "initial_idx")"
   floor_idx="$(inline_value "${raw}" "floor_idx")"
-  cap_idx="$(inline_value "${raw}" "cap_idx")"
+  extreme_idx="$(inline_value "${raw}" "extreme_idx")"
   pause_idx="$(inline_value "${raw}" "pause_idx")"
   period_seconds="$(inline_value "${raw}" "period_seconds")"
   ema_periods="$(inline_value "${raw}" "ema_periods")"
@@ -2261,9 +2260,12 @@ render_dashboard_once() {
   paused="$(inline_value "${raw}" "paused")"
   current_fee="$(inline_value "${raw}" "current_fee_bips")"
   pv="$(inline_value "${raw}" "period_volume_usd6")"
-  ema_vol="$(inline_value "${raw}" "ema_volume_usd6")"
+  ema_vol="$(inline_value "${raw}" "ema_volume_usd6_scaled")"
   fee_idx="$(inline_value "${raw}" "fee_idx")"
-  last_dir="$(inline_value "${raw}" "last_dir")"
+  direction_flag="$(inline_value "${raw}" "direction_flag")"
+  if [[ -z "${direction_flag}" ]]; then
+    direction_flag="0"
+  fi
 
   tick="$(inline_value "${raw}" "tick")"
   protocol_fee="$(inline_value "${raw}" "protocol_fee")"
@@ -2420,12 +2422,12 @@ render_dashboard_once() {
   deploy_floor="$(format_deploy_level "${fee_tiers}" "${floor_idx}")"
   deploy_initial="$(format_deploy_level "${fee_tiers}" "${initial_idx}")"
   deploy_pause="$(format_deploy_level "${fee_tiers}" "${pause_idx}")"
-  deploy_cap="$(format_deploy_level "${fee_tiers}" "${cap_idx}")"
+  deploy_cap="$(format_deploy_level "${fee_tiers}" "${extreme_idx}")"
   deploy_deadband_pct="$(deadband_bps_to_percent "${deadband_bps}")"
   levels_summary="-"
-  if [[ "${floor_idx}" =~ ^[0-9]+$ && "${cap_idx}" =~ ^[0-9]+$ ]] && (( cap_idx >= floor_idx )); then
+  if [[ "${floor_idx}" =~ ^[0-9]+$ && "${extreme_idx}" =~ ^[0-9]+$ ]] && (( extreme_idx >= floor_idx )); then
     levels_summary=""
-    for (( level_idx=floor_idx; level_idx<=cap_idx; level_idx++ )); do
+    for (( level_idx=floor_idx; level_idx<=extreme_idx; level_idx++ )); do
       level_bips="$(tier_for_idx "${fee_tiers}" "${level_idx}")"
       if [[ "${level_bips}" =~ ^[0-9]+$ ]]; then
         level_pct="$(bips_to_percent "${level_bips}")"
@@ -2462,7 +2464,7 @@ render_dashboard_once() {
   echo "  Params: period=${params_period} | emaPeriods=${params_ema_full} | deadband=${deploy_deadband_pct} | lullReset=${params_lull_reset} | tickSpacing=${params_tick_spacing}"
   echo
   live_period_vol="$(usd6_to_dollar "${pv}")"
-  live_last_dir="$(dir_label "${last_dir}")"
+  live_direction_flag="$(dir_label "${direction_flag}")"
   echo "Live:"
   echo "  +--------------+------------------+------------------+--------------+--------------------+"
   printf "  | %s | %s | %s | %s | %s |\n" "$(center_text "Level" 12)" "$(center_text "TVL" 16)" "$(center_text "PeriodVol" 16)" "$(center_text "EMA" 12)" "$(center_text "Direction" 18)"
@@ -2472,7 +2474,7 @@ render_dashboard_once() {
     "$(center_text "${pool_tvl_usd}" 16)" \
     "$(center_text "${live_period_vol}" 16)" \
     "$(center_text "${ema_usd}" 12)" \
-    "$(center_text "${live_last_dir}" 18)"
+    "$(center_text "${live_direction_flag}" 18)"
   echo "  +--------------+------------------+------------------+--------------+--------------------+"
   echo
   echo "Historical Data:"
@@ -2503,7 +2505,7 @@ render_dashboard_once() {
   echo "  +--------------+------------------+------------------+--------------+--------------------+"
   fee_printed_count=0
   can_filter_levels=0
-  if [[ "${floor_idx}" =~ ^[0-9]+$ && "${cap_idx}" =~ ^[0-9]+$ ]]; then
+  if [[ "${floor_idx}" =~ ^[0-9]+$ && "${extreme_idx}" =~ ^[0-9]+$ ]]; then
     can_filter_levels=1
   fi
   IFS=',' read -r -a tier_items <<<"${fee_tiers}"
@@ -2516,7 +2518,7 @@ render_dashboard_once() {
     if (( can_filter_levels == 0 )); then
       continue
     fi
-    if (( tier_i < floor_idx || tier_i > cap_idx )); then
+    if (( tier_i < floor_idx || tier_i > extreme_idx )); then
       continue
     fi
     tier_pct="$(bips_to_percent_2dp "${tier_bips}")"
@@ -2550,7 +2552,7 @@ render_dashboard_once() {
       if ! [[ "${tier_i}" =~ ^[0-9]+$ ]]; then
         continue
       fi
-      if (( tier_i < floor_idx || tier_i > cap_idx )); then
+      if (( tier_i < floor_idx || tier_i > extreme_idx )); then
         continue
       fi
       tier_pct="$(bips_to_percent_2dp "${fee_fallback_bips}")"

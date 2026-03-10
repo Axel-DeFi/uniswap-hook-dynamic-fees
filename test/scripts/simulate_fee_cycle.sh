@@ -116,9 +116,9 @@ HOOK_DOWN_R_FROM_CASH_BPS=0
 HOOK_DOWN_CASH_CONFIRM_PERIODS=0
 HOOK_EMERGENCY_FLOOR_CLOSEVOL_USD6=0
 HOOK_EMERGENCY_CONFIRM_PERIODS=0
-HOOK_CREATOR_FEE_LIMIT_PERCENT=0
-HOOK_CREATOR_ADDR=""
-HOOK_CREATOR_FEE_RECIPIENT=""
+HOOK_MAX_HOOK_FEE_PERCENT=0
+HOOK_OWNER_ADDR=""
+HOOK_HOOK_FEE_RECIPIENT=""
 NOT_POOL_MANAGER_SELECTOR=""
 MAX_BALANCE_SPEND_PCT="${MAX_BALANCE_SPEND_PCT:-100}"
 BALANCE_ERROR_FORCE_ATTEMPTS=0
@@ -604,7 +604,7 @@ if [[ -z "${PERIOD_SECONDS}" || "${PERIOD_SECONDS}" -le 0 ]]; then
 fi
 
 HOOK_FLOOR_IDX="$(cast_rpc call --rpc-url "${RPC_URL}" "${HOOK_ADDRESS}" "floorIdx()(uint8)" | awk '{print $1}')"
-HOOK_CAP_IDX="$(cast_rpc call --rpc-url "${RPC_URL}" "${HOOK_ADDRESS}" "capIdx()(uint8)" | awk '{print $1}')"
+HOOK_EXTREME_IDX="$(cast_rpc call --rpc-url "${RPC_URL}" "${HOOK_ADDRESS}" "extremeIdx()(uint8)" | awk '{print $1}')"
 HOOK_CASH_IDX="$(cast_rpc call --rpc-url "${RPC_URL}" "${HOOK_ADDRESS}" "cashIdx()(uint8)" | awk '{print $1}')"
 HOOK_EXTREME_IDX="$(cast_rpc call --rpc-url "${RPC_URL}" "${HOOK_ADDRESS}" "extremeIdx()(uint8)" | awk '{print $1}')"
 HOOK_FEE_TIER_COUNT="$(cast_rpc call --rpc-url "${RPC_URL}" "${HOOK_ADDRESS}" "feeTierCount()(uint16)" | awk '{print $1}')"
@@ -624,13 +624,12 @@ HOOK_DOWN_R_FROM_CASH_BPS="$(cast_rpc call --rpc-url "${RPC_URL}" "${HOOK_ADDRES
 HOOK_DOWN_CASH_CONFIRM_PERIODS="$(cast_rpc call --rpc-url "${RPC_URL}" "${HOOK_ADDRESS}" "downCashConfirmPeriods()(uint8)" | awk '{print $1}')"
 HOOK_EMERGENCY_FLOOR_CLOSEVOL_USD6="$(cast_rpc call --rpc-url "${RPC_URL}" "${HOOK_ADDRESS}" "emergencyFloorCloseVolUsd6()(uint64)" | awk '{print $1}')"
 HOOK_EMERGENCY_CONFIRM_PERIODS="$(cast_rpc call --rpc-url "${RPC_URL}" "${HOOK_ADDRESS}" "emergencyConfirmPeriods()(uint8)" | awk '{print $1}')"
-HOOK_CREATOR_FEE_LIMIT_PERCENT="$(cast_rpc call --rpc-url "${RPC_URL}" "${HOOK_ADDRESS}" "creatorFeeLimitPercent()(uint16)" | awk '{print $1}')"
-HOOK_CREATOR_ADDR="$(cast_rpc call --rpc-url "${RPC_URL}" "${HOOK_ADDRESS}" "creator()(address)" | awk '{print $1}')"
-HOOK_CREATOR_FEE_RECIPIENT="$(cast_rpc call --rpc-url "${RPC_URL}" "${HOOK_ADDRESS}" "creatorFeeRecipient()(address)" | awk '{print $1}')"
+HOOK_MAX_HOOK_FEE_PERCENT="$(cast_rpc call --rpc-url "${RPC_URL}" "${HOOK_ADDRESS}" "MAX_HOOK_FEE_PERCENT()(uint16)" | awk '{print $1}')"
+HOOK_OWNER_ADDR="$(cast_rpc call --rpc-url "${RPC_URL}" "${HOOK_ADDRESS}" "owner()(address)" | awk '{print $1}')"
+HOOK_HOOK_FEE_RECIPIENT="$(cast_rpc call --rpc-url "${RPC_URL}" "${HOOK_ADDRESS}" "hookFeeRecipient()(address)" | awk '{print $1}')"
 if ! [[ "${HOOK_FLOOR_IDX}" =~ ^[0-9]+$ \
-     && "${HOOK_CAP_IDX}" =~ ^[0-9]+$ \
-     && "${HOOK_CASH_IDX}" =~ ^[0-9]+$ \
      && "${HOOK_EXTREME_IDX}" =~ ^[0-9]+$ \
+     && "${HOOK_CASH_IDX}" =~ ^[0-9]+$ \
      && "${HOOK_FEE_TIER_COUNT}" =~ ^[0-9]+$ \
      && "${HOOK_EMA_PERIODS}" =~ ^[0-9]+$ \
      && "${HOOK_DEADBAND_BPS}" =~ ^[0-9]+$ \
@@ -648,9 +647,9 @@ if ! [[ "${HOOK_FLOOR_IDX}" =~ ^[0-9]+$ \
      && "${HOOK_DOWN_CASH_CONFIRM_PERIODS}" =~ ^[0-9]+$ \
      && "${HOOK_EMERGENCY_FLOOR_CLOSEVOL_USD6}" =~ ^[0-9]+$ \
      && "${HOOK_EMERGENCY_CONFIRM_PERIODS}" =~ ^[0-9]+$ \
-     && "${HOOK_CREATOR_FEE_LIMIT_PERCENT}" =~ ^[0-9]+$ \
-     && "${HOOK_CREATOR_ADDR}" =~ ^0x[0-9a-fA-F]{40}$ \
-     && "${HOOK_CREATOR_FEE_RECIPIENT}" =~ ^0x[0-9a-fA-F]{40}$ ]]; then
+     && "${HOOK_MAX_HOOK_FEE_PERCENT}" =~ ^[0-9]+$ \
+     && "${HOOK_OWNER_ADDR}" =~ ^0x[0-9a-fA-F]{40}$ \
+     && "${HOOK_HOOK_FEE_RECIPIENT}" =~ ^0x[0-9a-fA-F]{40}$ ]]; then
   echo "ERROR: failed to read hook runtime params."
   exit 1
 fi
@@ -658,7 +657,7 @@ if (( HOOK_FEE_TIER_COUNT <= 0 )); then
   echo "ERROR: invalid feeTierCount()=${HOOK_FEE_TIER_COUNT}."
   exit 1
 fi
-if (( HOOK_FLOOR_IDX >= HOOK_CASH_IDX || HOOK_CASH_IDX >= HOOK_EXTREME_IDX || HOOK_EXTREME_IDX != HOOK_CAP_IDX )); then
+if (( HOOK_FLOOR_IDX >= HOOK_CASH_IDX || HOOK_CASH_IDX >= HOOK_EXTREME_IDX )); then
   echo "ERROR: invalid fee role indices from hook."
   exit 1
 fi
@@ -693,7 +692,7 @@ if [[ -n "${FLOOR_TIER:-}" && -n "${CAP_TIER:-}" ]]; then
     exit 1
   fi
   hook_floor_pips="${HOOK_FEE_TIER_VALUES[$HOOK_FLOOR_IDX]-}"
-  hook_cap_pips="${HOOK_FEE_TIER_VALUES[$HOOK_CAP_IDX]-}"
+  hook_cap_pips="${HOOK_FEE_TIER_VALUES[$HOOK_EXTREME_IDX]-}"
   if [[ -z "${hook_floor_pips}" || -z "${hook_cap_pips}" ]]; then
     echo "ERROR: failed to map on-chain floor/cap indices to fee tiers."
     exit 1
@@ -705,7 +704,7 @@ if [[ -n "${FLOOR_TIER:-}" && -n "${CAP_TIER:-}" ]]; then
   fi
   if [[ "${hook_floor_pips}" != "${cfg_floor_pips}" || "${hook_cap_pips}" != "${cfg_cap_pips}" || "${deadband_mismatch}" -eq 1 ]]; then
     echo "ERROR: hook params mismatch with config."
-    echo "       on-chain: floor=i${HOOK_FLOOR_IDX}/f${hook_floor_pips} cap=i${HOOK_CAP_IDX}/f${hook_cap_pips} deadband=${HOOK_DEADBAND_BPS}"
+    echo "       on-chain: floor=i${HOOK_FLOOR_IDX}/f${hook_floor_pips} cap=i${HOOK_EXTREME_IDX}/f${hook_cap_pips} deadband=${HOOK_DEADBAND_BPS}"
     echo "       config:   floor=${FLOOR_TIER}% (f${cfg_floor_pips}) cap=${CAP_TIER}% (f${cfg_cap_pips}) deadband=${DEADBAND_BPS:-?}"
     echo "       Deploy a new hook/pool with current config, then rerun simulate_fee_cycle."
     exit 1
@@ -836,12 +835,12 @@ PY
 read_state() {
   local fee pv ema ps idx dir out
   fee="$(cast_rpc call --rpc-url "${RPC_URL}" "${HOOK_ADDRESS}" "currentFeeBips()(uint24)" | awk '{print $1}')"
-  out="$(cast_rpc call --rpc-url "${RPC_URL}" "${HOOK_ADDRESS}" "unpackedState()(uint64,uint96,uint64,uint8,uint8)")"
+  out="$(cast_rpc call --rpc-url "${RPC_URL}" "${HOOK_ADDRESS}" "unpackedState()(uint64,uint96,uint64,uint8)")"
   pv="$(printf '%s\n' "${out}" | sed -n '1p' | awk '{print $1}')"
   ema="$(printf '%s\n' "${out}" | sed -n '2p' | awk '{print $1}')"
   ps="$(printf '%s\n' "${out}" | sed -n '3p' | awk '{print $1}')"
   idx="$(printf '%s\n' "${out}" | sed -n '4p' | awk '{print $1}')"
-  dir="$(printf '%s\n' "${out}" | sed -n '5p' | awk '{print $1}')"
+  dir="0"
   echo "${fee}|${pv}|${ema}|${ps}|${idx}|${dir}"
 }
 
@@ -855,9 +854,9 @@ read_pause_flag() {
   return 1
 }
 
-read_creator_fees() {
+read_hook_fees() {
   local out f0 f1
-  out="$(cast_rpc call --rpc-url "${RPC_URL}" "${HOOK_ADDRESS}" "creatorFeesAccrued()(uint256,uint256)" 2>/dev/null || true)"
+  out="$(cast_rpc call --rpc-url "${RPC_URL}" "${HOOK_ADDRESS}" "hookFeesAccrued()(uint256,uint256)" 2>/dev/null || true)"
   f0="$(printf '%s\n' "${out}" | sed -n '1p' | awk '{print $1}')"
   f1="$(printf '%s\n' "${out}" | sed -n '2p' | awk '{print $1}')"
   if [[ "${f0}" =~ ^[0-9]+$ && "${f1}" =~ ^[0-9]+$ ]]; then
@@ -925,68 +924,64 @@ expect_hook_call_revert_contains() {
 }
 
 run_cases_anomaly_checks() {
-  local tiers_literal creator_fee_limit_bps outsider
+  local tiers_literal outsider
   local bad_params_hold bad_params_confirm
-  local sel_creator_fee_percent sel_creator_fee_bps sel_invalid_recipient sel_requires_paused
-  local sel_invalid_rescue sel_not_creator
+  local sel_hook_fee_percent sel_invalid_recipient sel_requires_paused
+  local sel_invalid_rescue sel_not_owner
   outsider="${ANOMALY_OUTSIDER_ADDRESS}"
   if [[ ! "${outsider}" =~ ^0x[0-9a-fA-F]{40}$ ]]; then
     outsider="0x000000000000000000000000000000000000dEaD"
   fi
   tiers_literal="$(hook_fee_tiers_array_literal)"
-  creator_fee_limit_bps=$((HOOK_CREATOR_FEE_LIMIT_PERCENT * 100))
-  sel_creator_fee_percent="$(cast_rpc sig "CreatorFeePercentLimitExceeded(uint16,uint16)" 2>/dev/null || true)"
-  sel_creator_fee_bps="$(cast_rpc sig "CreatorFeeLimitExceeded(uint16,uint16)" 2>/dev/null || true)"
+  sel_hook_fee_percent="$(cast_rpc sig "HookFeePercentLimitExceeded(uint16,uint16)" 2>/dev/null || true)"
   sel_invalid_recipient="$(cast_rpc sig "InvalidRecipient()" 2>/dev/null || true)"
   sel_requires_paused="$(cast_rpc sig "RequiresPaused()" 2>/dev/null || true)"
   sel_invalid_rescue="$(cast_rpc sig "InvalidRescueCurrency()" 2>/dev/null || true)"
-  sel_not_creator="$(cast_rpc sig "NotCreator()" 2>/dev/null || true)"
-  if [[ -z "${sel_creator_fee_percent}" ]]; then sel_creator_fee_percent="CreatorFeePercentLimitExceeded"; fi
-  if [[ -z "${sel_creator_fee_bps}" ]]; then sel_creator_fee_bps="CreatorFeeLimitExceeded"; fi
+  sel_not_owner="$(cast_rpc sig "NotOwner()" 2>/dev/null || true)"
+  if [[ -z "${sel_hook_fee_percent}" ]]; then sel_hook_fee_percent="HookFeePercentLimitExceeded"; fi
   if [[ -z "${sel_invalid_recipient}" ]]; then sel_invalid_recipient="InvalidRecipient"; fi
   if [[ -z "${sel_requires_paused}" ]]; then sel_requires_paused="RequiresPaused"; fi
   if [[ -z "${sel_invalid_rescue}" ]]; then sel_invalid_rescue="InvalidRescueCurrency"; fi
-  if [[ -z "${sel_not_creator}" ]]; then sel_not_creator="NotCreator"; fi
+  if [[ -z "${sel_not_owner}" ]]; then sel_not_owner="NotOwner"; fi
 
   bad_params_hold="(${HOOK_MIN_CLOSEVOL_TO_CASH_USD6},${HOOK_UP_R_TO_CASH_BPS},0,${HOOK_MIN_CLOSEVOL_TO_EXTREME_USD6},${HOOK_UP_R_TO_EXTREME_BPS},${HOOK_UP_EXTREME_CONFIRM_PERIODS},${HOOK_EXTREME_HOLD_PERIODS},${HOOK_DOWN_R_FROM_EXTREME_BPS},${HOOK_DOWN_EXTREME_CONFIRM_PERIODS},${HOOK_DOWN_R_FROM_CASH_BPS},${HOOK_DOWN_CASH_CONFIRM_PERIODS},${HOOK_EMERGENCY_FLOOR_CLOSEVOL_USD6},${HOOK_EMERGENCY_CONFIRM_PERIODS})"
   bad_params_confirm="(${HOOK_MIN_CLOSEVOL_TO_CASH_USD6},${HOOK_UP_R_TO_CASH_BPS},${HOOK_CASH_HOLD_PERIODS},${HOOK_MIN_CLOSEVOL_TO_EXTREME_USD6},${HOOK_UP_R_TO_EXTREME_BPS},${HOOK_UP_EXTREME_CONFIRM_PERIODS},${HOOK_EXTREME_HOLD_PERIODS},${HOOK_DOWN_R_FROM_EXTREME_BPS},${HOOK_DOWN_EXTREME_CONFIRM_PERIODS},${HOOK_DOWN_R_FROM_CASH_BPS},0,${HOOK_EMERGENCY_FLOOR_CLOSEVOL_USD6},${HOOK_EMERGENCY_CONFIRM_PERIODS})"
 
   expect_hook_call_revert_contains \
-    "ANOM-01 setCreatorFeePercent above limit" \
-    "${sel_creator_fee_percent}" \
-    "${HOOK_CREATOR_ADDR}" \
-    "setCreatorFeePercent(uint16)" \
-    "$((HOOK_CREATOR_FEE_LIMIT_PERCENT + 1))" || return 1
+    "ANOM-01 scheduleHookFeePercentChange above limit" \
+    "${sel_hook_fee_percent}" \
+    "${HOOK_OWNER_ADDR}" \
+    "scheduleHookFeePercentChange(uint16)" \
+    "$((HOOK_MAX_HOOK_FEE_PERCENT + 1))" || return 1
   expect_hook_call_revert_contains \
-    "ANOM-02 setCreatorFeeConfig above limit" \
-    "${sel_creator_fee_bps}" \
-    "${HOOK_CREATOR_ADDR}" \
-    "setCreatorFeeConfig(address,uint16)" \
-    "${HOOK_CREATOR_ADDR}" \
-    "$((creator_fee_limit_bps + 1))" || return 1
+    "ANOM-02 scheduleHookFeePercentChange far above limit" \
+    "${sel_hook_fee_percent}" \
+    "${HOOK_OWNER_ADDR}" \
+    "scheduleHookFeePercentChange(uint16)" \
+    "1100" || return 1
   expect_hook_call_revert_contains \
-    "ANOM-03 claimCreatorFees zero recipient" \
+    "ANOM-03 claimHookFees zero recipient" \
     "${sel_invalid_recipient}" \
-    "${HOOK_CREATOR_ADDR}" \
-    "claimCreatorFees(address,uint256,uint256)" \
+    "${HOOK_OWNER_ADDR}" \
+    "claimHookFees(address,uint256,uint256)" \
     "0x0000000000000000000000000000000000000000" \
     0 \
     0 || return 1
   expect_hook_call_revert_contains \
-    "ANOM-04 claimAllCreatorFees zero recipient" \
+    "ANOM-04 claimAllHookFees zero recipient" \
     "${sel_invalid_recipient}" \
-    "${HOOK_CREATOR_ADDR}" \
-    "claimAllCreatorFees(address)" \
+    "${HOOK_OWNER_ADDR}" \
+    "claimAllHookFees(address)" \
     "0x0000000000000000000000000000000000000000" || return 1
   expect_hook_call_revert_contains \
     "ANOM-05 emergency reset requires paused" \
     "${sel_requires_paused}" \
-    "${HOOK_CREATOR_ADDR}" \
-    "emergencyResetStateToFloor()" || return 1
+    "${HOOK_OWNER_ADDR}" \
+    "emergencyResetToFloor()" || return 1
   expect_hook_call_revert_contains \
     "ANOM-06 setTimingParams requires paused" \
     "${sel_requires_paused}" \
-    "${HOOK_CREATOR_ADDR}" \
+    "${HOOK_OWNER_ADDR}" \
     "setTimingParams(uint32,uint8,uint32,uint16)" \
     "${PERIOD_SECONDS}" \
     "${HOOK_EMA_PERIODS}" \
@@ -995,48 +990,47 @@ run_cases_anomaly_checks() {
   expect_hook_call_revert_contains \
     "ANOM-07 setFeeTiersAndRoles requires paused" \
     "${sel_requires_paused}" \
-    "${HOOK_CREATOR_ADDR}" \
-    "setFeeTiersAndRoles(uint24[],uint8,uint8,uint8,uint8)" \
+    "${HOOK_OWNER_ADDR}" \
+    "setFeeTiersAndRoles(uint24[],uint8,uint8,uint8)" \
     "${tiers_literal}" \
     "${HOOK_FLOOR_IDX}" \
     "${HOOK_CASH_IDX}" \
-    "${HOOK_EXTREME_IDX}" \
-    "${HOOK_CAP_IDX}" || return 1
+    "${HOOK_EXTREME_IDX}" || return 1
   expect_hook_call_revert_contains \
     "ANOM-08 setControllerParams requires paused (hold not evaluated hot)" \
     "${sel_requires_paused}" \
-    "${HOOK_CREATOR_ADDR}" \
+    "${HOOK_OWNER_ADDR}" \
     "setControllerParams((uint64,uint16,uint8,uint64,uint16,uint8,uint8,uint16,uint8,uint16,uint8,uint64,uint8))" \
     "${bad_params_hold}" || return 1
   expect_hook_call_revert_contains \
     "ANOM-09 setControllerParams requires paused (confirm not evaluated hot)" \
     "${sel_requires_paused}" \
-    "${HOOK_CREATOR_ADDR}" \
+    "${HOOK_OWNER_ADDR}" \
     "setControllerParams((uint64,uint16,uint8,uint64,uint16,uint8,uint8,uint16,uint8,uint16,uint8,uint64,uint8))" \
     "${bad_params_confirm}" || return 1
   expect_hook_call_revert_contains \
     "ANOM-10 rescueToken pool currency0 forbidden" \
     "${sel_invalid_rescue}" \
-    "${HOOK_CREATOR_ADDR}" \
+    "${HOOK_OWNER_ADDR}" \
     "rescueToken(address,uint256)" \
     "${CURRENCY0}" \
     1 || return 1
   expect_hook_call_revert_contains \
     "ANOM-11 rescueToken pool currency1 forbidden" \
     "${sel_invalid_rescue}" \
-    "${HOOK_CREATOR_ADDR}" \
+    "${HOOK_OWNER_ADDR}" \
     "rescueToken(address,uint256)" \
     "${CURRENCY1}" \
     1 || return 1
   expect_hook_call_revert_contains \
-    "ANOM-12 onlyCreator guard (setCreatorFeeRecipient)" \
-    "${sel_not_creator}" \
+    "ANOM-12 onlyOwner guard (setHookFeeRecipient)" \
+    "${sel_not_owner}" \
     "${outsider}" \
-    "setCreatorFeeRecipient(address)" \
+    "setHookFeeRecipient(address)" \
     "${outsider}" || return 1
   expect_hook_call_revert_contains \
-    "ANOM-13 onlyCreator guard (pause)" \
-    "${sel_not_creator}" \
+    "ANOM-13 onlyOwner guard (pause)" \
+    "${sel_not_owner}" \
     "${outsider}" \
     "pause()" || return 1
   if [[ -n "${NOT_POOL_MANAGER_SELECTOR}" ]]; then
@@ -1104,15 +1098,15 @@ hook_unpause() {
   run_hook_admin_step "HOOK_UNPAUSE" "unpause()"
 }
 
-hook_claim_all_creator_fees() {
-  run_hook_admin_step "HOOK_CLAIM_CREATOR_FEES" "claimAllCreatorFees()"
+hook_claim_all_hook_fees() {
+  run_hook_admin_step "HOOK_CLAIM_HOOK_FEES" "claimAllHookFees()"
 }
 
 run_cases_final_checks() {
   local pause_tx unpause_tx probe_tx before_fee0 before_fee1 after_fee0 after_fee1 claimed_fee0 claimed_fee1
   local pause_flag_after unpause_flag_after fee idx pv ema ps dir amount side_bool
   local side_probe side_probe_bool pause_seed_tx pause_trigger_tx
-  local state_after_pause state_after_unpause read_creator_fees_before read_creator_fees_after read_creator_fees_claimed
+  local state_after_pause state_after_unpause read_hook_fees_before read_hook_fees_after read_hook_fees_claimed
   local state_before_pause state_before_unpause
   local attempt_n wait_roll target_vol amount_raw amount_probe
   local pause_static_ok unpause_resume_ok
@@ -1140,7 +1134,7 @@ run_cases_final_checks() {
     governance_fee=""
     governance_idx=""
     # Make PAUSE/floor-lock visible from a high fee level, not from floor.
-    cases_drive_to_target_idx "FINAL_PRE_PAUSE_HIGH" "${HOOK_CAP_IDX}" 10 >/dev/null 2>&1 || true
+    cases_drive_to_target_idx "FINAL_PRE_PAUSE_HIGH" "${HOOK_EXTREME_IDX}" 10 >/dev/null 2>&1 || true
     state_before_pause="$(read_state 2>/dev/null || true)"
     if IFS='|' read -r fee_before_probe pv_before_probe ema_before_probe ps_before_probe idx_before_probe dir_before_probe <<<"${state_before_pause}"; then
       if [[ "${idx_before_probe}" =~ ^[0-9]+$ ]] && (( idx_before_probe > HOOK_FLOOR_IDX )); then
@@ -1524,10 +1518,10 @@ run_cases_final_checks() {
   fi
 
   if (( TC_MON_ACCRUE_PASS == 0 || TC_MON_CLAIM_PASS == 0 )); then
-    if ! read_creator_fees_before="$(read_creator_fees 2>/dev/null)"; then
-      read_creator_fees_before="0|0"
+    if ! read_hook_fees_before="$(read_hook_fees 2>/dev/null)"; then
+      read_hook_fees_before="0|0"
     fi
-    IFS='|' read -r before_fee0 before_fee1 <<<"${read_creator_fees_before}"
+    IFS='|' read -r before_fee0 before_fee1 <<<"${read_hook_fees_before}"
     if ! [[ "${before_fee0}" =~ ^[0-9]+$ ]]; then before_fee0=0; fi
     if ! [[ "${before_fee1}" =~ ^[0-9]+$ ]]; then before_fee1=0; fi
   fi
@@ -1539,8 +1533,8 @@ run_cases_final_checks() {
     if probe_tx="$(run_swap_step "FINAL_MON_ACCRUE" "${amount}" "${side_bool}" 2>/dev/null)"; then
       emit_ts="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
       record_period_closed_events_from_tx "${emit_ts}" "${RND_ATTEMPTS}" "${probe_tx}" >/dev/null 2>&1 || true
-      if read_creator_fees_after="$(read_creator_fees 2>/dev/null)"; then
-        IFS='|' read -r after_fee0 after_fee1 <<<"${read_creator_fees_after}"
+      if read_hook_fees_after="$(read_hook_fees 2>/dev/null)"; then
+        IFS='|' read -r after_fee0 after_fee1 <<<"${read_hook_fees_after}"
         if ! [[ "${after_fee0}" =~ ^[0-9]+$ ]]; then after_fee0=0; fi
         if ! [[ "${after_fee1}" =~ ^[0-9]+$ ]]; then after_fee1=0; fi
         if (( after_fee0 > before_fee0 || after_fee1 > before_fee1 )); then
@@ -1558,9 +1552,9 @@ run_cases_final_checks() {
 
   if (( TC_MON_CLAIM_PASS == 0 )); then
     TC_MON_CLAIM_OBS=$((TC_MON_CLAIM_OBS + 1))
-    if hook_claim_all_creator_fees >/dev/null 2>&1; then
-      if read_creator_fees_claimed="$(read_creator_fees 2>/dev/null)"; then
-        IFS='|' read -r claimed_fee0 claimed_fee1 <<<"${read_creator_fees_claimed}"
+    if hook_claim_all_hook_fees >/dev/null 2>&1; then
+      if read_hook_fees_claimed="$(read_hook_fees 2>/dev/null)"; then
+        IFS='|' read -r claimed_fee0 claimed_fee1 <<<"${read_hook_fees_claimed}"
         if ! [[ "${claimed_fee0}" =~ ^[0-9]+$ ]]; then claimed_fee0=1; fi
         if ! [[ "${claimed_fee1}" =~ ^[0-9]+$ ]]; then claimed_fee1=1; fi
         if (( claimed_fee0 == 0 && claimed_fee1 == 0 )); then
@@ -3580,7 +3574,7 @@ evaluate_hook_invariants() {
   local expected_fee
 
   TC_INV_BOUNDS_OBS=$((TC_INV_BOUNDS_OBS + 1))
-  if (( idx >= HOOK_FLOOR_IDX && idx <= HOOK_CAP_IDX )); then
+  if (( idx >= HOOK_FLOOR_IDX && idx <= HOOK_EXTREME_IDX )); then
     TC_INV_BOUNDS_PASS=$((TC_INV_BOUNDS_PASS + 1))
   else
     TC_INV_BOUNDS_FAIL=$((TC_INV_BOUNDS_FAIL + 1))
@@ -3619,10 +3613,10 @@ evaluate_hook_transition_cases() {
     RND_MODEL_MISMATCH_LAST="negative periodStart delta: before=${b_ps} after=${a_ps}"
     return
   fi
-  if (( a_idx < HOOK_FLOOR_IDX || a_idx > HOOK_CAP_IDX )); then
+  if (( a_idx < HOOK_FLOOR_IDX || a_idx > HOOK_EXTREME_IDX )); then
     TC_MODEL_CLOSE_FAIL=$((TC_MODEL_CLOSE_FAIL + 1))
     RND_MODEL_MISMATCH_COUNT=$((RND_MODEL_MISMATCH_COUNT + 1))
-    RND_MODEL_MISMATCH_LAST="feeIdx out of bounds: idx=${a_idx} floor=${HOOK_FLOOR_IDX} cap=${HOOK_CAP_IDX}"
+    RND_MODEL_MISMATCH_LAST="feeIdx out of bounds: idx=${a_idx} floor=${HOOK_FLOOR_IDX} cap=${HOOK_EXTREME_IDX}"
     return
   fi
   TC_MODEL_CLOSE_PASS=$((TC_MODEL_CLOSE_PASS + 1))
@@ -3687,8 +3681,8 @@ render_hook_cases_table() {
   print_hook_case_row "GV-2" "paused level freeze" "${TC_PAUSE_STATIC_OBS}" "${TC_PAUSE_STATIC_PASS}" "${TC_PAUSE_STATIC_FAIL}"
   print_hook_case_row "GV-3" "unpause restores running" "${TC_UNPAUSE_OBS}" "${TC_UNPAUSE_PASS}" "${TC_UNPAUSE_FAIL}"
   print_hook_case_row "GV-4" "post-unpause level move" "${TC_UNPAUSE_RESUME_OBS}" "${TC_UNPAUSE_RESUME_PASS}" "${TC_UNPAUSE_RESUME_FAIL}"
-  print_hook_case_row "MN-1" "creator fee accrual" "${TC_MON_ACCRUE_OBS}" "${TC_MON_ACCRUE_PASS}" "${TC_MON_ACCRUE_FAIL}"
-  print_hook_case_row "MN-2" "creator fee claim" "${TC_MON_CLAIM_OBS}" "${TC_MON_CLAIM_PASS}" "${TC_MON_CLAIM_FAIL}"
+  print_hook_case_row "MN-1" "hook fee accrual" "${TC_MON_ACCRUE_OBS}" "${TC_MON_ACCRUE_PASS}" "${TC_MON_ACCRUE_FAIL}"
+  print_hook_case_row "MN-2" "hook fee claim" "${TC_MON_CLAIM_OBS}" "${TC_MON_CLAIM_PASS}" "${TC_MON_CLAIM_FAIL}"
   print_hook_case_row "AN-1" "anomaly guards" "${TC_ANOMALY_OBS}" "${TC_ANOMALY_PASS}" "${TC_ANOMALY_FAIL}"
   echo "  ------------------------------------------+---------+-------+-------+-------"
 }
@@ -3880,18 +3874,18 @@ cases_set_stage() {
 
 cases_reversal_mid_idx() {
   local mid
-  mid=$(((HOOK_FLOOR_IDX + HOOK_CAP_IDX) / 2))
+  mid=$(((HOOK_FLOOR_IDX + HOOK_EXTREME_IDX) / 2))
   if (( mid <= HOOK_FLOOR_IDX )); then
     mid=$((HOOK_FLOOR_IDX + 1))
   fi
-  if (( mid >= HOOK_CAP_IDX )); then
-    mid=$((HOOK_CAP_IDX - 1))
+  if (( mid >= HOOK_EXTREME_IDX )); then
+    mid=$((HOOK_EXTREME_IDX - 1))
   fi
   if (( mid < HOOK_FLOOR_IDX )); then
     mid="${HOOK_FLOOR_IDX}"
   fi
-  if (( mid > HOOK_CAP_IDX )); then
-    mid="${HOOK_CAP_IDX}"
+  if (( mid > HOOK_EXTREME_IDX )); then
+    mid="${HOOK_EXTREME_IDX}"
   fi
   echo "${mid}"
 }
@@ -4665,7 +4659,7 @@ random_write_stats_snapshot() {
   fi
   current_tier="$(fee_tier_for_idx "${RND_CURRENT_IDX}")"
   floor_tier="$(fee_tier_for_idx "${HOOK_FLOOR_IDX}")"
-  cap_tier="$(fee_tier_for_idx "${HOOK_CAP_IDX}")"
+  cap_tier="$(fee_tier_for_idx "${HOOK_EXTREME_IDX}")"
   mode_label="random"
   if (( CASES_MODE == 1 )); then
     mode_label="cases"
@@ -4873,10 +4867,10 @@ random_write_stats_snapshot() {
     echo "current_period_vol_usd6=${RND_CURRENT_PV}"
     echo "current_ema_usd6=${RND_CURRENT_EMA}"
     echo "current_fee_idx=${RND_CURRENT_IDX}"
-    echo "current_last_dir=${RND_CURRENT_DIR}"
+    echo "current_direction_flag=${RND_CURRENT_DIR}"
     echo "fee_level_floor_idx=${HOOK_FLOOR_IDX}"
     echo "fee_level_floor_tier_bips=${floor_tier}"
-    echo "fee_level_cap_idx=${HOOK_CAP_IDX}"
+    echo "fee_level_extreme_idx=${HOOK_EXTREME_IDX}"
     echo "fee_level_cap_tier_bips=${cap_tier}"
     echo "wallet_native_symbol=${NATIVE_GAS_SYMBOL}"
     echo "wallet_native_balance_wei=${RND_BAL_NATIVE_WEI}"
@@ -4937,7 +4931,7 @@ random_render_dashboard() {
   local econ_avg_fee_bips econ_avg_fee_pct
   local econ_avg_fee_bips_fmt tick_fmt active_liq_usd6 active_liq_display
   local zfo_fmt ozf_fmt buy_count sell_count buy_fmt sell_fmt
-  local hook_period_vol_usd hook_ema_usd hook_last_dir
+  local hook_period_vol_usd hook_ema_usd hook_direction_flag
   local hook_bal0_raw hook_bal1_raw hook_bal0_fmt hook_bal1_fmt hook_bal0_usd hook_bal1_usd
   local cases_label
   local -a balance_parts=()
@@ -4946,7 +4940,7 @@ random_render_dashboard() {
   elapsed=$((now - RND_START_TS))
   current_tier="$(fee_tier_for_idx "${RND_CURRENT_IDX}")"
   floor_tier="$(fee_tier_for_idx "${HOOK_FLOOR_IDX}")"
-  cap_tier="$(fee_tier_for_idx "${HOOK_CAP_IDX}")"
+  cap_tier="$(fee_tier_for_idx "${HOOK_EXTREME_IDX}")"
   current_pct="$(fee_bips_to_percent "${current_tier}")"
   floor_pct="$(fee_bips_to_percent "${floor_tier}")"
   cap_pct="$(fee_bips_to_percent "${cap_tier}")"
@@ -4992,7 +4986,7 @@ random_render_dashboard() {
   sell_fmt="$(format_int_commas "${sell_count}")"
   hook_period_vol_usd="$(usd6_to_dollar "${RND_CURRENT_PV}")"
   hook_ema_usd="$(usd6_to_dollar "${RND_CURRENT_EMA}")"
-  hook_last_dir="$(dir_to_label "${RND_CURRENT_DIR}")"
+  hook_direction_flag="$(dir_to_label "${RND_CURRENT_DIR}")"
   hook_bal0_raw="$(read_token_balance "${CURRENCY0}" "${HOOK_ADDRESS}" 2>/dev/null || true)"
   hook_bal1_raw="$(read_token_balance "${CURRENCY1}" "${HOOK_ADDRESS}" 2>/dev/null || true)"
   if ! [[ "${hook_bal0_raw}" =~ ^[0-9]+$ ]]; then hook_bal0_raw=0; fi
@@ -5028,7 +5022,7 @@ random_render_dashboard() {
   echo "  Address: ${HOOK_ADDRESS}"
   echo "  Deploy: floor=${floor_pct} | cap=${cap_pct}"
   echo "  Algo: period=${PERIOD_SECONDS}s | emaPeriods=${HOOK_EMA_PERIODS} (~${ema_human}) | deadband=${deadband_pct} | lullReset=${HOOK_LULL_RESET_SECONDS}s | tickSpacing=${TICK_SPACING} | stableSide=${STABLE_SIDE}"
-  echo "  Live: periodVol=${hook_period_vol_usd} | ema=${hook_ema_usd} | lastDir=${hook_last_dir} | balance=${TOKEN0_SYMBOL}=${hook_bal0_fmt} (${hook_bal0_usd}) | ${TOKEN1_SYMBOL}=${hook_bal1_fmt} (${hook_bal1_usd})"
+  echo "  Live: periodVol=${hook_period_vol_usd} | ema=${hook_ema_usd} | directionFlag=${hook_direction_flag} | balance=${TOKEN0_SYMBOL}=${hook_bal0_fmt} (${hook_bal0_usd}) | ${TOKEN1_SYMBOL}=${hook_bal1_fmt} (${hook_bal1_usd})"
   echo
   echo "Pool:"
   echo "  Id: ${pool_id_display}"
@@ -5207,7 +5201,7 @@ run_random_mode() {
     RND_TX_LOG_FILE="${RND_STATS_FILE}.tx.csv"
   fi
   {
-    echo "timestamp_utc,attempt,label,status,side,amount,reason,tx_hash,fee_before,fee_after,fee_idx_before,fee_idx_after,last_dir_before,last_dir_after,error"
+    echo "timestamp_utc,attempt,label,status,side,amount,reason,tx_hash,fee_before,fee_after,fee_idx_before,fee_idx_after,direction_flag_before,direction_flag_after,error"
   } > "${RND_TX_LOG_FILE}"
 
   if ! state_before="$(read_state 2>&1)"; then
@@ -5559,16 +5553,16 @@ run_random_mode() {
       else
         zfo_bias=55
         if [[ "${idx_before}" =~ ^[0-9]+$ ]]; then
-          if (( idx_before >= HOOK_CAP_IDX )); then
+          if (( idx_before >= HOOK_EXTREME_IDX )); then
             zfo_bias=20
-          elif (( idx_before == HOOK_CAP_IDX - 1 )); then
+          elif (( idx_before == HOOK_EXTREME_IDX - 1 )); then
             zfo_bias=35
           elif (( idx_before <= HOOK_FLOOR_IDX )); then
             zfo_bias=80
           elif (( idx_before == HOOK_FLOOR_IDX + 1 )); then
             zfo_bias=65
           fi
-          if (( TC_CAP_CLAMP_PASS == 0 && idx_before < HOOK_CAP_IDX )); then
+          if (( TC_CAP_CLAMP_PASS == 0 && idx_before < HOOK_EXTREME_IDX )); then
             zfo_bias=$((zfo_bias + 10))
           fi
           if (( TC_FLOOR_CLAMP_PASS == 0 && idx_before > HOOK_FLOOR_IDX )); then

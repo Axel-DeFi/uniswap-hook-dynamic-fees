@@ -452,18 +452,17 @@ checkpoint() {
 call_hook_getters() {
   local hook="${1:?hook address is required}"
 
-  local floor_idx cash_idx extreme_idx cap_idx paused current_fee
+  local floor_idx cash_idx extreme_idx paused current_fee
   local period_seconds ema_periods lull_reset deadband
   local min_cash up_cash hold_cash min_ext up_ext up_ext_conf hold_ext
   local down_ext down_ext_conf down_cash down_cash_conf em_floor em_conf
-  local creator_bps
+  local hook_fee_percent
   local state_json fee_idx hold_remaining up_streak down_streak emergency_streak period_start period_vol ema_vol
   local rbps
 
   floor_idx="$(cast_call_single "${hook}" "floorIdx()(uint8)")"
   cash_idx="$(cast_call_single "${hook}" "cashIdx()(uint8)")"
   extreme_idx="$(cast_call_single "${hook}" "extremeIdx()(uint8)")"
-  cap_idx="$(cast_call_single "${hook}" "capIdx()(uint8)")"
   paused="$(cast_call_single "${hook}" "isPaused()(bool)")"
   current_fee="$(cast call --rpc-url "${RPC_URL}" "${hook}" "currentFeeBips()(uint24)" 2>/dev/null | awk '{print $1}' || true)"
   if [[ -z "${current_fee}" ]]; then
@@ -488,7 +487,7 @@ call_hook_getters() {
   down_cash_conf="$(cast_call_single "${hook}" "downCashConfirmPeriods()(uint8)")"
   em_floor="$(cast_call_single "${hook}" "emergencyFloorCloseVolUsd6()(uint64)")"
   em_conf="$(cast_call_single "${hook}" "emergencyConfirmPeriods()(uint8)")"
-  creator_bps="$(cast_call_single "${hook}" "creatorFeeBps()(uint16)")"
+  hook_fee_percent="$(cast_call_single "${hook}" "hookFeePercent()(uint16)")"
 
   state_json="$(cast_call_json "${hook}" "getStateDebug()(uint8,uint8,uint8,uint8,uint8,uint64,uint64,uint96,bool)")"
   fee_idx="$(jq -r '.[0]' <<<"${state_json}")"
@@ -505,13 +504,13 @@ call_hook_getters() {
     rbps="$(( (period_vol * 10000) / ema_vol ))"
   fi
 
-  printf 'fee_idx=%s hold_remaining=%s up_extreme_streak=%s down_streak=%s emergency_streak=%s period_start=%s period_vol=%s ema_vol=%s r_bps=%s current_fee_bips=%s paused=%s floor_idx=%s cash_idx=%s extreme_idx=%s cap_idx=%s period_seconds=%s ema_periods=%s lull_reset_seconds=%s deadband_bps=%s min_closevol_cash=%s up_r_cash=%s cash_hold=%s min_closevol_extreme=%s up_r_extreme=%s up_extreme_confirm=%s extreme_hold=%s down_r_extreme=%s down_extreme_confirm=%s down_r_cash=%s down_cash_confirm=%s emergency_floor=%s emergency_confirm=%s creator_fee_bps=%s\n' \
+  printf 'fee_idx=%s hold_remaining=%s up_extreme_streak=%s down_streak=%s emergency_streak=%s period_start=%s period_vol=%s ema_vol=%s r_bps=%s current_fee_bips=%s paused=%s floor_idx=%s cash_idx=%s extreme_idx=%s period_seconds=%s ema_periods=%s lull_reset_seconds=%s deadband_bps=%s min_closevol_cash=%s up_r_cash=%s cash_hold=%s min_closevol_extreme=%s up_r_extreme=%s up_extreme_confirm=%s extreme_hold=%s down_r_extreme=%s down_extreme_confirm=%s down_r_cash=%s down_cash_confirm=%s emergency_floor=%s emergency_confirm=%s hook_fee_percent=%s\n' \
     "${fee_idx}" "${hold_remaining}" "${up_streak}" "${down_streak}" "${emergency_streak}" \
     "${period_start}" "${period_vol}" "${ema_vol}" "${rbps}" "${current_fee}" "${paused}" \
-    "${floor_idx}" "${cash_idx}" "${extreme_idx}" "${cap_idx}" "${period_seconds}" "${ema_periods}" \
+    "${floor_idx}" "${cash_idx}" "${extreme_idx}" "${period_seconds}" "${ema_periods}" \
     "${lull_reset}" "${deadband}" "${min_cash}" "${up_cash}" "${hold_cash}" "${min_ext}" "${up_ext}" \
     "${up_ext_conf}" "${hold_ext}" "${down_ext}" "${down_ext_conf}" "${down_cash}" "${down_cash_conf}" \
-    "${em_floor}" "${em_conf}" "${creator_bps}"
+    "${em_floor}" "${em_conf}" "${hook_fee_percent}"
 }
 
 abi_function_entries() {

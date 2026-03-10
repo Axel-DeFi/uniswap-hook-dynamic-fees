@@ -1,0 +1,21 @@
+// SPDX-License-Identifier: Apache-2.0
+pragma solidity ^0.8.26;
+
+import {Script} from "forge-std/Script.sol";
+
+import {ConfigLoader} from "../../shared/lib/ConfigLoader.sol";
+import {HookValidationLib} from "../../shared/lib/HookValidationLib.sol";
+import {LoggingLib} from "../../shared/lib/LoggingLib.sol";
+import {OpsTypes} from "../../shared/types/OpsTypes.sol";
+
+contract ValidateHookSepolia is Script {
+    function run() external view {
+        OpsTypes.CoreConfig memory cfg = ConfigLoader.loadCoreConfig();
+        OpsTypes.HookValidation memory validation = HookValidationLib.validateHook(cfg);
+        if (!validation.ok) {
+            revert(validation.reason);
+        }
+
+        LoggingLib.ok("sepolia hook validation passed");
+    }
+}

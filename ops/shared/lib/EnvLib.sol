@@ -1,0 +1,127 @@
+// SPDX-License-Identifier: Apache-2.0
+pragma solidity ^0.8.26;
+
+import {Vm} from "forge-std/Vm.sol";
+
+import {ErrorLib} from "./ErrorLib.sol";
+
+library EnvLib {
+    Vm internal constant vm = Vm(address(uint160(uint256(keccak256("hevm cheat code")))));
+
+    function hasKey(string memory key) internal view returns (bool) {
+        try vm.envString(key) returns (string memory value) {
+            return bytes(value).length != 0;
+        } catch {
+            return false;
+        }
+    }
+
+    function requireAddress(string memory key, bool allowZero) internal view returns (address value) {
+        if (!hasKey(key)) revert ErrorLib.MissingEnv(key);
+        value = vm.envAddress(key);
+        if (!allowZero && value == address(0)) {
+            revert ErrorLib.InvalidEnv(key, "zero address");
+        }
+    }
+
+    function envOrAddress(string memory key, address fallbackValue) internal view returns (address value) {
+        if (!hasKey(key)) return fallbackValue;
+        value = vm.envAddress(key);
+    }
+
+    function requireUint(string memory key) internal view returns (uint256 value) {
+        if (!hasKey(key)) revert ErrorLib.MissingEnv(key);
+        value = vm.envUint(key);
+    }
+
+    function envOrUint(string memory key, uint256 fallbackValue) internal view returns (uint256 value) {
+        if (!hasKey(key)) return fallbackValue;
+        value = vm.envUint(key);
+    }
+
+    function envOrBool(string memory key, bool fallbackValue) internal view returns (bool value) {
+        if (!hasKey(key)) return fallbackValue;
+        try vm.envBool(key) returns (bool parsed) {
+            return parsed;
+        } catch {
+            string memory raw = vm.envString(key);
+            bytes memory b = bytes(_toLower(raw));
+            if (_eqBytes(b, bytes("1")) || _eqBytes(b, bytes("true")) || _eqBytes(b, bytes("yes"))) {
+                return true;
+            }
+            if (_eqBytes(b, bytes("0")) || _eqBytes(b, bytes("false")) || _eqBytes(b, bytes("no"))) {
+                return false;
+            }
+            return fallbackValue;
+        }
+    }
+
+    function envOrString(string memory key, string memory fallbackValue) internal view returns (string memory value) {
+        if (!hasKey(key)) return fallbackValue;
+        value = vm.envString(key);
+    }
+
+    function envOrDecimalE18(string memory key, uint256 fallbackValue) internal view returns (uint256) {
+        if (!hasKey(key)) return fallbackValue;
+        return parseDecimalToE18(vm.envString(key), key);
+    }
+
+    function requireDecimalE18(string memory key) internal view returns (uint256) {
+        if (!hasKey(key)) revert ErrorLib.MissingEnv(key);
+        return parseDecimalToE18(vm.envString(key), key);
+    }
+
+    function parseDecimalToE18(string memory raw, string memory key) internal pure returns (uint256) {
+        bytes memory b = bytes(raw);
+        if (b.length == 0) revert ErrorLib.InvalidEnv(key, "empty decimal");
+
+        uint256 integerPart = 0;
+        uint256 fractionalPart = 0;
+        uint256 fractionalDigits = 0;
+        bool dotSeen = false;
+
+        for (uint256 i = 0; i < b.length; i++) {
+            bytes1 ch = b[i];
+            if (ch == ".") {
+                if (dotSeen) revert ErrorLib.InvalidEnv(key, "multiple dots");
+                dotSeen = true;
+                continue;
+            }
+
+            if (ch < "0" || ch > "9") {
+                revert ErrorLib.InvalidEnv(key, "non-digit decimal char");
+            }
+
+            uint256 digit = uint8(ch) - 48;
+            if (!dotSeen) {
+                integerPart = integerPart * 10 + digit;
+            } else if (fractionalDigits < 18) {
+                fractionalPart = fractionalPart * 10 + digit;
+                fractionalDigits++;
+            } else {
+                // Ignore precision beyond 18 decimals for deterministic truncation.
+            }
+        }
+
+        uint256 scale = 10 ** (18 - fractionalDigits);
+        return integerPart * 1e18 + fractionalPart * scale;
+    }
+
+    function _toLower(string memory s) private pure returns (string memory) {
+        bytes memory b = bytes(s);
+        for (uint256 i = 0; i < b.length; i++) {
+            if (b[i] >= 0x41 && b[i] <= 0x5A) {
+                b[i] = bytes1(uint8(b[i]) + 32);
+            }
+        }
+        return string(b);
+    }
+
+    function _eqBytes(bytes memory a, bytes memory b) private pure returns (bool) {
+        if (a.length != b.length) return false;
+        for (uint256 i = 0; i < a.length; i++) {
+            if (a[i] != b[i]) return false;
+        }
+        return true;
+    }
+}

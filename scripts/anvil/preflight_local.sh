@@ -4,7 +4,7 @@ set -euo pipefail
 # Local Anvil preflight suite for VolumeDynamicFeeHook v2.
 #
 # Required env:
-#   PRIVATE_KEY            Creator/deployer private key used for admin operations.
+#   PRIVATE_KEY            Owner/deployer private key used for admin operations.
 #
 # Optional env:
 #   CONFIG_PATH            Path to local config (default: ./config/hook.local.conf).
@@ -15,7 +15,7 @@ set -euo pipefail
 #   - local deploy/create pipeline on clean Anvil (chain-id 31337, no fork)
 #   - ABI/custom-error/REASON coverage (with exclusions only for unreachable paths)
 #   - controller state-machine behavior with strict reason-code checks
-#   - admin controls, pause flow, creator fee, rescue path, callback direct-call protection
+#   - admin controls, pause flow, hook fee, rescue path, callback direct-call protection
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "${ROOT_DIR}"
@@ -51,7 +51,7 @@ REMAPPING_SOLMATE_SRC="solmate/src/=lib/v4-core/lib/solmate/src/"
 REMAPPING_SOLMATE_ROOT="solmate/=lib/v4-core/lib/solmate/src/"
 MOCK_ERC20_BYTECODE=""
 
-CREATOR_PK="${PRIVATE_KEY}"
+OWNER_PK="${PRIVATE_KEY}"
 ATTACKER_PK="0x5de4111afa1a4b94908fef3deabf442ba4f8d615f4c6d93ce2d5d4f29e6f5f3f"
 ETH_RICH_WEI="1000000000000000000000"
 
@@ -59,7 +59,7 @@ ANVIL_PID=""
 CONFIG_BACKUP=""
 BASE_SNAPSHOT_ID=""
 
-CREATOR_ADDR=""
+OWNER_ADDR=""
 ATTACKER_ADDR=""
 
 POOL_MANAGER=""
@@ -78,15 +78,15 @@ STABLE_IS_TOKEN0="0"
 FLOOR_IDX=""
 CASH_IDX=""
 EXTREME_IDX=""
-CAP_IDX=""
+EXTREME_IDX=""
 FEE_TIERS_BY_IDX=()
 CFG_FEE_TIER_PIPS=()
 CFG_FEE_TIERS_ARG=""
 CFG_FLOOR_IDX=""
 CFG_CASH_IDX=""
 CFG_EXTREME_IDX=""
-CFG_CAP_IDX=""
-CFG_CREATOR_FEE_BPS=""
+CFG_EXTREME_IDX=""
+CFG_HOOK_FEE_PERCENT=""
 
 CP_MIN_CLOSEVOL_TO_CASH_USD6=""
 CP_UP_R_TO_CASH_BPS=""
@@ -173,15 +173,14 @@ percent_to_pips() {
     }' 2>/dev/null
 }
 
-creator_percent_to_bps() {
+hook_fee_percent_from_percent() {
   local pct="$1"
   awk -v pct="${pct}" '
     BEGIN {
-      if (pct !~ /^[0-9]+([.][0-9]+)?$/) exit 1
-      v = pct * 100
-      b = int(v + 0.5)
-      if (b < 0 || b > 10000) exit 1
-      print b
+      if (pct !~ /^[0-9]+$/) exit 1
+      p = int(pct)
+      if (p < 0 || p > 10) exit 1
+      print p
     }' 2>/dev/null
 }
 
@@ -199,7 +198,7 @@ config_tier_index_by_pips() {
 }
 
 build_config_runtime_args() {
-  local floor_pips cash_pips extreme_pips cap_pips item pips prev
+  local floor_pips cash_pips extreme_pips item pips prev
   local -a raw_items
 
   CFG_FEE_TIER_PIPS=()
@@ -207,8 +206,7 @@ build_config_runtime_args() {
   CFG_FLOOR_IDX=""
   CFG_CASH_IDX=""
   CFG_EXTREME_IDX=""
-  CFG_CAP_IDX=""
-  CFG_CREATOR_FEE_BPS=""
+  CFG_HOOK_FEE_PERCENT=""
 
   IFS=',' read -r -a raw_items <<<"${FEE_TIERS:-}"
   if (( ${#raw_items[@]} == 0 )); then
@@ -230,22 +228,20 @@ build_config_runtime_args() {
   floor_pips="$(percent_to_pips "$(printf '%s' "${FLOOR_TIER:-}" | tr -d '[:space:]')" || true)"
   cash_pips="$(percent_to_pips "$(printf '%s' "${CASH_TIER:-}" | tr -d '[:space:]')" || true)"
   extreme_pips="$(percent_to_pips "$(printf '%s' "${EXTREME_TIER:-}" | tr -d '[:space:]')" || true)"
-  cap_pips="$(percent_to_pips "$(printf '%s' "${CAP_TIER:-}" | tr -d '[:space:]')" || true)"
-  [[ -n "${floor_pips}" && -n "${cash_pips}" && -n "${extreme_pips}" && -n "${cap_pips}" ]] || return 1
+  [[ -n "${floor_pips}" && -n "${cash_pips}" && -n "${extreme_pips}" ]] || return 1
 
   CFG_FLOOR_IDX="$(config_tier_index_by_pips "${floor_pips}" || true)"
   CFG_CASH_IDX="$(config_tier_index_by_pips "${cash_pips}" || true)"
   CFG_EXTREME_IDX="$(config_tier_index_by_pips "${extreme_pips}" || true)"
-  CFG_CAP_IDX="$(config_tier_index_by_pips "${cap_pips}" || true)"
-  [[ -n "${CFG_FLOOR_IDX}" && -n "${CFG_CASH_IDX}" && -n "${CFG_EXTREME_IDX}" && -n "${CFG_CAP_IDX}" ]] || return 1
-  if (( CFG_FLOOR_IDX >= CFG_CASH_IDX || CFG_CASH_IDX >= CFG_EXTREME_IDX || CFG_EXTREME_IDX != CFG_CAP_IDX )); then
+  [[ -n "${CFG_FLOOR_IDX}" && -n "${CFG_CASH_IDX}" && -n "${CFG_EXTREME_IDX}" ]] || return 1
+  if (( CFG_FLOOR_IDX >= CFG_CASH_IDX || CFG_CASH_IDX >= CFG_EXTREME_IDX )); then
     return 1
   fi
 
   CFG_FEE_TIERS_ARG="[$(IFS=,; echo "${CFG_FEE_TIER_PIPS[*]}")]"
 
-  CFG_CREATOR_FEE_BPS="$(creator_percent_to_bps "$(printf '%s' "${CREATOR_FEE_PERCENT:-}" | tr -d '[:space:]')" || true)"
-  [[ -n "${CFG_CREATOR_FEE_BPS}" ]] || return 1
+  CFG_HOOK_FEE_PERCENT="$(hook_fee_percent_from_percent "$(printf '%s' "${HOOK_FEE_PERCENT:-}" | tr -d '[:space:]')" || true)"
+  [[ -n "${CFG_HOOK_FEE_PERCENT}" ]] || return 1
 
   return 0
 }
@@ -643,8 +639,8 @@ sync_runtime_config() {
   set_config_value "STABLE" "${STABLE}"
   set_config_value "STABLE_DECIMALS" "6"
   set_config_value "TICK_SPACING" "${TICK_SPACING}"
-  set_config_value "CREATOR" "${CREATOR_ADDR}"
-  set_config_value "CREATOR_FEE_ADDRESS" "${CREATOR_ADDR}"
+  set_config_value "OWNER" "${OWNER_ADDR}"
+  set_config_value "HOOK_FEE_ADDRESS" "${OWNER_ADDR}"
   set_config_value "HOOK_ADDRESS" "${HOOK_ADDRESS}"
 }
 
@@ -662,7 +658,7 @@ load_config() {
   RPC_URL="${ANVIL_RPC_URL}"
   export RPC_URL
 
-  build_config_runtime_args || die "Invalid local config tiers/indices/creator fee values in ${CONFIG_PATH}"
+  build_config_runtime_args || die "Invalid local config tiers/indices/hook fee values in ${CONFIG_PATH}"
 }
 
 wait_for_rpc() {
@@ -683,19 +679,19 @@ start_anvil() {
 }
 
 prepare_accounts() {
-  CREATOR_ADDR="$(cast wallet address --private-key "${CREATOR_PK}" | awk '{print $1}')"
+  OWNER_ADDR="$(cast wallet address --private-key "${OWNER_PK}" | awk '{print $1}')"
   ATTACKER_ADDR="$(cast wallet address --private-key "${ATTACKER_PK}" | awk '{print $1}')"
 
-  set_eth_balance "${CREATOR_ADDR}" "${ETH_RICH_WEI}"
+  set_eth_balance "${OWNER_ADDR}" "${ETH_RICH_WEI}"
   set_eth_balance "${ATTACKER_ADDR}" "${ETH_RICH_WEI}"
 }
 
 deploy_pool_manager_local() {
   local out
-  out="$(forge create --rpc-url "${RPC_URL}" --private-key "${CREATOR_PK}" --broadcast \
+  out="$(forge create --rpc-url "${RPC_URL}" --private-key "${OWNER_PK}" --broadcast \
     --remappings "${REMAPPING_SOLMATE_SRC}" --remappings "${REMAPPING_SOLMATE_ROOT}" \
     lib/v4-core/src/PoolManager.sol:PoolManager \
-    --constructor-args "${CREATOR_ADDR}" 2>/tmp/preflight_local_poolmanager.log)" || {
+    --constructor-args "${OWNER_ADDR}" 2>/tmp/preflight_local_poolmanager.log)" || {
       cat /tmp/preflight_local_poolmanager.log >&2 || true
       return 1
     }
@@ -738,7 +734,7 @@ deploy_mock_token() {
   data="${MOCK_ERC20_BYTECODE}${ctor#0x}"
 
   for attempt in 1 2 3 4 5 6; do
-    tx="$(cast_send_txhash --private-key "${CREATOR_PK}" --create "${data}" 2>/dev/null || true)"
+    tx="$(cast_send_txhash --private-key "${OWNER_PK}" --create "${data}" 2>/dev/null || true)"
     if [[ -n "${tx}" ]]; then
       addr="$(cast receipt --rpc-url "${RPC_URL}" --json "${tx}" 2>/dev/null | jq -r '.contractAddress // empty')"
       if [[ -n "${addr}" ]]; then
@@ -759,13 +755,13 @@ mint_token() {
   local token="$1"
   local to="$2"
   local amount="$3"
-  cast_send_retry --private-key "${CREATOR_PK}" "${token}" "mint(address,uint256)" "${to}" "${amount}" >/dev/null
+  cast_send_retry --private-key "${OWNER_PK}" "${token}" "mint(address,uint256)" "${to}" "${amount}" >/dev/null
 }
 
 ensure_allowance_max() {
   local token="$1"
   local spender="$2"
-  cast_send_retry --private-key "${CREATOR_PK}" "${token}" \
+  cast_send_retry --private-key "${OWNER_PK}" "${token}" \
     "approve(address,uint256)" "${spender}" \
     "0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff" >/dev/null
 }
@@ -802,7 +798,7 @@ ensure_modify_helper() {
   for attempt in 1 2 3; do
     forge script lib/v4-periphery/script/02_PoolModifyLiquidityTest.s.sol:DeployPoolModifyLiquidityTest \
       --sig "run(address)" "${POOL_MANAGER}" \
-      --rpc-url "${RPC_URL}" --private-key "${CREATOR_PK}" --broadcast \
+      --rpc-url "${RPC_URL}" --private-key "${OWNER_PK}" --broadcast \
       --remappings "${REMAPPING_SOLMATE_SRC}" --remappings "${REMAPPING_SOLMATE_ROOT}" \
       >/tmp/preflight_local_modify_helper.log 2>&1 || true
 
@@ -830,7 +826,7 @@ ensure_swap_helper() {
   for attempt in 1 2 3; do
     forge script lib/v4-periphery/script/03_PoolSwapTest.s.sol:DeployPoolSwapTest \
       --sig "run(address)" "${POOL_MANAGER}" \
-      --rpc-url "${RPC_URL}" --private-key "${CREATOR_PK}" --broadcast \
+      --rpc-url "${RPC_URL}" --private-key "${OWNER_PK}" --broadcast \
       --remappings "${REMAPPING_SOLMATE_SRC}" --remappings "${REMAPPING_SOLMATE_ROOT}" \
       >/tmp/preflight_local_swap_helper.log 2>&1 || true
 
@@ -868,7 +864,7 @@ bootstrap_liquidity() {
 
   for candidate in "${candidates[@]}"; do
     params="(-887220,887220,${candidate},0x0000000000000000000000000000000000000000000000000000000000000000)"
-    if cast send --rpc-url "${RPC_URL}" --private-key "${CREATOR_PK}" "${MODIFY_HELPER}" \
+    if cast send --rpc-url "${RPC_URL}" --private-key "${OWNER_PK}" "${MODIFY_HELPER}" \
       "modifyLiquidity((address,address,uint24,int24,address),(int24,int24,int256,bytes32),bytes)" \
       "${POOL_KEY}" "${params}" "0x" >/dev/null 2>&1; then
       liq="${candidate}"
@@ -885,7 +881,7 @@ run_deploy_hook_script() {
 
   rm -f "${deploy_json}"
   for attempt in 1 2 3 4; do
-    if ./scripts/deploy_hook.sh --chain local --rpc-url "${RPC_URL}" --private-key "${CREATOR_PK}" --broadcast >/tmp/preflight_local_deploy.log 2>&1; then
+    if ./scripts/deploy_hook.sh --chain local --rpc-url "${RPC_URL}" --private-key "${OWNER_PK}" --broadcast >/tmp/preflight_local_deploy.log 2>&1; then
       return 0
     fi
 
@@ -904,41 +900,42 @@ run_deploy_hook_script() {
 }
 
 ensure_hook_runtime_configured() {
-  local creator_fee_address paused_now
+  local hook_fee_address paused_now
   local ctrl_tuple
 
-  creator_fee_address="${CREATOR_FEE_ADDRESS:-}"
-  if [[ -z "${creator_fee_address}" ]]; then
-    creator_fee_address="${CREATOR_ADDR}"
+  hook_fee_address="${HOOK_FEE_ADDRESS:-}"
+  if [[ -z "${hook_fee_address}" ]]; then
+    hook_fee_address="${OWNER_ADDR}"
   fi
 
   paused_now="$(cast_call_single "${HOOK_ADDRESS}" "isPaused()(bool)" || true)"
   if [[ "${paused_now}" != "true" ]]; then
-    cast_send_retry --private-key "${CREATOR_PK}" "${HOOK_ADDRESS}" "pause()" >/dev/null || return 1
+    cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" "pause()" >/dev/null || return 1
   fi
 
-  cast_send_retry --private-key "${CREATOR_PK}" "${HOOK_ADDRESS}" \
-    "setFeeTiersAndRoles(uint24[],uint8,uint8,uint8,uint8)" \
-    "${CFG_FEE_TIERS_ARG}" "${CFG_FLOOR_IDX}" "${CFG_CASH_IDX}" "${CFG_EXTREME_IDX}" "${CFG_CAP_IDX}" >/dev/null || return 1
+  cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" \
+    "setFeeTiersAndRoles(uint24[],uint8,uint8,uint8)" \
+    "${CFG_FEE_TIERS_ARG}" "${CFG_FLOOR_IDX}" "${CFG_CASH_IDX}" "${CFG_EXTREME_IDX}" >/dev/null || return 1
 
-  cast_send_retry --private-key "${CREATOR_PK}" "${HOOK_ADDRESS}" \
+  cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" \
     "setTimingParams(uint32,uint8,uint32,uint16)" \
     "${PERIOD_SECONDS}" "${EMA_PERIODS}" "${LULL_RESET_SECONDS}" "${DEADBAND_BPS}" >/dev/null || return 1
 
   ctrl_tuple="(${MIN_CLOSEVOL_TO_CASH_USD6},${UP_R_TO_CASH_BPS},${CASH_HOLD_PERIODS},${MIN_CLOSEVOL_TO_EXTREME_USD6},${UP_R_TO_EXTREME_BPS},${UP_EXTREME_CONFIRM_PERIODS},${EXTREME_HOLD_PERIODS},${DOWN_R_FROM_EXTREME_BPS},${DOWN_EXTREME_CONFIRM_PERIODS},${DOWN_R_FROM_CASH_BPS},${DOWN_CASH_CONFIRM_PERIODS},${EMERGENCY_FLOOR_CLOSEVOL_USD6},${EMERGENCY_CONFIRM_PERIODS})"
-  cast_send_retry --private-key "${CREATOR_PK}" "${HOOK_ADDRESS}" \
+  cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" \
     "setControllerParams((uint64,uint16,uint8,uint64,uint16,uint8,uint8,uint16,uint8,uint16,uint8,uint64,uint8))" \
     "${ctrl_tuple}" >/dev/null || return 1
 
-  cast_send_retry --private-key "${CREATOR_PK}" "${HOOK_ADDRESS}" \
-    "setCreatorFeeRecipient(address)" "${creator_fee_address}" >/dev/null || return 1
+  cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" \
+    "setHookFeeRecipient(address)" "${hook_fee_address}" >/dev/null || return 1
 
-  cast_send_retry --private-key "${CREATOR_PK}" "${HOOK_ADDRESS}" \
-    "setCreatorFeeConfig(address,uint16)" "${CREATOR_ADDR}" 0 >/dev/null || return 1
+  # Best-effort cleanup for previous pending timelock value.
+  cast send --rpc-url "${RPC_URL}" --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" \
+    "cancelHookFeePercentChange()" >/dev/null 2>&1 || true
 
   paused_now="$(cast_call_single "${HOOK_ADDRESS}" "isPaused()(bool)" || true)"
   if [[ "${paused_now}" == "true" ]]; then
-    cast_send_retry --private-key "${CREATOR_PK}" "${HOOK_ADDRESS}" "unpause()" >/dev/null || return 1
+    cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" "unpause()" >/dev/null || return 1
   fi
 
   return 0
@@ -947,7 +944,7 @@ ensure_hook_runtime_configured() {
 run_create_pool_script() {
   local attempt
   for attempt in 1 2 3; do
-    if ./scripts/create_pool.sh --chain local --rpc-url "${RPC_URL}" --private-key "${CREATOR_PK}" --broadcast >/tmp/preflight_local_create.log 2>&1; then
+    if ./scripts/create_pool.sh --chain local --rpc-url "${RPC_URL}" --private-key "${OWNER_PK}" --broadcast >/tmp/preflight_local_create.log 2>&1; then
       return 0
     fi
     sleep 0.5
@@ -964,17 +961,17 @@ setup_local_environment() {
   STABLE="$(deploy_mock_token "USD Coin" "USDC" 6)" || die "Failed to deploy STABLE token"
   RESCUE_TOKEN="$(deploy_mock_token "Rescue Token" "RSC" 18)" || die "Failed to deploy rescue token"
 
-  mint_token "${VOLATILE}" "${CREATOR_ADDR}" "1000000000000000000000000"
-  mint_token "${STABLE}" "${CREATOR_ADDR}" "1000000000000"
+  mint_token "${VOLATILE}" "${OWNER_ADDR}" "1000000000000000000000000"
+  mint_token "${STABLE}" "${OWNER_ADDR}" "1000000000000"
   mint_token "${VOLATILE}" "${ATTACKER_ADDR}" "10000000000000000000000"
   mint_token "${STABLE}" "${ATTACKER_ADDR}" "10000000000"
-  mint_token "${RESCUE_TOKEN}" "${CREATOR_ADDR}" "1000000000000000000000000"
+  mint_token "${RESCUE_TOKEN}" "${OWNER_ADDR}" "1000000000000000000000000"
 
   set_config_value "POOL_MANAGER" "${POOL_MANAGER}"
   set_config_value "VOLATILE" "${VOLATILE}"
   set_config_value "STABLE" "${STABLE}"
   set_config_value "STABLE_DECIMALS" "6"
-  set_config_value "CREATOR_FEE_ADDRESS" "${CREATOR_ADDR}"
+  set_config_value "HOOK_FEE_ADDRESS" "${OWNER_ADDR}"
   set_config_value "HOOK_ADDRESS" ""
 
   if ! run_deploy_hook_script; then
@@ -1036,9 +1033,9 @@ load_fee_tiers() {
   FLOOR_IDX="$(cast_call_single "${HOOK_ADDRESS}" "floorIdx()(uint8)" || true)"
   CASH_IDX="$(cast_call_single "${HOOK_ADDRESS}" "cashIdx()(uint8)" || true)"
   EXTREME_IDX="$(cast_call_single "${HOOK_ADDRESS}" "extremeIdx()(uint8)" || true)"
-  CAP_IDX="$(cast_call_single "${HOOK_ADDRESS}" "capIdx()(uint8)" || true)"
+  EXTREME_IDX="$(cast_call_single "${HOOK_ADDRESS}" "extremeIdx()(uint8)" || true)"
 
-  [[ "${FLOOR_IDX}" =~ ^[0-9]+$ && "${CASH_IDX}" =~ ^[0-9]+$ && "${EXTREME_IDX}" =~ ^[0-9]+$ && "${CAP_IDX}" =~ ^[0-9]+$ ]]
+  [[ "${FLOOR_IDX}" =~ ^[0-9]+$ && "${CASH_IDX}" =~ ^[0-9]+$ && "${EXTREME_IDX}" =~ ^[0-9]+$ && "${EXTREME_IDX}" =~ ^[0-9]+$ ]]
 }
 
 tier_by_idx() {
@@ -1137,15 +1134,15 @@ set_controller_params() {
   was_paused="$(cast_call_single "${HOOK_ADDRESS}" "isPaused()(bool)" || true)"
   if [[ "${was_paused}" != "true" ]]; then
     cover_function "pause()"
-    cast_send_retry --private-key "${CREATOR_PK}" "${HOOK_ADDRESS}" "pause()" >/dev/null || return 1
+    cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" "pause()" >/dev/null || return 1
   fi
   cover_function "setControllerParams(tuple)"
-  cast_send_retry --private-key "${CREATOR_PK}" "${HOOK_ADDRESS}" \
+  cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" \
     "setControllerParams((uint64,uint16,uint8,uint64,uint16,uint8,uint8,uint16,uint8,uint16,uint8,uint64,uint8))" \
     "${tuple}" >/dev/null || return 1
   if [[ "${was_paused}" != "true" ]]; then
     cover_function "unpause()"
-    cast_send_retry --private-key "${CREATOR_PK}" "${HOOK_ADDRESS}" "unpause()" >/dev/null || return 1
+    cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" "unpause()" >/dev/null || return 1
   fi
   return 0
 }
@@ -1156,16 +1153,16 @@ ensure_unpaused() {
   if [[ "${paused}" == "false" ]]; then
     return 0
   fi
-  cast_send_retry --private-key "${CREATOR_PK}" "${HOOK_ADDRESS}" "unpause()" >/dev/null 2>&1 || true
+  cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" "unpause()" >/dev/null 2>&1 || true
   paused="$(cast_call_single "${HOOK_ADDRESS}" "isPaused()(bool)" || true)"
   [[ "${paused}" == "false" ]]
 }
 
 reset_state_floor_unpaused() {
   cover_function "pause()"
-  cast_send_retry --private-key "${CREATOR_PK}" "${HOOK_ADDRESS}" "pause()" >/dev/null 2>&1 || true
+  cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" "pause()" >/dev/null 2>&1 || true
   cover_function "unpause()"
-  cast_send_retry --private-key "${CREATOR_PK}" "${HOOK_ADDRESS}" "unpause()" >/dev/null 2>&1 || true
+  cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" "unpause()" >/dev/null 2>&1 || true
   ensure_unpaused
 }
 
@@ -1182,7 +1179,7 @@ swap_exact_in_stable() {
   fi
 
   params="(${zero_for_one},-${amount_raw},${sqrt_limit})"
-  tx="$(cast_send_txhash --private-key "${CREATOR_PK}" "${SWAP_HELPER}" \
+  tx="$(cast_send_txhash --private-key "${OWNER_PK}" "${SWAP_HELPER}" \
     "swap((address,address,uint24,int24,address),(bool,int256,uint160),(bool,bool),bytes)(bytes32)" \
     "${POOL_KEY}" "${params}" "(false,false)" "0x")" || return 1
 
@@ -1205,7 +1202,7 @@ swap_exact_in_volatile() {
   fi
 
   params="(${zero_for_one},-${amount_raw},${sqrt_limit})"
-  tx="$(cast_send_txhash --private-key "${CREATOR_PK}" "${SWAP_HELPER}" \
+  tx="$(cast_send_txhash --private-key "${OWNER_PK}" "${SWAP_HELPER}" \
     "swap((address,address,uint24,int24,address),(bool,int256,uint160),(bool,bool),bytes)(bytes32)" \
     "${POOL_KEY}" "${params}" "(false,false)" "0x")" || return 1
 
@@ -1594,8 +1591,8 @@ test_t01_abi_view_pure_sweep() {
   done
 
   # NotInitialized coverage on an extra hook instance (deploy-only, no pool init).
-  set_config_value "CREATOR" "${ATTACKER_ADDR}"
-  set_config_value "CREATOR_FEE_ADDRESS" "${CREATOR_ADDR}"
+  set_config_value "OWNER" "${ATTACKER_ADDR}"
+  set_config_value "HOOK_FEE_ADDRESS" "${OWNER_ADDR}"
   set_config_value "HOOK_ADDRESS" ""
   run_deploy_hook_script || return 1
   extra_hook="$(extract_hook_from_deploy_json "${ROOT_DIR}/scripts/out/deploy.local.json" || true)"
@@ -1627,75 +1624,75 @@ test_t02_access_control_matrix() {
   timing_deadband="$(cast_call_single "${HOOK_ADDRESS}" "deadbandBps()(uint16)")"
   ctrl_tuple="$(controller_tuple)"
 
-  cover_function "setFeeTiersAndRoles(uint24[],uint8,uint8,uint8,uint8)"
+  cover_function "setFeeTiersAndRoles(uint24[],uint8,uint8,uint8)"
   expect_revert_custom "T02 attacker setFeeTiersAndRoles" \
-    "cast call --rpc-url \"${RPC_URL}\" --from \"${ATTACKER_ADDR}\" \"${HOOK_ADDRESS}\" \"setFeeTiersAndRoles(uint24[],uint8,uint8,uint8,uint8)\" \"${tiers_arg}\" \"${FLOOR_IDX}\" \"${CASH_IDX}\" \"${EXTREME_IDX}\" \"${CAP_IDX}\"" \
-    "NotCreator" || return 1
+    "cast call --rpc-url \"${RPC_URL}\" --from \"${ATTACKER_ADDR}\" \"${HOOK_ADDRESS}\" \"setFeeTiersAndRoles(uint24[],uint8,uint8,uint8)\" \"${tiers_arg}\" \"${FLOOR_IDX}\" \"${CASH_IDX}\" \"${EXTREME_IDX}\"" \
+    "NotOwner" || return 1
 
   cover_function "setTimingParams(uint32,uint8,uint32,uint16)"
   expect_revert_custom "T02 attacker setTimingParams" \
     "cast call --rpc-url \"${RPC_URL}\" --from \"${ATTACKER_ADDR}\" \"${HOOK_ADDRESS}\" \"setTimingParams(uint32,uint8,uint32,uint16)\" \"${timing_period}\" \"${timing_ema}\" \"${timing_lull}\" \"${timing_deadband}\"" \
-    "NotCreator" || return 1
+    "NotOwner" || return 1
 
   cover_function "setControllerParams(tuple)"
   expect_revert_custom "T02 attacker setControllerParams" \
     "cast call --rpc-url \"${RPC_URL}\" --from \"${ATTACKER_ADDR}\" \"${HOOK_ADDRESS}\" \"setControllerParams((uint64,uint16,uint8,uint64,uint16,uint8,uint8,uint16,uint8,uint16,uint8,uint64,uint8))\" \"${ctrl_tuple}\"" \
-    "NotCreator" || return 1
+    "NotOwner" || return 1
 
-  cover_function "setCreatorFeePercent(uint16)"
-  expect_revert_custom "T02 attacker setCreatorFeePercent" \
-    "cast call --rpc-url \"${RPC_URL}\" --from \"${ATTACKER_ADDR}\" \"${HOOK_ADDRESS}\" \"setCreatorFeePercent(uint16)\" 1" \
-    "NotCreator" || return 1
+  cover_function "scheduleHookFeePercentChange(uint16)"
+  expect_revert_custom "T02 attacker scheduleHookFeePercentChange" \
+    "cast call --rpc-url \"${RPC_URL}\" --from \"${ATTACKER_ADDR}\" \"${HOOK_ADDRESS}\" \"scheduleHookFeePercentChange(uint16)\" 1" \
+    "NotOwner" || return 1
 
-  cover_function "setCreatorFeeConfig(address,uint16)"
-  expect_revert_custom "T02 attacker setCreatorFeeConfig" \
-    "cast call --rpc-url \"${RPC_URL}\" --from \"${ATTACKER_ADDR}\" \"${HOOK_ADDRESS}\" \"setCreatorFeeConfig(address,uint16)\" \"${ATTACKER_ADDR}\" 1000" \
-    "NotCreator" || return 1
+  cover_function "scheduleHookFeePercentChange(uint16)"
+  expect_revert_custom "T02 attacker scheduleHookFeePercentChange" \
+    "cast call --rpc-url \"${RPC_URL}\" --from \"${ATTACKER_ADDR}\" \"${HOOK_ADDRESS}\" \"scheduleHookFeePercentChange(uint16)\" 2" \
+    "NotOwner" || return 1
 
-  cover_function "setCreatorFeeRecipient(address)"
-  expect_revert_custom "T02 attacker setCreatorFeeRecipient" \
-    "cast call --rpc-url \"${RPC_URL}\" --from \"${ATTACKER_ADDR}\" \"${HOOK_ADDRESS}\" \"setCreatorFeeRecipient(address)\" \"${ATTACKER_ADDR}\"" \
-    "NotCreator" || return 1
+  cover_function "setHookFeeRecipient(address)"
+  expect_revert_custom "T02 attacker setHookFeeRecipient" \
+    "cast call --rpc-url \"${RPC_URL}\" --from \"${ATTACKER_ADDR}\" \"${HOOK_ADDRESS}\" \"setHookFeeRecipient(address)\" \"${ATTACKER_ADDR}\"" \
+    "NotOwner" || return 1
 
   cover_function "pause()"
   expect_revert_custom "T02 attacker pause" \
     "cast call --rpc-url \"${RPC_URL}\" --from \"${ATTACKER_ADDR}\" \"${HOOK_ADDRESS}\" \"pause()\"" \
-    "NotCreator" || return 1
+    "NotOwner" || return 1
 
   cover_function "pause()"
-  cast_send_retry --private-key "${CREATOR_PK}" "${HOOK_ADDRESS}" "pause()" >/dev/null || return 1
+  cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" "pause()" >/dev/null || return 1
   cover_function "unpause()"
-  cast_send_retry --private-key "${CREATOR_PK}" "${HOOK_ADDRESS}" "unpause()" >/dev/null || return 1
+  cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" "unpause()" >/dev/null || return 1
 
   cover_function "pause()"
-  cast_send_retry --private-key "${CREATOR_PK}" "${HOOK_ADDRESS}" "pause()" >/dev/null || return 1
+  cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" "pause()" >/dev/null || return 1
 
-  cover_function "setFeeTiersAndRoles(uint24[],uint8,uint8,uint8,uint8)"
-  cast_send_retry --private-key "${CREATOR_PK}" "${HOOK_ADDRESS}" \
-    "setFeeTiersAndRoles(uint24[],uint8,uint8,uint8,uint8)" \
-    "${tiers_arg}" "${FLOOR_IDX}" "${CASH_IDX}" "${EXTREME_IDX}" "${CAP_IDX}" >/dev/null || return 1
+  cover_function "setFeeTiersAndRoles(uint24[],uint8,uint8,uint8)"
+  cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" \
+    "setFeeTiersAndRoles(uint24[],uint8,uint8,uint8)" \
+    "${tiers_arg}" "${FLOOR_IDX}" "${CASH_IDX}" "${EXTREME_IDX}" >/dev/null || return 1
 
   cover_function "setTimingParams(uint32,uint8,uint32,uint16)"
-  cast_send_retry --private-key "${CREATOR_PK}" "${HOOK_ADDRESS}" \
+  cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" \
     "setTimingParams(uint32,uint8,uint32,uint16)" \
     "${timing_period}" "${timing_ema}" "${timing_lull}" "${timing_deadband}" >/dev/null || return 1
 
   set_controller_params || return 1
 
-  cover_function "setCreatorFeePercent(uint16)"
-  cast_send_retry --private-key "${CREATOR_PK}" "${HOOK_ADDRESS}" "setCreatorFeePercent(uint16)" 10 >/dev/null || return 1
+  cover_function "scheduleHookFeePercentChange(uint16)"
+  cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" "scheduleHookFeePercentChange(uint16)" 10 >/dev/null || return 1
 
-  cover_function "setCreatorFeeConfig(address,uint16)"
-  cast_send_retry --private-key "${CREATOR_PK}" "${HOOK_ADDRESS}" "setCreatorFeeConfig(address,uint16)" "${CREATOR_ADDR}" 1000 >/dev/null || return 1
+  cover_function "scheduleHookFeePercentChange(uint16)"
+  cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" "cancelHookFeePercentChange()" >/dev/null || return 1
 
-  cover_function "setCreatorFeeRecipient(address)"
-  cast_send_retry --private-key "${CREATOR_PK}" "${HOOK_ADDRESS}" "setCreatorFeeRecipient(address)" "${CREATOR_ADDR}" >/dev/null || return 1
+  cover_function "setHookFeeRecipient(address)"
+  cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" "setHookFeeRecipient(address)" "${OWNER_ADDR}" >/dev/null || return 1
 
   cover_function "unpause()"
-  cast_send_retry --private-key "${CREATOR_PK}" "${HOOK_ADDRESS}" "unpause()" >/dev/null || return 1
+  cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" "unpause()" >/dev/null || return 1
 
   tc_checkpoint "access_matrix_done" || return 1
-  TC_REASON="Матрица прав подтверждена: attacker заблокирован, все админ-действия доступны только creator"
+  TC_REASON="Матрица прав подтверждена: attacker заблокирован, все админ-действия доступны только owner"
   return 0
 }
 
@@ -1715,19 +1712,19 @@ test_t03_pause_gating_cold_updates() {
 
   tc_checkpoint "before_pause" || return 1
 
-  cover_function "setFeeTiersAndRoles(uint24[],uint8,uint8,uint8,uint8)"
+  cover_function "setFeeTiersAndRoles(uint24[],uint8,uint8,uint8)"
   expect_revert_custom "T03 setFeeTiersAndRoles requires paused" \
-    "cast call --rpc-url \"${RPC_URL}\" --from \"${CREATOR_ADDR}\" \"${HOOK_ADDRESS}\" \"setFeeTiersAndRoles(uint24[],uint8,uint8,uint8,uint8)\" \"${tiers_arg}\" \"${FLOOR_IDX}\" \"${CASH_IDX}\" \"${EXTREME_IDX}\" \"${CAP_IDX}\"" \
+    "cast call --rpc-url \"${RPC_URL}\" --from \"${OWNER_ADDR}\" \"${HOOK_ADDRESS}\" \"setFeeTiersAndRoles(uint24[],uint8,uint8,uint8)\" \"${tiers_arg}\" \"${FLOOR_IDX}\" \"${CASH_IDX}\" \"${EXTREME_IDX}\"" \
     "RequiresPaused" || return 1
 
   cover_function "pause()"
-  cast_send_retry --private-key "${CREATOR_PK}" "${HOOK_ADDRESS}" "pause()" >/dev/null || return 1
+  cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" "pause()" >/dev/null || return 1
   tc_checkpoint "after_pause" || return 1
 
-  cover_function "setFeeTiersAndRoles(uint24[],uint8,uint8,uint8,uint8)"
-  cast_send_retry --private-key "${CREATOR_PK}" "${HOOK_ADDRESS}" \
-    "setFeeTiersAndRoles(uint24[],uint8,uint8,uint8,uint8)" \
-    "${tiers_arg}" "${FLOOR_IDX}" "${CASH_IDX}" "${EXTREME_IDX}" "${CAP_IDX}" >/dev/null || return 1
+  cover_function "setFeeTiersAndRoles(uint24[],uint8,uint8,uint8)"
+  cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" \
+    "setFeeTiersAndRoles(uint24[],uint8,uint8,uint8)" \
+    "${tiers_arg}" "${FLOOR_IDX}" "${CASH_IDX}" "${EXTREME_IDX}" >/dev/null || return 1
 
   now_ts="$(block_timestamp)"
   state_json="$(state_debug_json)"
@@ -1746,24 +1743,24 @@ test_t03_pause_gating_cold_updates() {
   assert_eq "T03 reset emergency streak" "${ems}" "0" || return 1
   assert_eq "T03 reset ema" "${ema_vol}" "0" || return 1
   if (( period_start > now_ts + 2 || period_start + 2 < now_ts )); then
-    set_case_fail "T03 periodStart mismatch after setFeeTiersAndRoles reset"
+    set_case_fail "T03 periodStart mismatch after setFeeTiersAndRoles update"
     return 1
   fi
   tc_checkpoint "after_setFeeTiersAndRoles_expect_reset_floor" "${floor_fee}" || return 1
 
   cover_function "unpause()"
-  cast_send_retry --private-key "${CREATOR_PK}" "${HOOK_ADDRESS}" "unpause()" >/dev/null || return 1
+  cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" "unpause()" >/dev/null || return 1
 
   cover_function "setTimingParams(uint32,uint8,uint32,uint16)"
   expect_revert_custom "T03 setTimingParams requires paused" \
-    "cast call --rpc-url \"${RPC_URL}\" --from \"${CREATOR_ADDR}\" \"${HOOK_ADDRESS}\" \"setTimingParams(uint32,uint8,uint32,uint16)\" \"${period}\" \"${ema}\" \"${lull}\" \"${deadband}\"" \
+    "cast call --rpc-url \"${RPC_URL}\" --from \"${OWNER_ADDR}\" \"${HOOK_ADDRESS}\" \"setTimingParams(uint32,uint8,uint32,uint16)\" \"${period}\" \"${ema}\" \"${lull}\" \"${deadband}\"" \
     "RequiresPaused" || return 1
 
   cover_function "pause()"
-  cast_send_retry --private-key "${CREATOR_PK}" "${HOOK_ADDRESS}" "pause()" >/dev/null || return 1
+  cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" "pause()" >/dev/null || return 1
 
   cover_function "setTimingParams(uint32,uint8,uint32,uint16)"
-  cast_send_retry --private-key "${CREATOR_PK}" "${HOOK_ADDRESS}" \
+  cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" \
     "setTimingParams(uint32,uint8,uint32,uint16)" \
     "${period}" "${ema}" "${lull}" "${deadband}" >/dev/null || return 1
 
@@ -1791,7 +1788,7 @@ test_t03_pause_gating_cold_updates() {
   tc_checkpoint "after_setTimingParams_expect_reset_floor" "${floor_fee}" || return 1
 
   cover_function "unpause()"
-  cast_send_retry --private-key "${CREATOR_PK}" "${HOOK_ADDRESS}" "unpause()" >/dev/null || return 1
+  cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" "unpause()" >/dev/null || return 1
   tc_checkpoint "after_unpause" || return 1
 
   TC_REASON="Cold-update gating подтвержден: unpaused->revert, paused->success, reset state детерминирован"
@@ -1799,7 +1796,7 @@ test_t03_pause_gating_cold_updates() {
 }
 
 test_t04_invalid_tiers_roles() {
-  local tiers_arg before_count before_floor before_cash before_extreme before_cap
+  local tiers_arg before_count before_floor before_cash before_extreme
 
   load_fee_tiers || return 1
   tiers_arg="[$(IFS=,; echo "${FEE_TIERS_BY_IDX[*]}")]"
@@ -1807,44 +1804,42 @@ test_t04_invalid_tiers_roles() {
   before_floor="${FLOOR_IDX}"
   before_cash="${CASH_IDX}"
   before_extreme="${EXTREME_IDX}"
-  before_cap="${CAP_IDX}"
 
   cover_function "pause()"
-  cast_send_retry --private-key "${CREATOR_PK}" "${HOOK_ADDRESS}" "pause()" >/dev/null || return 1
+  cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" "pause()" >/dev/null || return 1
 
-  cover_function "setFeeTiersAndRoles(uint24[],uint8,uint8,uint8,uint8)"
+  cover_function "setFeeTiersAndRoles(uint24[],uint8,uint8,uint8)"
   expect_revert_custom "T04 non-increasing tiers" \
-    "cast call --rpc-url \"${RPC_URL}\" --from \"${CREATOR_ADDR}\" \"${HOOK_ADDRESS}\" \"setFeeTiersAndRoles(uint24[],uint8,uint8,uint8,uint8)\" \"[400,400,9000]\" 0 1 2 2" \
+    "cast call --rpc-url \"${RPC_URL}\" --from \"${OWNER_ADDR}\" \"${HOOK_ADDRESS}\" \"setFeeTiersAndRoles(uint24[],uint8,uint8,uint8)\" \"[400,400,9000]\" 0 1 2" \
     "InvalidConfig" || return 1
 
-  cover_function "setFeeTiersAndRoles(uint24[],uint8,uint8,uint8,uint8)"
+  cover_function "setFeeTiersAndRoles(uint24[],uint8,uint8,uint8)"
   expect_revert_custom "T04 invalid tier bounds" \
-    "cast call --rpc-url \"${RPC_URL}\" --from \"${CREATOR_ADDR}\" \"${HOOK_ADDRESS}\" \"setFeeTiersAndRoles(uint24[],uint8,uint8,uint8,uint8)\" \"${tiers_arg}\" 2 1 2 2" \
+    "cast call --rpc-url \"${RPC_URL}\" --from \"${OWNER_ADDR}\" \"${HOOK_ADDRESS}\" \"setFeeTiersAndRoles(uint24[],uint8,uint8,uint8)\" \"${tiers_arg}\" 2 1 2" \
     "InvalidTierBounds" || return 1
 
-  cover_function "setFeeTiersAndRoles(uint24[],uint8,uint8,uint8,uint8)"
+  cover_function "setFeeTiersAndRoles(uint24[],uint8,uint8,uint8)"
   expect_revert_custom "T04 empty tiers" \
-    "cast call --rpc-url \"${RPC_URL}\" --from \"${CREATOR_ADDR}\" \"${HOOK_ADDRESS}\" \"setFeeTiersAndRoles(uint24[],uint8,uint8,uint8,uint8)\" \"[]\" 0 0 0 0" \
+    "cast call --rpc-url \"${RPC_URL}\" --from \"${OWNER_ADDR}\" \"${HOOK_ADDRESS}\" \"setFeeTiersAndRoles(uint24[],uint8,uint8,uint8)\" \"[]\" 0 0 0" \
     "InvalidConfig" || return 1
 
-  cover_function "setFeeTiersAndRoles(uint24[],uint8,uint8,uint8,uint8)"
+  cover_function "setFeeTiersAndRoles(uint24[],uint8,uint8,uint8)"
   expect_revert_custom "T04 too many tiers" \
-    "cast call --rpc-url \"${RPC_URL}\" --from \"${CREATOR_ADDR}\" \"${HOOK_ADDRESS}\" \"setFeeTiersAndRoles(uint24[],uint8,uint8,uint8,uint8)\" \"[100,200,300,400,500,600,700,800,900,1000,1100,1200,1300,1400,1500,1600,1700]\" 0 1 2 16" \
+    "cast call --rpc-url \"${RPC_URL}\" --from \"${OWNER_ADDR}\" \"${HOOK_ADDRESS}\" \"setFeeTiersAndRoles(uint24[],uint8,uint8,uint8)\" \"[100,200,300,400,500,600,700,800,900,1000,1100,1200,1300,1400,1500,1600,1700]\" 0 1 2" \
     "InvalidConfig" || return 1
 
-  cover_function "setFeeTiersAndRoles(uint24[],uint8,uint8,uint8,uint8)"
-  expect_revert_custom "T04 cap idx out of range" \
-    "cast call --rpc-url \"${RPC_URL}\" --from \"${CREATOR_ADDR}\" \"${HOOK_ADDRESS}\" \"setFeeTiersAndRoles(uint24[],uint8,uint8,uint8,uint8)\" \"${tiers_arg}\" 0 1 2 99" \
+  cover_function "setFeeTiersAndRoles(uint24[],uint8,uint8,uint8)"
+  expect_revert_custom "T04 extreme idx out of range" \
+    "cast call --rpc-url \"${RPC_URL}\" --from \"${OWNER_ADDR}\" \"${HOOK_ADDRESS}\" \"setFeeTiersAndRoles(uint24[],uint8,uint8,uint8)\" \"${tiers_arg}\" 0 1 99" \
     "InvalidFeeIndex" || return 1
 
   assert_eq "T04 feeTierCount unchanged" "$(cast_call_single "${HOOK_ADDRESS}" "feeTierCount()(uint16)")" "${before_count}" || return 1
   assert_eq "T04 floorIdx unchanged" "$(cast_call_single "${HOOK_ADDRESS}" "floorIdx()(uint8)")" "${before_floor}" || return 1
   assert_eq "T04 cashIdx unchanged" "$(cast_call_single "${HOOK_ADDRESS}" "cashIdx()(uint8)")" "${before_cash}" || return 1
   assert_eq "T04 extremeIdx unchanged" "$(cast_call_single "${HOOK_ADDRESS}" "extremeIdx()(uint8)")" "${before_extreme}" || return 1
-  assert_eq "T04 capIdx unchanged" "$(cast_call_single "${HOOK_ADDRESS}" "capIdx()(uint8)")" "${before_cap}" || return 1
 
   cover_function "unpause()"
-  cast_send_retry --private-key "${CREATOR_PK}" "${HOOK_ADDRESS}" "unpause()" >/dev/null || return 1
+  cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" "unpause()" >/dev/null || return 1
 
   tc_checkpoint "tiers_invalid_done" || return 1
   TC_REASON="Некорректные tiers/roles отклоняются, состояние не меняется"
@@ -1860,26 +1855,26 @@ test_t05_invalid_timing() {
   before_deadband="$(cast_call_single "${HOOK_ADDRESS}" "deadbandBps()(uint16)")"
 
   cover_function "pause()"
-  cast_send_retry --private-key "${CREATOR_PK}" "${HOOK_ADDRESS}" "pause()" >/dev/null || return 1
+  cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" "pause()" >/dev/null || return 1
 
   cover_function "setTimingParams(uint32,uint8,uint32,uint16)"
   expect_revert_custom "T05 period=0" \
-    "cast call --rpc-url \"${RPC_URL}\" --from \"${CREATOR_ADDR}\" \"${HOOK_ADDRESS}\" \"setTimingParams(uint32,uint8,uint32,uint16)\" 0 6 120 1000" \
+    "cast call --rpc-url \"${RPC_URL}\" --from \"${OWNER_ADDR}\" \"${HOOK_ADDRESS}\" \"setTimingParams(uint32,uint8,uint32,uint16)\" 0 6 120 1000" \
     "InvalidConfig" || return 1
 
   cover_function "setTimingParams(uint32,uint8,uint32,uint16)"
   expect_revert_custom "T05 ema=0" \
-    "cast call --rpc-url \"${RPC_URL}\" --from \"${CREATOR_ADDR}\" \"${HOOK_ADDRESS}\" \"setTimingParams(uint32,uint8,uint32,uint16)\" 30 0 120 1000" \
+    "cast call --rpc-url \"${RPC_URL}\" --from \"${OWNER_ADDR}\" \"${HOOK_ADDRESS}\" \"setTimingParams(uint32,uint8,uint32,uint16)\" 30 0 120 1000" \
     "InvalidConfig" || return 1
 
   cover_function "setTimingParams(uint32,uint8,uint32,uint16)"
   expect_revert_custom "T05 lull<period" \
-    "cast call --rpc-url \"${RPC_URL}\" --from \"${CREATOR_ADDR}\" \"${HOOK_ADDRESS}\" \"setTimingParams(uint32,uint8,uint32,uint16)\" 30 6 10 1000" \
+    "cast call --rpc-url \"${RPC_URL}\" --from \"${OWNER_ADDR}\" \"${HOOK_ADDRESS}\" \"setTimingParams(uint32,uint8,uint32,uint16)\" 30 6 10 1000" \
     "InvalidConfig" || return 1
 
   cover_function "setTimingParams(uint32,uint8,uint32,uint16)"
   expect_revert_custom "T05 deadband>5000" \
-    "cast call --rpc-url \"${RPC_URL}\" --from \"${CREATOR_ADDR}\" \"${HOOK_ADDRESS}\" \"setTimingParams(uint32,uint8,uint32,uint16)\" 30 6 120 5001" \
+    "cast call --rpc-url \"${RPC_URL}\" --from \"${OWNER_ADDR}\" \"${HOOK_ADDRESS}\" \"setTimingParams(uint32,uint8,uint32,uint16)\" 30 6 120 5001" \
     "InvalidConfig" || return 1
 
   assert_eq "T05 period unchanged" "$(cast_call_single "${HOOK_ADDRESS}" "periodSeconds()(uint32)")" "${before_period}" || return 1
@@ -1888,7 +1883,7 @@ test_t05_invalid_timing() {
   assert_eq "T05 deadband unchanged" "$(cast_call_single "${HOOK_ADDRESS}" "deadbandBps()(uint16)")" "${before_deadband}" || return 1
 
   cover_function "unpause()"
-  cast_send_retry --private-key "${CREATOR_PK}" "${HOOK_ADDRESS}" "unpause()" >/dev/null || return 1
+  cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" "unpause()" >/dev/null || return 1
 
   tc_checkpoint "timing_invalid_done" || return 1
   TC_REASON="Некорректные timing-параметры отклоняются, состояние стабильно"
@@ -1902,47 +1897,47 @@ test_t06_invalid_controller_params() {
   load_controller_params || return 1
   original_tuple="$(controller_tuple)"
   cover_function "pause()"
-  cast_send_retry --private-key "${CREATOR_PK}" "${HOOK_ADDRESS}" "pause()" >/dev/null || return 1
+  cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" "pause()" >/dev/null || return 1
 
   CP_CASH_HOLD_PERIODS="0"
   cover_function "setControllerParams(tuple)"
   expect_revert_custom "T06 cashHold=0" \
-    "cast call --rpc-url \"${RPC_URL}\" --from \"${CREATOR_ADDR}\" \"${HOOK_ADDRESS}\" \"setControllerParams((uint64,uint16,uint8,uint64,uint16,uint8,uint8,uint16,uint8,uint16,uint8,uint64,uint8))\" \"$(controller_tuple)\"" \
+    "cast call --rpc-url \"${RPC_URL}\" --from \"${OWNER_ADDR}\" \"${HOOK_ADDRESS}\" \"setControllerParams((uint64,uint16,uint8,uint64,uint16,uint8,uint8,uint16,uint8,uint16,uint8,uint64,uint8))\" \"$(controller_tuple)\"" \
     "InvalidHoldPeriods" || return 1
 
   CP_CASH_HOLD_PERIODS="${BASE_CP_CASH_HOLD_PERIODS}"
   CP_EXTREME_HOLD_PERIODS="0"
   cover_function "setControllerParams(tuple)"
   expect_revert_custom "T06 extremeHold=0" \
-    "cast call --rpc-url \"${RPC_URL}\" --from \"${CREATOR_ADDR}\" \"${HOOK_ADDRESS}\" \"setControllerParams((uint64,uint16,uint8,uint64,uint16,uint8,uint8,uint16,uint8,uint16,uint8,uint64,uint8))\" \"$(controller_tuple)\"" \
+    "cast call --rpc-url \"${RPC_URL}\" --from \"${OWNER_ADDR}\" \"${HOOK_ADDRESS}\" \"setControllerParams((uint64,uint16,uint8,uint64,uint16,uint8,uint8,uint16,uint8,uint16,uint8,uint64,uint8))\" \"$(controller_tuple)\"" \
     "InvalidHoldPeriods" || return 1
 
   CP_EXTREME_HOLD_PERIODS="${BASE_CP_EXTREME_HOLD_PERIODS}"
   CP_UP_EXTREME_CONFIRM_PERIODS="0"
   cover_function "setControllerParams(tuple)"
   expect_revert_custom "T06 upExtremeConfirm=0" \
-    "cast call --rpc-url \"${RPC_URL}\" --from \"${CREATOR_ADDR}\" \"${HOOK_ADDRESS}\" \"setControllerParams((uint64,uint16,uint8,uint64,uint16,uint8,uint8,uint16,uint8,uint16,uint8,uint64,uint8))\" \"$(controller_tuple)\"" \
+    "cast call --rpc-url \"${RPC_URL}\" --from \"${OWNER_ADDR}\" \"${HOOK_ADDRESS}\" \"setControllerParams((uint64,uint16,uint8,uint64,uint16,uint8,uint8,uint16,uint8,uint16,uint8,uint64,uint8))\" \"$(controller_tuple)\"" \
     "InvalidConfirmPeriods" || return 1
 
   CP_UP_EXTREME_CONFIRM_PERIODS="${BASE_CP_UP_EXTREME_CONFIRM_PERIODS}"
   CP_DOWN_EXTREME_CONFIRM_PERIODS="0"
   cover_function "setControllerParams(tuple)"
   expect_revert_custom "T06 downExtremeConfirm=0" \
-    "cast call --rpc-url \"${RPC_URL}\" --from \"${CREATOR_ADDR}\" \"${HOOK_ADDRESS}\" \"setControllerParams((uint64,uint16,uint8,uint64,uint16,uint8,uint8,uint16,uint8,uint16,uint8,uint64,uint8))\" \"$(controller_tuple)\"" \
+    "cast call --rpc-url \"${RPC_URL}\" --from \"${OWNER_ADDR}\" \"${HOOK_ADDRESS}\" \"setControllerParams((uint64,uint16,uint8,uint64,uint16,uint8,uint8,uint16,uint8,uint16,uint8,uint64,uint8))\" \"$(controller_tuple)\"" \
     "InvalidConfirmPeriods" || return 1
 
   CP_DOWN_EXTREME_CONFIRM_PERIODS="${BASE_CP_DOWN_EXTREME_CONFIRM_PERIODS}"
   CP_DOWN_CASH_CONFIRM_PERIODS="0"
   cover_function "setControllerParams(tuple)"
   expect_revert_custom "T06 downCashConfirm=0" \
-    "cast call --rpc-url \"${RPC_URL}\" --from \"${CREATOR_ADDR}\" \"${HOOK_ADDRESS}\" \"setControllerParams((uint64,uint16,uint8,uint64,uint16,uint8,uint8,uint16,uint8,uint16,uint8,uint64,uint8))\" \"$(controller_tuple)\"" \
+    "cast call --rpc-url \"${RPC_URL}\" --from \"${OWNER_ADDR}\" \"${HOOK_ADDRESS}\" \"setControllerParams((uint64,uint16,uint8,uint64,uint16,uint8,uint8,uint16,uint8,uint16,uint8,uint64,uint8))\" \"$(controller_tuple)\"" \
     "InvalidConfirmPeriods" || return 1
 
   CP_DOWN_CASH_CONFIRM_PERIODS="${BASE_CP_DOWN_CASH_CONFIRM_PERIODS}"
   CP_EMERGENCY_CONFIRM_PERIODS="0"
   cover_function "setControllerParams(tuple)"
   expect_revert_custom "T06 emergencyConfirm=0" \
-    "cast call --rpc-url \"${RPC_URL}\" --from \"${CREATOR_ADDR}\" \"${HOOK_ADDRESS}\" \"setControllerParams((uint64,uint16,uint8,uint64,uint16,uint8,uint8,uint16,uint8,uint16,uint8,uint64,uint8))\" \"$(controller_tuple)\"" \
+    "cast call --rpc-url \"${RPC_URL}\" --from \"${OWNER_ADDR}\" \"${HOOK_ADDRESS}\" \"setControllerParams((uint64,uint16,uint8,uint64,uint16,uint8,uint8,uint16,uint8,uint16,uint8,uint64,uint8))\" \"$(controller_tuple)\"" \
     "InvalidConfirmPeriods" || return 1
 
   # Reduce period length sensitivity to wall-clock drift inside this long scenario.
@@ -1951,13 +1946,13 @@ test_t06_invalid_controller_params() {
   timing_deadband="$(cast_call_single "${HOOK_ADDRESS}" "deadbandBps()(uint16)" || true)"
   timing_period="90"
   cover_function "pause()"
-  cast_send_retry --private-key "${CREATOR_PK}" "${HOOK_ADDRESS}" "pause()" >/dev/null || return 1
+  cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" "pause()" >/dev/null || return 1
   cover_function "setTimingParams(uint32,uint8,uint32,uint16)"
-  cast_send_retry --private-key "${CREATOR_PK}" "${HOOK_ADDRESS}" \
+  cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" \
     "setTimingParams(uint32,uint8,uint32,uint16)" \
     "${timing_period}" "${timing_ema}" "${timing_lull}" "${timing_deadband}" >/dev/null || return 1
   cover_function "unpause()"
-  cast_send_retry --private-key "${CREATOR_PK}" "${HOOK_ADDRESS}" "unpause()" >/dev/null || return 1
+  cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" "unpause()" >/dev/null || return 1
 
   # Deterministic valid update + reason coverage for HOLD and DEADBAND.
   CP_MIN_CLOSEVOL_TO_CASH_USD6="1"
@@ -2097,19 +2092,19 @@ test_t07_direct_call_protection() {
   # Try to trigger hook key validation errors through genuine PoolManager->hook callback flow.
   read -r bad0 bad1 <<<"$(sort_tokens "${VOLATILE}" "${RESCUE_TOKEN}")"
   if ! expect_revert_custom "T07 bad key init" \
-    "cast call --rpc-url \"${RPC_URL}\" --from \"${CREATOR_ADDR}\" \"${POOL_MANAGER}\" \"initialize((address,address,uint24,int24,address),uint160)\" \"(${bad0},${bad1},${DYNAMIC_FEE_FLAG},${TICK_SPACING},${HOOK_ADDRESS})\" ${SQRT_PRICE_X96_ONE}" \
+    "cast call --rpc-url \"${RPC_URL}\" --from \"${OWNER_ADDR}\" \"${POOL_MANAGER}\" \"initialize((address,address,uint24,int24,address),uint160)\" \"(${bad0},${bad1},${DYNAMIC_FEE_FLAG},${TICK_SPACING},${HOOK_ADDRESS})\" ${SQRT_PRICE_X96_ONE}" \
     "InvalidPoolKey"; then
     exclude_error "InvalidPoolKey" "PoolManager validation reverts before hook on local path"
   fi
 
   if ! expect_revert_custom "T07 non-dynamic key init" \
-    "cast call --rpc-url \"${RPC_URL}\" --from \"${CREATOR_ADDR}\" \"${POOL_MANAGER}\" \"initialize((address,address,uint24,int24,address),uint160)\" \"(${TOKEN0},${TOKEN1},3000,${TICK_SPACING},${HOOK_ADDRESS})\" ${SQRT_PRICE_X96_ONE}" \
+    "cast call --rpc-url \"${RPC_URL}\" --from \"${OWNER_ADDR}\" \"${POOL_MANAGER}\" \"initialize((address,address,uint24,int24,address),uint160)\" \"(${TOKEN0},${TOKEN1},3000,${TICK_SPACING},${HOOK_ADDRESS})\" ${SQRT_PRICE_X96_ONE}" \
     "NotDynamicFeePool"; then
     exclude_error "NotDynamicFeePool" "PoolManager rejects non-dynamic fee init before callback in local path"
   fi
 
   if ! expect_revert_custom "T07 re-initialize same pool" \
-    "cast call --rpc-url \"${RPC_URL}\" --from \"${CREATOR_ADDR}\" \"${POOL_MANAGER}\" \"initialize((address,address,uint24,int24,address),uint160)\" \"${POOL_KEY}\" ${SQRT_PRICE_X96_ONE}" \
+    "cast call --rpc-url \"${RPC_URL}\" --from \"${OWNER_ADDR}\" \"${POOL_MANAGER}\" \"initialize((address,address,uint24,int24,address),uint160)\" \"${POOL_KEY}\" ${SQRT_PRICE_X96_ONE}" \
     "AlreadyInitialized"; then
     exclude_error "AlreadyInitialized" "PoolManager pre-check handles already-initialized pool before hook callback"
   fi
@@ -2183,7 +2178,7 @@ test_t09_multi_period_close_loop() {
   assert_true "T09 multiple PeriodClosed events" "[[ ${events_count} -ge 2 ]]" || return 1
 
   fee_idx="$(jq -r '.[0]' <<<"$(state_debug_json)")"
-  assert_true "T09 fee idx in bounds" "[[ ${fee_idx} -ge ${FLOOR_IDX} && ${fee_idx} -le ${CAP_IDX} ]]" || return 1
+  assert_true "T09 fee idx in bounds" "[[ ${fee_idx} -ge ${FLOOR_IDX} && ${fee_idx} -le ${EXTREME_IDX} ]]" || return 1
 
   tc_checkpoint "multi_period_after_swap" || return 1
   TC_REASON="Мульти-периодный close-loop отрабатывает без revert/OOG, состояние консистентно"
@@ -2233,7 +2228,7 @@ test_t11_paused_behavior() {
   close_period_with_seed "1000" >/dev/null || return 1
 
   cover_function "pause()"
-  cast_send_retry --private-key "${CREATOR_PK}" "${HOOK_ADDRESS}" "pause()" >/dev/null || return 1
+  cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" "pause()" >/dev/null || return 1
   tc_checkpoint "paused_state_expect_floor" "${floor_fee}" || return 1
 
   before_state="$(state_debug_json)"
@@ -2250,11 +2245,11 @@ test_t11_paused_behavior() {
   assert_eq "T11 paused fee idx unchanged" "${after_fee_idx}" "${before_fee_idx}" || return 1
   assert_eq "T11 paused periodVol unchanged" "${after_period}" "${before_period}" || return 1
 
-  cover_function "emergencyResetStateToFloor()"
-  cast_send_retry --private-key "${CREATOR_PK}" "${HOOK_ADDRESS}" "emergencyResetStateToFloor()" >/dev/null || return 1
+  cover_function "emergencyResetToFloor()"
+  cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" "emergencyResetToFloor()" >/dev/null || return 1
 
   cover_function "unpause()"
-  cast_send_retry --private-key "${CREATOR_PK}" "${HOOK_ADDRESS}" "unpause()" >/dev/null || return 1
+  cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" "unpause()" >/dev/null || return 1
 
   swap_exact_in_stable "1000" >/dev/null || return 1
   tc_checkpoint "after_unpause_activity" || return 1
@@ -2263,24 +2258,30 @@ test_t11_paused_behavior() {
   return 0
 }
 
-test_t12_creator_fee_e2e() {
+test_t12_hook_fee_e2e() {
   local limit b0_after b1_after
   local accrued_before0 accrued_before1 accrued_mid0 accrued_mid1
 
   ensure_unpaused || return 1
 
-  cover_function "creatorFeeLimitPercent()"
-  limit="$(cast_call_single "${HOOK_ADDRESS}" "creatorFeeLimitPercent()(uint16)")"
-  assert_eq "T12 creator fee limit" "${limit}" "10" || return 1
+  cover_function "MAX_HOOK_FEE_PERCENT()"
+  limit="$(cast_call_single "${HOOK_ADDRESS}" "MAX_HOOK_FEE_PERCENT()(uint16)")"
+  assert_eq "T12 hook fee limit" "${limit}" "10" || return 1
 
-  cover_function "setCreatorFeePercent(uint16)"
-  cast_send_retry --private-key "${CREATOR_PK}" "${HOOK_ADDRESS}" "setCreatorFeePercent(uint16)" 0 >/dev/null || return 1
+  cover_function "scheduleHookFeePercentChange(uint16)"
+  cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" "scheduleHookFeePercentChange(uint16)" 0 >/dev/null || return 1
 
-  cover_function "setCreatorFeeConfig(address,uint16)"
-  cast_send_retry --private-key "${CREATOR_PK}" "${HOOK_ADDRESS}" "setCreatorFeeConfig(address,uint16)" "${CREATOR_ADDR}" 0 >/dev/null || return 1
+  warp_seconds 172801
+  cover_function "executeHookFeePercentChange()"
+  cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" "executeHookFeePercentChange()" >/dev/null || return 1
 
-  cover_function "creatorFeesAccrued()"
-  read -r accrued_before0 accrued_before1 <<<"$(cast_call_json "${HOOK_ADDRESS}" "creatorFeesAccrued()(uint256,uint256)" | jq -r '.[0],.[1]' | xargs)"
+  cover_function "scheduleHookFeePercentChange(uint16)"
+  cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" "scheduleHookFeePercentChange(uint16)" 0 >/dev/null || return 1
+  cover_function "cancelHookFeePercentChange()"
+  cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" "cancelHookFeePercentChange()" >/dev/null || return 1
+
+  cover_function "hookFeesAccrued()"
+  read -r accrued_before0 accrued_before1 <<<"$(cast_call_json "${HOOK_ADDRESS}" "hookFeesAccrued()(uint256,uint256)" | jq -r '.[0],.[1]' | xargs)"
 
   swap_exact_in_stable "3000000" >/dev/null || return 1
   close_period_with_seed "1000" >/dev/null || return 1
@@ -2288,93 +2289,93 @@ test_t12_creator_fee_e2e() {
   close_period_with_seed "1000" >/dev/null || return 1
   swap_exact_in_volatile "1000000000000000000" >/dev/null || return 1
 
-  read -r accrued_mid0 accrued_mid1 <<<"$(cast_call_json "${HOOK_ADDRESS}" "creatorFeesAccrued()(uint256,uint256)" | jq -r '.[0],.[1]' | xargs)"
+  read -r accrued_mid0 accrued_mid1 <<<"$(cast_call_json "${HOOK_ADDRESS}" "hookFeesAccrued()(uint256,uint256)" | jq -r '.[0],.[1]' | xargs)"
   assert_eq "T12 accrued token0 unchanged at zero fee" "${accrued_mid0}" "${accrued_before0}" || return 1
   assert_eq "T12 accrued token1 unchanged at zero fee" "${accrued_mid1}" "${accrued_before1}" || return 1
 
-  cover_function "claimAllCreatorFees()"
-  cast_send_retry --private-key "${CREATOR_PK}" "${HOOK_ADDRESS}" "claimAllCreatorFees()" >/dev/null || return 1
+  cover_function "claimAllHookFees()"
+  cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" "claimAllHookFees()" >/dev/null || return 1
 
-  read -r b0_after b1_after <<<"$(cast_call_json "${HOOK_ADDRESS}" "creatorFeesAccrued()(uint256,uint256)" | jq -r '.[0],.[1]' | xargs)"
+  read -r b0_after b1_after <<<"$(cast_call_json "${HOOK_ADDRESS}" "hookFeesAccrued()(uint256,uint256)" | jq -r '.[0],.[1]' | xargs)"
   assert_eq "T12 accrued token0 after claim" "${b0_after}" "0" || return 1
   assert_eq "T12 accrued token1 after claim" "${b1_after}" "0" || return 1
 
   # Edge checks.
-  cover_function "setCreatorFeeRecipient(address)"
-  cast_send_retry --private-key "${CREATOR_PK}" "${HOOK_ADDRESS}" "setCreatorFeeRecipient(address)" \
+  cover_function "setHookFeeRecipient(address)"
+  cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" "setHookFeeRecipient(address)" \
     "0x0000000000000000000000000000000000000000" >/dev/null || return 1
-  cover_function "setCreatorFeePercent(uint16)"
-  expect_revert_custom "T12 creator fee requires recipient" \
-    "cast call --rpc-url \"${RPC_URL}\" --from \"${CREATOR_ADDR}\" \"${HOOK_ADDRESS}\" \"setCreatorFeePercent(uint16)\" 1" \
-    "CreatorFeeRecipientRequired" || return 1
-  cover_function "setCreatorFeeRecipient(address)"
-  cast_send_retry --private-key "${CREATOR_PK}" "${HOOK_ADDRESS}" "setCreatorFeeRecipient(address)" "${CREATOR_ADDR}" >/dev/null || return 1
+  cover_function "scheduleHookFeePercentChange(uint16)"
+  expect_revert_custom "T12 hook fee requires recipient" \
+    "cast call --rpc-url \"${RPC_URL}\" --from \"${OWNER_ADDR}\" \"${HOOK_ADDRESS}\" \"scheduleHookFeePercentChange(uint16)\" 1" \
+    "HookFeeRecipientRequired" || return 1
+  cover_function "setHookFeeRecipient(address)"
+  cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" "setHookFeeRecipient(address)" "${OWNER_ADDR}" >/dev/null || return 1
 
-  cover_function "setCreatorFeePercent(uint16)"
-  expect_revert_custom "T12 creator fee percent above limit" \
-    "cast call --rpc-url \"${RPC_URL}\" --from \"${CREATOR_ADDR}\" \"${HOOK_ADDRESS}\" \"setCreatorFeePercent(uint16)\" 11" \
-    "CreatorFeePercentLimitExceeded" || return 1
+  cover_function "scheduleHookFeePercentChange(uint16)"
+  expect_revert_custom "T12 hook fee percent above limit" \
+    "cast call --rpc-url \"${RPC_URL}\" --from \"${OWNER_ADDR}\" \"${HOOK_ADDRESS}\" \"scheduleHookFeePercentChange(uint16)\" 11" \
+    "HookFeePercentLimitExceeded" || return 1
 
-  cover_function "setCreatorFeeConfig(address,uint16)"
-  expect_revert_custom "T12 creator fee bps above limit" \
-    "cast call --rpc-url \"${RPC_URL}\" --from \"${CREATOR_ADDR}\" \"${HOOK_ADDRESS}\" \"setCreatorFeeConfig(address,uint16)\" \"${CREATOR_ADDR}\" 1100" \
-    "CreatorFeeLimitExceeded" || return 1
+  cover_function "scheduleHookFeePercentChange(uint16)"
+  expect_revert_custom "T12 hook fee bps above limit" \
+    "cast call --rpc-url \"${RPC_URL}\" --from \"${OWNER_ADDR}\" \"${HOOK_ADDRESS}\" \"scheduleHookFeePercentChange(uint16)\" 1100" \
+    "HookFeePercentLimitExceeded" || return 1
 
-  cover_function "claimCreatorFees(address,uint256,uint256)"
+  cover_function "claimHookFees(address,uint256,uint256)"
   expect_revert_custom "T12 claim too large" \
-    "cast call --rpc-url \"${RPC_URL}\" --from \"${CREATOR_ADDR}\" \"${HOOK_ADDRESS}\" \"claimCreatorFees(address,uint256,uint256)\" \"${CREATOR_ADDR}\" 1 0" \
+    "cast call --rpc-url \"${RPC_URL}\" --from \"${OWNER_ADDR}\" \"${HOOK_ADDRESS}\" \"claimHookFees(address,uint256,uint256)\" \"${OWNER_ADDR}\" 1 0" \
     "ClaimTooLarge" || return 1
 
-  cover_function "claimCreatorFees(address,uint256,uint256)"
-  expect_revert_custom "T12 claimCreatorFees zero recipient" \
-    "cast call --rpc-url \"${RPC_URL}\" --from \"${CREATOR_ADDR}\" \"${HOOK_ADDRESS}\" \"claimCreatorFees(address,uint256,uint256)\" 0x0000000000000000000000000000000000000000 0 0" \
+  cover_function "claimHookFees(address,uint256,uint256)"
+  expect_revert_custom "T12 claimHookFees zero recipient" \
+    "cast call --rpc-url \"${RPC_URL}\" --from \"${OWNER_ADDR}\" \"${HOOK_ADDRESS}\" \"claimHookFees(address,uint256,uint256)\" 0x0000000000000000000000000000000000000000 0 0" \
     "InvalidRecipient" || return 1
 
-  cover_function "claimAllCreatorFees(address)"
-  expect_revert_custom "T12 claimAllCreatorFees zero recipient" \
-    "cast call --rpc-url \"${RPC_URL}\" --from \"${CREATOR_ADDR}\" \"${HOOK_ADDRESS}\" \"claimAllCreatorFees(address)\" 0x0000000000000000000000000000000000000000" \
+  cover_function "claimAllHookFees(address)"
+  expect_revert_custom "T12 claimAllHookFees zero recipient" \
+    "cast call --rpc-url \"${RPC_URL}\" --from \"${OWNER_ADDR}\" \"${HOOK_ADDRESS}\" \"claimAllHookFees(address)\" 0x0000000000000000000000000000000000000000" \
     "InvalidRecipient" || return 1
 
   # deterministic no-op when accrued==0
-  cover_function "claimAllCreatorFees()"
-  cast_send_retry --private-key "${CREATOR_PK}" "${HOOK_ADDRESS}" "claimAllCreatorFees()" >/dev/null || return 1
+  cover_function "claimAllHookFees()"
+  cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" "claimAllHookFees()" >/dev/null || return 1
 
-  tc_checkpoint "creator_fee_after_claim" || return 1
-  TC_REASON="Creator fee guards подтверждены: zero-fee no-op, claim path детерминирован, лимиты и edge-cases валидны"
+  tc_checkpoint "hook_fee_after_claim" || return 1
+  TC_REASON="Hook fee guards подтверждены: zero-fee no-op, claim path детерминирован, лимиты и edge-cases валидны"
   return 0
 }
 
 test_t13_rescue_token() {
-  local hook_before hook_after creator_before creator_after amount
+  local hook_before hook_after owner_before owner_after amount
 
   amount="5000000000000000000"
 
-  cast_send_retry --private-key "${CREATOR_PK}" "${RESCUE_TOKEN}" "transfer(address,uint256)" "${HOOK_ADDRESS}" "${amount}" >/dev/null || return 1
+  cast_send_retry --private-key "${OWNER_PK}" "${RESCUE_TOKEN}" "transfer(address,uint256)" "${HOOK_ADDRESS}" "${amount}" >/dev/null || return 1
 
   cover_function "rescueToken(address,uint256)"
   expect_revert_custom "T13 attacker rescue" \
     "cast call --rpc-url \"${RPC_URL}\" --from \"${ATTACKER_ADDR}\" \"${HOOK_ADDRESS}\" \"rescueToken(address,uint256)\" \"${RESCUE_TOKEN}\" ${amount}" \
-    "NotCreator" || return 1
+    "NotOwner" || return 1
 
   cover_function "rescueToken(address,uint256)"
   expect_revert_custom "T13 rescue pool token forbidden" \
-    "cast call --rpc-url \"${RPC_URL}\" --from \"${CREATOR_ADDR}\" \"${HOOK_ADDRESS}\" \"rescueToken(address,uint256)\" \"${STABLE}\" 1" \
+    "cast call --rpc-url \"${RPC_URL}\" --from \"${OWNER_ADDR}\" \"${HOOK_ADDRESS}\" \"rescueToken(address,uint256)\" \"${STABLE}\" 1" \
     "InvalidRescueCurrency" || return 1
 
   hook_before="$(cast_call_single "${RESCUE_TOKEN}" "balanceOf(address)(uint256)" "${HOOK_ADDRESS}")"
-  creator_before="$(cast_call_single "${RESCUE_TOKEN}" "balanceOf(address)(uint256)" "${CREATOR_ADDR}")"
+  owner_before="$(cast_call_single "${RESCUE_TOKEN}" "balanceOf(address)(uint256)" "${OWNER_ADDR}")"
 
   cover_function "rescueToken(address,uint256)"
-  cast_send_retry --private-key "${CREATOR_PK}" "${HOOK_ADDRESS}" "rescueToken(address,uint256)" "${RESCUE_TOKEN}" "${amount}" >/dev/null || return 1
+  cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" "rescueToken(address,uint256)" "${RESCUE_TOKEN}" "${amount}" >/dev/null || return 1
 
   hook_after="$(cast_call_single "${RESCUE_TOKEN}" "balanceOf(address)(uint256)" "${HOOK_ADDRESS}")"
-  creator_after="$(cast_call_single "${RESCUE_TOKEN}" "balanceOf(address)(uint256)" "${CREATOR_ADDR}")"
+  owner_after="$(cast_call_single "${RESCUE_TOKEN}" "balanceOf(address)(uint256)" "${OWNER_ADDR}")"
 
   assert_true "T13 hook balance decreased" "[[ ${hook_after} -lt ${hook_before} ]]" || return 1
-  assert_true "T13 creator balance increased" "[[ ${creator_after} -gt ${creator_before} ]]" || return 1
+  assert_true "T13 owner balance increased" "[[ ${owner_after} -gt ${owner_before} ]]" || return 1
 
   cover_function "rescueETH(address,uint256)"
-  cast_send_retry --private-key "${CREATOR_PK}" "${HOOK_ADDRESS}" "rescueETH(address,uint256)" "${CREATOR_ADDR}" 0 >/dev/null || return 1
+  cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" "rescueETH(address,uint256)" "${OWNER_ADDR}" 0 >/dev/null || return 1
 
   tc_checkpoint "rescue_done" || return 1
   TC_REASON="Rescue path подтверждён: unauthorized blocked, allowed transfer выполняется, pool-currency rescue запрещён"
@@ -2496,7 +2497,7 @@ main() {
   start_anvil
   prepare_accounts
 
-  log "creator=${CREATOR_ADDR}"
+  log "owner=${OWNER_ADDR}"
   log "attacker=${ATTACKER_ADDR}"
   log "chain=local chain_id=${CHAIN_ID}"
 
@@ -2522,7 +2523,7 @@ main() {
 
   run_test_case "T00" "Smoke: deploy/create/swap" test_t00_smoke
   run_test_case "T01" "ABI view/pure sweep + invalid getter index" test_t01_abi_view_pure_sweep
-  run_test_case "T02" "Матрица доступа (creator-only admin + attacker)" test_t02_access_control_matrix
+  run_test_case "T02" "Матрица доступа (owner-only admin + attacker)" test_t02_access_control_matrix
   run_test_case "T03" "Pause gating для cold updates + reset semantics" test_t03_pause_gating_cold_updates
   run_test_case "T04" "Аномалии tiers/roles" test_t04_invalid_tiers_roles
   run_test_case "T05" "Аномалии timing params" test_t05_invalid_timing
@@ -2532,7 +2533,7 @@ main() {
   run_test_case "T09" "Multi-period close loop safety" test_t09_multi_period_close_loop
   run_test_case "T10" "Lull reset + strict reason check" test_t10_lull_reset_strict
   run_test_case "T11" "Paused behavior + emergency reset" test_t11_paused_behavior
-  run_test_case "T12" "Creator fee E2E + edge cases" test_t12_creator_fee_e2e
+  run_test_case "T12" "Hook fee E2E + edge cases" test_t12_hook_fee_e2e
   run_test_case "T13" "Rescue token path" test_t13_rescue_token
 
   enforce_coverage

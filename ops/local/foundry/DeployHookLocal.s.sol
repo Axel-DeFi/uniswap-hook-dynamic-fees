@@ -44,20 +44,17 @@ contract DeployHookLocal is Script {
         uint8 floorIdx = uint8(vm.envUint("FLOOR_IDX"));
         uint8 cashIdx = uint8(vm.envUint("CASH_IDX"));
         uint8 extremeIdx = uint8(vm.envUint("EXTREME_IDX"));
-        uint8 capIdx = uint8(vm.envUint("CAP_IDX"));
 
         require(floorIdx < feeTiers.length && cashIdx < feeTiers.length && extremeIdx < feeTiers.length, "tier index out of range");
-        require(capIdx < feeTiers.length, "tier index out of range");
         require(floorIdx < cashIdx && cashIdx < extremeIdx, "invalid tier order");
-        require(capIdx == extremeIdx, "cap must equal extreme");
 
         uint24 cashTier = feeTiers[cashIdx];
         uint24 extremeTier = feeTiers[extremeIdx];
 
-        address creator = vm.envOr("CREATOR", vm.addr(pk));
-        uint16 creatorFeeBps = uint16(vm.envUint("CREATOR_FEE_BPS"));
-        address creatorFeeRecipient = vm.envOr("CREATOR_FEE_ADDRESS", address(0));
-        require(creatorFeeBps == 0 || creatorFeeRecipient != address(0), "CREATOR_FEE_ADDRESS required");
+        address owner = vm.envOr("OWNER", vm.addr(pk));
+        uint16 hookFeePercent = uint16(vm.envUint("HOOK_FEE_PERCENT"));
+        address hookFeeRecipient = vm.envOr("HOOK_FEE_ADDRESS", address(0));
+        require(hookFeePercent == 0 || hookFeeRecipient != address(0), "HOOK_FEE_ADDRESS required");
 
         bytes memory constructorArgs = abi.encode(
             IPoolManager(cfg.poolManager),
@@ -67,16 +64,14 @@ contract DeployHookLocal is Script {
             Currency.wrap(cfg.stableToken),
             cfg.stableDecimals,
             floorIdx,
-            capIdx,
             feeTiers,
             uint32(vm.envUint("PERIOD_SECONDS")),
             uint8(vm.envUint("EMA_PERIODS")),
             uint16(vm.envUint("DEADBAND_BPS")),
             uint32(vm.envUint("LULL_RESET_SECONDS")),
-            creator,
-            creatorFeeRecipient,
-            uint16(vm.envUint("CREATOR_FEE_LIMIT_PERCENT")),
-            creatorFeeBps,
+            owner,
+            hookFeeRecipient,
+            hookFeePercent,
             cashTier,
             uint64(vm.envUint("MIN_CLOSEVOL_TO_CASH_USD6")),
             uint16(vm.envUint("UP_R_TO_CASH_BPS")),
@@ -94,7 +89,8 @@ contract DeployHookLocal is Script {
             uint8(vm.envUint("EMERGENCY_CONFIRM_PERIODS"))
         );
 
-        uint160 flags = uint160(Hooks.AFTER_INITIALIZE_FLAG | Hooks.AFTER_SWAP_FLAG);
+        uint160 flags =
+            uint160(Hooks.AFTER_INITIALIZE_FLAG | Hooks.AFTER_SWAP_FLAG | Hooks.AFTER_SWAP_RETURNS_DELTA_FLAG);
 
         (address mined, bytes32 salt) =
             HookMiner.find(CREATE2_DEPLOYER, flags, type(VolumeDynamicFeeHook).creationCode, constructorArgs);

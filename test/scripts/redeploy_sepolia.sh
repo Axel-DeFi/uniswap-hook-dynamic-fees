@@ -538,27 +538,27 @@ PY
 
 claim_hook_fees() {
   local hook="$1"
-  local code creator
+  local code owner
   code="$(cast code --rpc-url "$RPC_URL" "$hook" 2>/dev/null || true)"
   [[ -n "$code" && "$code" != "0x" ]] || { warn "No code at old hook ${hook}, skipping claim"; return; }
 
-  creator="$(cast call --rpc-url "$RPC_URL" "$hook" "creator()(address)" 2>/dev/null || true)"
-  if [[ -z "$creator" ]]; then
-    warn "Old hook ${hook} does not expose creator(), skip claim"
+  owner="$(cast call --rpc-url "$RPC_URL" "$hook" "owner()(address)" 2>/dev/null || true)"
+  if [[ -z "$owner" ]]; then
+    warn "Old hook ${hook} does not expose owner(), skip claim"
     return
   fi
-  if [[ "$(lower "$creator")" != "$(lower "$DEPLOYER")" ]]; then
-    warn "Old hook creator ${creator} != deployer ${DEPLOYER}; skip claim"
+  if [[ "$(lower "$owner")" != "$(lower "$DEPLOYER")" ]]; then
+    warn "Old hook owner ${owner} != deployer ${DEPLOYER}; skip claim"
     return
   fi
 
   if [[ "$DRY_RUN" -eq 1 ]]; then
-    log "[dry-run] claimAllCreatorFees on ${hook}"
+    log "[dry-run] claimAllHookFees on ${hook}"
     return
   fi
 
-  log "Claiming creator fees from old hook ${hook}"
-  cast send --rpc-url "$RPC_URL" --private-key "$PRIVATE_KEY" "$hook" "claimAllCreatorFees()" >/dev/null
+  log "Claiming hook fees from old hook ${hook}"
+  cast send --rpc-url "$RPC_URL" --private-key "$PRIVATE_KEY" "$hook" "claimAllHookFees()" >/dev/null
 }
 
 extract_contract_positions() {
