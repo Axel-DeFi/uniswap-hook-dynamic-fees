@@ -41,7 +41,7 @@ contract EnsurePoolLocal is Script {
         });
 
         vm.startBroadcast(pk);
-        MockPoolManager(cfg.poolManager).callAfterInitialize(VolumeDynamicFeeHook(payable(cfg.hookAddress)), key);
+        MockPoolManager(payable(cfg.poolManager)).callAfterInitialize(VolumeDynamicFeeHook(payable(cfg.hookAddress)), key);
         vm.stopBroadcast();
 
         LoggingLib.ok("pool initialized via mock manager");

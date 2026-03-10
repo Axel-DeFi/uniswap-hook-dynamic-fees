@@ -51,11 +51,11 @@ contract RunFullValidationLocal is Script {
 
         vm.startBroadcast(pk);
         for (uint256 i = 0; i < iterations; i++) {
-            MockPoolManager(cfg.poolManager).callAfterSwap(
+            MockPoolManager(payable(cfg.poolManager)).callAfterSwap(
                 VolumeDynamicFeeHook(payable(cfg.hookAddress)), key, _stableDelta(cfg, swapAmount)
             );
             vm.warp(block.timestamp + periodSeconds + 1);
-            MockPoolManager(cfg.poolManager).callAfterSwap(
+            MockPoolManager(payable(cfg.poolManager)).callAfterSwap(
                 VolumeDynamicFeeHook(payable(cfg.hookAddress)), key, toBalanceDelta(0, 0)
             );
         }

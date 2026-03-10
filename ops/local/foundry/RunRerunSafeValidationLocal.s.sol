@@ -53,11 +53,11 @@ contract RunRerunSafeValidationLocal is Script {
     function _cycle(OpsTypes.CoreConfig memory cfg, PoolKey memory key, uint256 swapAmount, uint256 periodSeconds)
         private
     {
-        MockPoolManager(cfg.poolManager).callAfterSwap(
+        MockPoolManager(payable(cfg.poolManager)).callAfterSwap(
             VolumeDynamicFeeHook(payable(cfg.hookAddress)), key, _stableDelta(cfg, swapAmount)
         );
         vm.warp(block.timestamp + periodSeconds + 1);
-        MockPoolManager(cfg.poolManager).callAfterSwap(
+        MockPoolManager(payable(cfg.poolManager)).callAfterSwap(
             VolumeDynamicFeeHook(payable(cfg.hookAddress)), key, toBalanceDelta(0, 0)
         );
     }

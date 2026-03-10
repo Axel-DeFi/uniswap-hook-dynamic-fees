@@ -45,12 +45,12 @@ contract RunSmokeSwapsLocal is Script {
         });
 
         vm.startBroadcast(pk);
-        MockPoolManager(cfg.poolManager).callAfterSwap(
+        MockPoolManager(payable(cfg.poolManager)).callAfterSwap(
             VolumeDynamicFeeHook(payable(cfg.hookAddress)), key, _stableDelta(cfg, swapAmountRaw)
         );
 
         vm.warp(block.timestamp + uint256(vm.envOr("PERIOD_SECONDS", uint256(60))) + 1);
-        MockPoolManager(cfg.poolManager).callAfterSwap(
+        MockPoolManager(payable(cfg.poolManager)).callAfterSwap(
             VolumeDynamicFeeHook(payable(cfg.hookAddress)), key, toBalanceDelta(0, 0)
         );
         vm.stopBroadcast();

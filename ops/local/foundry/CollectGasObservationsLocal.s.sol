@@ -36,7 +36,7 @@ contract CollectGasObservationsLocal is Script {
         });
 
         VolumeDynamicFeeHook hook = VolumeDynamicFeeHook(payable(cfg.hookAddress));
-        MockPoolManager manager = MockPoolManager(cfg.poolManager);
+        MockPoolManager manager = MockPoolManager(payable(cfg.poolManager));
 
         vm.startBroadcast(pk);
         if (hook.isPaused()) {

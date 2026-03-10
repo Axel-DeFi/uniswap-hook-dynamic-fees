@@ -37,7 +37,7 @@ contract WarpPeriodsLocal is Script {
                 hooks: IHooks(cfg.hookAddress)
             });
 
-            MockPoolManager(cfg.poolManager).callAfterSwap(
+            MockPoolManager(payable(cfg.poolManager)).callAfterSwap(
                 VolumeDynamicFeeHook(payable(cfg.hookAddress)), key, toBalanceDelta(0, 0)
             );
         }

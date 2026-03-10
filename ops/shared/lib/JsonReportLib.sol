@@ -70,7 +70,7 @@ library JsonReportLib {
             ",",
             _kv("periodVolUsd6", vm.toString(snapshot.periodVolUsd6)),
             ",",
-            _kv("emaVolUsd6", vm.toString(snapshot.emaVolUsd6)),
+            _kv("emaVolUsd6Scaled", vm.toString(snapshot.emaVolUsd6Scaled)),
             ",",
             _kv("periodStart", vm.toString(snapshot.periodStart)),
             ",",
