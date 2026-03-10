@@ -155,7 +155,8 @@ git tag -a "${new_tag}" -m "${new_tag}"
 ./scripts/release/check.sh
 
 if [[ "${do_push}" == "1" ]]; then
-  git push origin HEAD --follow-tags
+  git push origin HEAD
+  git push origin "refs/tags/${new_tag}"
 fi
 
 echo "Release created: ${new_tag}"
