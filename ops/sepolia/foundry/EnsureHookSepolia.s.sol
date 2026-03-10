@@ -32,12 +32,16 @@ contract EnsureHookSepolia is Script {
 
         if (cfg.hookAddress != address(0) && cfg.hookAddress.code.length > 0) {
             OpsTypes.HookValidation memory existing = HookValidationLib.validateHook(cfg);
-            require(existing.ok, existing.reason);
-            JsonReportLib.writeAddressState(
-                statePath, cfg.poolManager, cfg.hookAddress, cfg.volatileToken, cfg.stableToken
-            );
-            LoggingLib.ok("reuse existing hook");
-            return;
+            if (existing.ok) {
+                JsonReportLib.writeAddressState(
+                    statePath, cfg.poolManager, cfg.hookAddress, cfg.volatileToken, cfg.stableToken
+                );
+                LoggingLib.ok("reuse existing hook");
+                return;
+            }
+
+            LoggingLib.fail(string.concat("existing hook invalid: ", existing.reason));
+            LoggingLib.ok("deploying replacement hook");
         }
 
         OpsTypes.BudgetCheck memory budget = BudgetLib.checkBeforeBroadcast(cfg, cfg.deployer);
@@ -58,8 +62,8 @@ contract EnsureHookSepolia is Script {
 
         address owner = vm.envOr("OWNER", vm.addr(pk));
         uint16 hookFeePercent = uint16(vm.envUint("HOOK_FEE_PERCENT"));
-        address hookFeeRecipient = vm.envOr("HOOK_FEE_ADDRESS", address(0));
-        require(hookFeePercent == 0 || hookFeeRecipient != address(0), "HOOK_FEE_ADDRESS required");
+        address hookFeeRecipient = vm.envOr("HOOK_FEE_ADDRESS", owner);
+        require(hookFeeRecipient != address(0), "HOOK_FEE_ADDRESS invalid");
 
         bytes memory constructorArgs = abi.encode(
             IPoolManager(cfg.poolManager),

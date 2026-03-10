@@ -31,10 +31,15 @@ contract DeployHookLocal is Script {
         if (hookAddress != address(0) && hookAddress.code.length > 0) {
             cfg.hookAddress = hookAddress;
             OpsTypes.HookValidation memory existing = HookValidationLib.validateHook(cfg);
-            require(existing.ok, existing.reason);
-            JsonReportLib.writeAddressState(statePath, cfg.poolManager, hookAddress, cfg.volatileToken, cfg.stableToken);
-            console2.log("reuse hook", hookAddress);
-            return;
+            if (existing.ok) {
+                JsonReportLib.writeAddressState(
+                    statePath, cfg.poolManager, hookAddress, cfg.volatileToken, cfg.stableToken
+                );
+                console2.log("reuse hook", hookAddress);
+                return;
+            }
+
+            console2.log("existing hook invalid, deploying replacement", existing.reason);
         }
 
         uint256 pk = cfg.privateKey;
@@ -53,8 +58,8 @@ contract DeployHookLocal is Script {
 
         address owner = vm.envOr("OWNER", vm.addr(pk));
         uint16 hookFeePercent = uint16(vm.envUint("HOOK_FEE_PERCENT"));
-        address hookFeeRecipient = vm.envOr("HOOK_FEE_ADDRESS", address(0));
-        require(hookFeePercent == 0 || hookFeeRecipient != address(0), "HOOK_FEE_ADDRESS required");
+        address hookFeeRecipient = vm.envOr("HOOK_FEE_ADDRESS", owner);
+        require(hookFeeRecipient != address(0), "HOOK_FEE_ADDRESS invalid");
 
         bytes memory constructorArgs = abi.encode(
             IPoolManager(cfg.poolManager),

@@ -29,4 +29,6 @@ Sepolia validation scripts mirror local phase names, with explicit read-only and
 - `SWAP_DRIVER` and `LIQUIDITY_DRIVER` are helper contracts used by live swap/liquidity phases.
 - If helper addresses are not set, wrappers auto-provision drivers via `EnsureDriversSepolia` and persist them in `ops/sepolia/out/state/sepolia.drivers.json`.
 - `preflight` validates chain id, budget, token decimals, hook/pool consistency before broadcast-capable phases.
+- `smoke/full/rerun-safe/emergency` enforce preflight gate by default and stop on preflight failure.
+- Set `OPS_REQUIRE_PREFLIGHT=0` only for explicit break-glass diagnostics.
 - Broadcast-capable scripts also re-check budget safety before sending transactions.

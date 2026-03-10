@@ -8,6 +8,7 @@ ops/sepolia/scripts/inspect.sh
 ```
 
 Stop if preflight fails.
+`smoke/full/rerun-safe/emergency` wrappers enforce this gate by default.
 
 ## Ensure state
 
@@ -16,6 +17,8 @@ ops/sepolia/scripts/ensure-hook.sh
 ops/sepolia/scripts/ensure-pool.sh
 ops/sepolia/scripts/ensure-liquidity.sh
 ```
+
+`ensure-hook.sh` reuses a valid hook; if existing hook is stale/invalid, it deploys a replacement hook and refreshes state.
 
 ## Validation suite
 

@@ -145,3 +145,15 @@ ensure_sepolia_drivers() {
     return 1
   fi
 }
+
+require_sepolia_preflight() {
+  if [[ "${OPS_FORCE_SIMULATION:-0}" == "1" ]]; then
+    return 0
+  fi
+  if [[ "${OPS_REQUIRE_PREFLIGHT:-1}" != "1" ]]; then
+    echo "[ops] preflight gate disabled (OPS_REQUIRE_PREFLIGHT=${OPS_REQUIRE_PREFLIGHT})"
+    return 0
+  fi
+
+  forge_sepolia "ops/sepolia/foundry/PreflightSepolia.s.sol:PreflightSepolia" "readonly"
+}

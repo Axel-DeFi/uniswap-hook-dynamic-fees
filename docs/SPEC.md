@@ -280,8 +280,8 @@ Any non-exact dynamic-flag encoding is rejected (`NotDynamicFeePool`).
 - latest local observation artifacts:
   - `ops/local/out/reports/gas.anvil.measurements.json`
   - `ops/local/out/reports/gas.anvil.measurements.md`
-  - `audit_bundle/gas_artifacts/gas.anvil.measurements.json`
-  - `audit_bundle/gas_artifacts/gas.anvil.measurements.md`
+  - `audit/gas/gas.anvil.measurements.json` (inside audit bundle package)
+  - `audit/gas/gas.anvil.measurements.md` (inside audit bundle package)
 
 ## Audit boundary
 
