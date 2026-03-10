@@ -1,54 +1,58 @@
-# Uniswap v4 Volume-Based Dynamic Fee Hook (Lazy Updates)
+# Uniswap v4 VolumeDynamicFeeHook
 
-A single-pool Uniswap v4 hook that implements **dynamic LP fees** using a **volume-regime** model and **lazy, afterSwap-only updates**.
+`VolumeDynamicFeeHook` is a single-pool Uniswap v4 hook that:
+- updates dynamic LP fee tiers from stable-side volume telemetry,
+- charges an additional trader-facing `HookFee` in `afterSwap` via return delta,
+- keeps state compact and operational controls explicit.
 
-- No admin fee setter (fees are changed only by the algorithm).
-- One hook instance = one pool (no mapping keyed by PoolId).
-- Minimal persistent state: **one 32-byte storage slot**, bit-packed.
-- Updates are **lazy**: the fee is recomputed only when a swap arrives and the period has elapsed.
-- Volume is measured using a configurable **USD stable token** (assumed to be $1).
+## Key design points
 
-## Docs
+- Single pool binding (no `PoolId => state` mapping).
+- `BaseHook`-based implementation with minimal permissions:
+  - `afterInitialize`
+  - `afterSwap`
+  - `afterSwapReturnDelta`
+- Administrative role is `Owner`.
+- `HookFeeRecipient` is a separate accounting entity from `Owner`.
+- `setHookFeeRecipient(...)` is immediate (no timelock) by design.
+- `HookFeePercent` is timelocked for 48 hours and capped at 10% (hard constant).
+- HookFee accrual is persisted as PoolManager ERC6909 claims and claimed via `unlock` + `burn` + `take`.
+- `pause()/unpause()` are freeze/resume only (no automatic floor reset, no swap stop, no HookFee stop).
+- Emergency resets are explicit and available only while paused:
+  - `emergencyResetToFloor()`
+  - `emergencyResetToCash()`
+- Telemetry fields are explicit:
+  - counted volume threshold `minCountedSwapUsd6` (default `4e6`, bounded to `1e6..10e6`)
+  - threshold update is pending-state only and activates from next period boundary (no timelock by design)
+  - offchain threshold recalibration cadence target is 5 days
+  - approximate LP fee metric `approxLpFeesUsd6`
+  - scaled EMA storage (`emaVolumeUsd6Scaled`, scale = `1e6`)
+
+## Documentation
 
 - Specification: `docs/SPEC.md`
-- Deployment: `scripts/README.md`
 - FAQ: `docs/FAQ.md`
-- Changelog: `CHANGELOG.md`
+- Scripts and deployment flow: `scripts/README.md`
+- Local ops runbook: `ops/local/RUNBOOK.md`
+- Sepolia ops runbook: `ops/sepolia/RUNBOOK.md`
 
-## Build & test
+## Accepted risks (current scope)
 
-Prerequisites:
+- `setHookFeeRecipient(...)` remains immediate (owner governance/key risk, operational mitigation only).
+- `scheduleMinCountedSwapUsd6Change(...)` has no timelock by design (pending + next-period activation only).
 
-- Foundry (latest stable)
-- Git
-
-Install dependencies (one-time):
-
-```bash
-forge install foundry-rs/forge-std --no-commit
-forge install uniswap/v4-core --no-commit
-forge install uniswap/v4-periphery --no-commit
-forge install uniswapfoundation/v4-hooks-public --no-commit
-```
-
-```bash
-git clone --recurse-submodules <repo>
-# or
-git submodule update --init --recursive
-```
-
-Build:
+## Build and test
 
 ```bash
 forge build
-```
-
-Run tests:
-
-```bash
-forge test -vvv
+forge test --offline --match-path 'ops/tests/unit/*.sol'
+forge test --offline --match-path 'ops/tests/fuzz/*.sol'
+forge test --offline --match-path 'ops/tests/invariant/*.sol' --match-contract VolumeDynamicFeeHookInvariant_Stable0_Tick10
+forge test --offline --match-path 'ops/tests/invariant/*.sol' --match-contract VolumeDynamicFeeHookInvariant_Stable1_Tick10
+forge test --offline --match-path 'ops/tests/invariant/*.sol' --match-contract VolumeDynamicFeeHookInvariant_Stable0_Tick60
+forge test --offline --match-path 'ops/tests/invariant/*.sol' --match-contract VolumeDynamicFeeHookInvariant_Stable1_Tick60
 ```
 
 ## License
 
-Apache 2.0. See `LICENSE`.
+Apache-2.0. See `LICENSE`.

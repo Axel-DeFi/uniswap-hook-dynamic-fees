@@ -4,6 +4,7 @@ pragma solidity ^0.8.26;
 import {BaseHook} from "@uniswap/v4-hooks-public/src/base/BaseHook.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
+import {IUnlockCallback} from "@uniswap/v4-core/src/interfaces/callback/IUnlockCallback.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {BalanceDelta, BalanceDeltaLibrary} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
@@ -11,29 +12,86 @@ import {SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {Hooks} from "@uniswap/v4-core/src/libraries/Hooks.sol";
 import {LPFeeLibrary} from "@uniswap/v4-core/src/libraries/LPFeeLibrary.sol";
 
-/**
- * @dev VolumeDynamicFeeHook
- *      Adaptive LP-fee hook for a single Uniswap v4 pool.
- *      It tracks stable-side swap volume (USD6), updates an EMA on period close,
- *      and shifts fee tiers by regime with deadband/reversal safeguards.
- *
- *      Repository: https://github.com/Axel-DeFi/uniswap-hook-dynamic-fees
- *      (includes source code, documentation, and audit materials)
- */
 /// @title VolumeDynamicFeeHook
-/// @notice Single-pool Uniswap v4 hook that updates dynamic LP fees using stable-coin volume heuristics.
-contract VolumeDynamicFeeHook is BaseHook {
+/// @notice Single-pool Uniswap v4 hook that manages dynamic LP fees and applies an extra trader HookFee in `afterSwap`.
+/// @dev This contract binds to exactly one pool key. NatSpec in this file is the source of truth for operations docs.
+contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
     using BalanceDeltaLibrary for BalanceDelta;
 
     // -----------------------------------------------------------------------
-    // Fee tiers (hundredths of a bip). Example: 3000 = 0.30%
+    // Constants
     // -----------------------------------------------------------------------
+
+    /// @notice Maximum number of fee tiers supported by the controller.
     uint256 private constant MAX_FEE_TIER_COUNT = 16;
 
+    /// @notice Fixed-point scale used by Uniswap LP fee tiers (1e6 = 100%).
+    uint256 private constant FEE_SCALE = 1_000_000;
+
+    /// @notice Basis-point scale used for percentage math.
+    uint256 private constant BPS_SCALE = 10_000;
+
+    /// @notice Scaler used for EMA precision. Stored EMA units are USD6 * EMA_SCALE.
+    uint256 private constant EMA_SCALE = 1_000_000;
+
+    /// @notice Hard maximum for HookFee share as a percent of LP fee.
+    uint16 public constant MAX_HOOK_FEE_PERCENT = 10;
+
+    /// @notice Delay for HookFee percent changes.
+    uint64 public constant HOOK_FEE_PERCENT_CHANGE_DELAY = 48 hours;
+
+    /// @notice Default minimum swap notional counted into period volume telemetry.
+    uint64 public constant DEFAULT_MIN_COUNTED_SWAP_USD6 = 4_000_000;
+
+    /// @notice Minimum allowed counted-swap threshold (USD6).
+    uint64 public constant MIN_MIN_COUNTED_SWAP_USD6 = 1_000_000;
+
+    /// @notice Maximum allowed counted-swap threshold (USD6).
+    uint64 public constant MAX_MIN_COUNTED_SWAP_USD6 = 10_000_000;
+
+    uint16 private constant MAX_LULL_PERIODS = 24;
+    uint8 private constant MAX_EMA_PERIODS = 64;
+    uint8 private constant MAX_HOLD_PERIODS = 31;
+    uint8 private constant MAX_UP_EXTREME_STREAK = 3;
+    uint8 private constant MAX_DOWN_STREAK = 7;
+    uint8 private constant MAX_EMERGENCY_STREAK = 3;
+
+    // Period-close reason codes.
+    uint8 public constant REASON_NO_SWAPS = 7;
+    uint8 public constant REASON_LULL_RESET = 8;
+    uint8 public constant REASON_DEADBAND = 9;
+    uint8 public constant REASON_EMA_BOOTSTRAP = 10;
+    uint8 public constant REASON_JUMP_CASH = 11;
+    uint8 public constant REASON_JUMP_EXTREME = 12;
+    uint8 public constant REASON_DOWN_TO_CASH = 13;
+    uint8 public constant REASON_DOWN_TO_FLOOR = 14;
+    uint8 public constant REASON_HOLD = 15;
+    uint8 public constant REASON_EMERGENCY_FLOOR = 16;
+    uint8 public constant REASON_NO_CHANGE = 17;
+
+    // Packed-state layout.
+    uint256 private constant PAUSED_BIT = 232;
+    uint256 private constant HOLD_REMAINING_SHIFT = 233;
+    uint256 private constant UP_EXTREME_STREAK_SHIFT = 238;
+    uint256 private constant DOWN_STREAK_SHIFT = 240;
+    uint256 private constant EMERGENCY_STREAK_SHIFT = 243;
+
+    // -----------------------------------------------------------------------
+    // Types
+    // -----------------------------------------------------------------------
+
+    struct HookFeeClaimUnlockData {
+        address recipient;
+        uint256 amount0;
+        uint256 amount1;
+    }
+
+    /// @notice Mutable controller and fee configuration.
     struct ControllerConfig {
         uint64 minCloseVolToCashUsd6;
         uint64 minCloseVolToExtremeUsd6;
         uint64 emergencyFloorCloseVolUsd6;
+        uint64 minCountedSwapUsd6;
         uint32 periodSeconds;
         uint32 lullResetSeconds;
         uint16 upRToCashBps;
@@ -41,7 +99,7 @@ contract VolumeDynamicFeeHook is BaseHook {
         uint16 downRFromExtremeBps;
         uint16 downRFromCashBps;
         uint16 deadbandBps;
-        uint16 creatorFeeBps;
+        uint16 hookFeePercent;
         uint8 emaPeriods;
         uint8 cashHoldPeriods;
         uint8 upExtremeConfirmPeriods;
@@ -52,9 +110,9 @@ contract VolumeDynamicFeeHook is BaseHook {
         uint8 floorIdx;
         uint8 cashIdx;
         uint8 extremeIdx;
-        uint8 capIdx;
     }
 
+    /// @notice Runtime state-machine parameters exposed as a grouped API.
     struct ControllerParams {
         uint64 minCloseVolToCashUsd6;
         uint16 upRToCashBps;
@@ -71,101 +129,59 @@ contract VolumeDynamicFeeHook is BaseHook {
         uint8 emergencyConfirmPeriods;
     }
 
-    error InvalidFeeIndex();
-    uint16 public feeTierCount;
-    uint24[] private _feeTiersByIdx;
-    ControllerConfig private _config;
-    address private _creator;
-    address private _creatorFeeRecipient;
-    uint16 public immutable creatorFeeLimitPercent;
-
-    function feeTiers(uint256 idx) public view returns (uint24) {
-        if (idx >= feeTierCount) revert InvalidFeeIndex();
-        return _feeTiersByIdx[idx];
-    }
-
-    function _feeTier(uint8 idx) internal view returns (uint24) {
-        return feeTiers(uint256(idx));
-    }
-
-    // -----------------------------------------------------------------------
-    // Immutable configuration
-    // -----------------------------------------------------------------------
-    // -----------------------------------------------------------------------
-    // Immutable pool binding
-    // -----------------------------------------------------------------------
-    Currency public immutable poolCurrency0;
-    Currency public immutable poolCurrency1;
-    int24 public immutable poolTickSpacing;
-    Currency public immutable stableCurrency;
-
-    bool internal immutable _stableIsCurrency0;
-    bool internal immutable _scaleIsMul;
-    uint64 internal immutable _stableScale;
-
-    // -----------------------------------------------------------------------
-    // Packed state (ONE storage slot)
-    // -----------------------------------------------------------------------
-    uint256 private _state;
-    uint256 private _creatorFees0;
-    uint256 private _creatorFees1;
-
-    uint8 private constant DIR_NONE = 0;
-
-    // Period-close reason codes (for PeriodClosed event).
-    uint8 public constant REASON_NO_SWAPS = 7;
-    uint8 public constant REASON_LULL_RESET = 8;
-    uint8 public constant REASON_DEADBAND = 9;
-    uint8 public constant REASON_EMA_BOOTSTRAP = 10;
-    uint8 public constant REASON_JUMP_CASH = 11;
-    uint8 public constant REASON_JUMP_EXTREME = 12;
-    uint8 public constant REASON_DOWN_TO_CASH = 13;
-    uint8 public constant REASON_DOWN_TO_FLOOR = 14;
-    uint8 public constant REASON_HOLD = 15;
-    uint8 public constant REASON_EMERGENCY_FLOOR = 16;
-    uint8 public constant REASON_NO_CHANGE = 17;
-
-    uint16 private constant MAX_LULL_PERIODS = 24;
-    uint8 private constant MAX_EMA_PERIODS = 64;
-    uint8 private constant MAX_HOLD_PERIODS = 31;
-    uint8 private constant MAX_UP_EXTREME_STREAK = 3;
-    uint8 private constant MAX_DOWN_STREAK = 7;
-    uint8 private constant MAX_EMERGENCY_STREAK = 3;
-    // closeVol is tracked as abs(stableAmount) in USD6.
-    // 1_000_000 equals $1 of period-close volume.
-    uint64 private constant DUST_CLOSE_VOL_USD6 = 1_000_000;
-    uint256 private constant FEE_SCALE = 1_000_000;
-    uint256 private constant BPS_SCALE = 10_000;
-    uint256 private constant HOLD_REMAINING_SHIFT = 235;
-    uint256 private constant UP_EXTREME_STREAK_SHIFT = 240;
-    uint256 private constant DOWN_STREAK_SHIFT = 242;
-    uint256 private constant EMERGENCY_STREAK_SHIFT = 245;
-
-    uint256 private constant PAUSED_BIT = 234;
-
     // -----------------------------------------------------------------------
     // Events
     // -----------------------------------------------------------------------
-    event FeeUpdated(uint24 newFee, uint8 newFeeIdx, uint64 closedVolumeUsd6, uint96 emaVolumeUsd6);
+
+    /// @notice Emitted when active LP fee tier changes.
+    event FeeUpdated(uint24 newFee, uint8 newFeeIdx, uint64 closedVolumeUsd6, uint96 emaVolumeUsd6Scaled);
+
+    /// @notice Emitted for each period-close transition.
     event PeriodClosed(
         uint24 fromFee,
         uint8 fromFeeIdx,
         uint24 toFee,
         uint8 toFeeIdx,
         uint64 closedVolumeUsd6,
-        uint96 emaVolumeUsd6,
-        uint64 lpFeesUsd6,
+        uint96 emaVolumeUsd6Scaled,
+        uint64 approxLpFeesUsd6,
         uint8 reasonCode
     );
+
+    /// @notice Emitted when the controller is paused in freeze mode.
     event Paused(uint24 fee, uint8 feeIdx);
-    event Unpaused();
+
+    /// @notice Emitted when the controller is resumed from freeze mode.
+    event Unpaused(uint24 fee, uint8 feeIdx);
+
+    /// @notice Emitted when lull reset triggers due to inactivity.
     event LullReset(uint24 newFee, uint8 newFeeIdx);
-    event CreatorFeeAccrued(address indexed currency, uint256 amount, uint24 feeBips);
-    event CreatorFeesClaimed(address indexed to, uint256 amount0, uint256 amount1);
-    event CreatorFeeRecipientUpdated(address indexed previousRecipient, address indexed newRecipient);
-    event RescueTransfer(address indexed currency, uint256 amount, address indexed recipient);
-    event CreatorUpdated(address indexed previousCreator, address indexed newCreator);
-    event FeeTiersUpdated(uint24[] tiers, uint8 floorIdx, uint8 cashIdx, uint8 extremeIdx, uint8 capIdx);
+
+    /// @notice Emitted when HookFee is accrued from a swap.
+    event HookFeeAccrued(address indexed currency, uint256 amount, uint24 appliedLpFeeBips, uint16 hookFeePercent);
+
+    /// @notice Emitted when accrued HookFees are claimed.
+    event HookFeesClaimed(address indexed to, uint256 amount0, uint256 amount1);
+
+    /// @notice Emitted when HookFee recipient changes.
+    event HookFeeRecipientUpdated(address indexed previousRecipient, address indexed newRecipient);
+
+    /// @notice Emitted when owner changes.
+    event OwnerUpdated(address indexed previousOwner, address indexed newOwner);
+
+    /// @notice Emitted when owner transfer is proposed.
+    event OwnerTransferStarted(address indexed currentOwner, address indexed pendingOwner);
+
+    /// @notice Emitted when pending owner transfer is cancelled.
+    event OwnerTransferCancelled(address indexed cancelledPendingOwner);
+
+    /// @notice Emitted when pending owner accepts ownership.
+    event OwnerTransferAccepted(address indexed previousOwner, address indexed newOwner);
+
+    /// @notice Emitted when fee tiers or role indices are updated.
+    event FeeTiersUpdated(uint24[] tiers, uint8 floorIdx, uint8 cashIdx, uint8 extremeIdx);
+
+    /// @notice Emitted when core controller thresholds/confirm params are updated.
     event ControllerParamsUpdated(
         uint64 minCloseVolToCashUsd6,
         uint16 upRToCashBps,
@@ -181,40 +197,161 @@ contract VolumeDynamicFeeHook is BaseHook {
         uint64 emergencyFloorCloseVolUsd6,
         uint8 emergencyConfirmPeriods
     );
+
+    /// @notice Emitted when timing and smoothing params are updated.
     event TimingParamsUpdated(
         uint32 periodSeconds, uint8 emaPeriods, uint32 lullResetSeconds, uint16 deadbandBps
     );
-    event CreatorFeeConfigUpdated(address indexed creator, uint16 creatorFeeBps);
-    event StateReset(uint8 feeIdx, uint64 periodStart, bool paused, uint8 reasonCode);
+
+    /// @notice Emitted when a HookFee percent change is scheduled through timelock.
+    event HookFeePercentChangeScheduled(uint16 newHookFeePercent, uint64 executeAfter);
+
+    /// @notice Emitted when scheduled HookFee percent change is cancelled.
+    event HookFeePercentChangeCancelled(uint16 cancelledHookFeePercent);
+
+    /// @notice Emitted when HookFee percent is executed and applied.
+    event HookFeePercentChanged(uint16 oldHookFeePercent, uint16 newHookFeePercent);
+
+    /// @notice Emitted when min counted swap threshold update is scheduled.
+    event MinCountedSwapUsd6ChangeScheduled(uint64 newMinCountedSwapUsd6);
+
+    /// @notice Emitted when scheduled min counted swap threshold update is cancelled.
+    event MinCountedSwapUsd6ChangeCancelled(uint64 cancelledMinCountedSwapUsd6);
+
+    /// @notice Emitted when min counted swap threshold is applied.
+    event MinCountedSwapUsd6Changed(uint64 oldMinCountedSwapUsd6, uint64 newMinCountedSwapUsd6);
+
+    /// @notice Emitted when paused emergency reset sets controller to floor regime.
+    event EmergencyResetToFloorApplied(uint8 feeIdx, uint64 periodStart, uint96 emaVolumeUsd6Scaled);
+
+    /// @notice Emitted when paused emergency reset sets controller to cash regime.
+    event EmergencyResetToCashApplied(uint8 feeIdx, uint64 periodStart, uint96 emaVolumeUsd6Scaled);
+
+    /// @notice Emitted when non-pool assets or ETH are rescued.
+    event RescueTransfer(address indexed currency, uint256 amount, address indexed recipient);
 
     // -----------------------------------------------------------------------
     // Errors
     // -----------------------------------------------------------------------
+
     error InvalidPoolKey();
     error NotDynamicFeePool();
     error AlreadyInitialized();
     error NotInitialized();
     error InvalidConfig();
-    error NotCreator();
-    error InvalidRescueCurrency();
-    error InvalidRecipient();
-    error ClaimTooLarge();
-    error CreatorFeeRecipientRequired();
-    error CreatorFeeLimitExceeded(uint16 requestedBps, uint16 maxAllowedBps);
-    error CreatorFeePercentLimitExceeded(uint16 requestedPercent, uint16 maxAllowedPercent);
+    error InvalidStableDecimals(uint8 stableDecimals);
+    error InvalidFeeIndex();
     error TierNotFound();
     error InvalidTierBounds();
     error InvalidHoldPeriods();
     error InvalidConfirmPeriods();
     error RequiresPaused();
+
+    error NotOwner();
+    error InvalidOwner();
+    error PendingOwnerExists();
+    error NoPendingOwnerTransfer();
+    error NotPendingOwner();
+
+    error InvalidRescueCurrency();
+    error InvalidRecipient();
+    error ClaimTooLarge();
     error EthTransferFailed();
+    error EthReceiveRejected();
 
-    uint8 private constant RESET_REASON_ADMIN_TIERS = 1;
-    uint8 private constant RESET_REASON_ADMIN_TIMING = 2;
-    uint8 private constant RESET_REASON_ADMIN_PAUSE = 3;
-    uint8 private constant RESET_REASON_ADMIN_UNPAUSE = 4;
-    uint8 private constant RESET_REASON_ADMIN_EMERGENCY = 5;
+    error HookFeeRecipientRequired();
+    error HookFeePercentLimitExceeded(uint16 requestedPercent, uint16 maxAllowedPercent);
+    error PendingHookFeePercentChangeExists();
+    error NoPendingHookFeePercentChange();
+    error HookFeePercentChangeNotReady(uint64 executeAfter);
 
+    error InvalidMinCountedSwapUsd6();
+    error PendingMinCountedSwapUsd6ChangeExists();
+    error NoPendingMinCountedSwapUsd6Change();
+
+    error InvalidUnlockData();
+
+    // -----------------------------------------------------------------------
+    // Storage
+    // -----------------------------------------------------------------------
+
+    uint24[] private _feeTiersByIdx;
+    ControllerConfig private _config;
+
+    address private _owner;
+    address private _pendingOwner;
+
+    address private _hookFeeRecipient;
+
+    bool private _hasPendingHookFeePercentChange;
+    uint16 private _pendingHookFeePercent;
+    uint64 private _pendingHookFeePercentExecuteAfter;
+
+    bool private _hasPendingMinCountedSwapUsd6Change;
+    uint64 private _pendingMinCountedSwapUsd6;
+
+    // Packed controller state.
+    uint256 private _state;
+
+    // HookFee accrual balances by pool currency order.
+    uint256 private _hookFees0;
+    uint256 private _hookFees1;
+
+    // -----------------------------------------------------------------------
+    // Immutable pool binding
+    // -----------------------------------------------------------------------
+
+    /// @notice Bound pool currency0.
+    Currency public immutable poolCurrency0;
+
+    /// @notice Bound pool currency1.
+    Currency public immutable poolCurrency1;
+
+    /// @notice Bound pool tick spacing.
+    int24 public immutable poolTickSpacing;
+
+    /// @notice Stable-side token used for USD6 volume telemetry.
+    Currency public immutable stableCurrency;
+
+    bool internal immutable _stableIsCurrency0;
+    bool internal immutable _scaleIsMul;
+    uint64 internal immutable _stableScale;
+
+    // -----------------------------------------------------------------------
+    // Constructor
+    // -----------------------------------------------------------------------
+
+    /// @notice Deploys and configures a single-pool dynamic-fee hook.
+    /// @param _poolManager Uniswap v4 PoolManager.
+    /// @param _poolCurrency0 Pool currency0 (must be address-sorted and lower than currency1).
+    /// @param _poolCurrency1 Pool currency1.
+    /// @param _poolTickSpacing Pool tick spacing.
+    /// @param _stableCurrency Stable-side token used for volume telemetry.
+    /// @param stableDecimals Stable token decimals; only `6` or `18` are accepted.
+    /// @param _floorIdx Index of floor fee tier.
+    /// @param _feeTiers Sorted fee tiers in hundredths of a bip.
+    /// @param _periodSeconds Period length in seconds.
+    /// @param _emaPeriods EMA denominator.
+    /// @param _deadbandBps Deadband threshold in bps.
+    /// @param _lullResetSeconds Lull-reset inactivity threshold in seconds.
+    /// @param ownerAddr Initial owner address.
+    /// @param hookFeeRecipientAddr Recipient for claimed HookFees.
+    /// @param hookFeePercent_ Initial HookFee percent of LP fee.
+    /// @param _cashTier Tier value assigned to cash regime.
+    /// @param _minCloseVolToCashUsd6 Minimum close volume for floor->cash transition.
+    /// @param _upRToCashBps Ratio threshold for floor->cash transition.
+    /// @param _cashHoldPeriods Hold periods after entering cash.
+    /// @param _extremeTier Tier value assigned to extreme regime.
+    /// @param _minCloseVolToExtremeUsd6 Minimum close volume for cash->extreme transition.
+    /// @param _upRToExtremeBps Ratio threshold for cash->extreme transition.
+    /// @param _upExtremeConfirmPeriods Confirmation periods for cash->extreme transition.
+    /// @param _extremeHoldPeriods Hold periods after entering extreme.
+    /// @param _downRFromExtremeBps Ratio threshold for extreme->cash transition.
+    /// @param _downExtremeConfirmPeriods Confirmation periods for extreme->cash transition.
+    /// @param _downRFromCashBps Ratio threshold for cash->floor transition.
+    /// @param _downCashConfirmPeriods Confirmation periods for cash->floor transition.
+    /// @param _emergencyFloorCloseVolUsd6 Emergency floor trigger threshold.
+    /// @param _emergencyConfirmPeriods Consecutive confirmations for emergency floor trigger.
     constructor(
         IPoolManager _poolManager,
         Currency _poolCurrency0,
@@ -223,16 +360,14 @@ contract VolumeDynamicFeeHook is BaseHook {
         Currency _stableCurrency,
         uint8 stableDecimals,
         uint8 _floorIdx,
-        uint8 _capIdx,
         uint24[] memory _feeTiers,
         uint32 _periodSeconds,
         uint8 _emaPeriods,
         uint16 _deadbandBps,
         uint32 _lullResetSeconds,
-        address _creatorAddr,
-        address _creatorFeeRecipientAddr,
-        uint16 _creatorFeeLimitPercent,
-        uint16 _creatorFeeBps,
+        address ownerAddr,
+        address hookFeeRecipientAddr,
+        uint16 hookFeePercent_,
         uint24 _cashTier,
         uint64 _minCloseVolToCashUsd6,
         uint16 _upRToCashBps,
@@ -250,10 +385,8 @@ contract VolumeDynamicFeeHook is BaseHook {
         uint8 _emergencyConfirmPeriods
     ) BaseHook(_poolManager) {
         if (address(_poolManager) == address(0)) revert InvalidConfig();
-        if (_creatorFeeLimitPercent > 100) revert InvalidConfig();
-        creatorFeeLimitPercent = _creatorFeeLimitPercent;
 
-        // enforce canonical ordering for determinism
+        // Enforce canonical pool token ordering.
         if (Currency.unwrap(_poolCurrency0) >= Currency.unwrap(_poolCurrency1)) revert InvalidConfig();
         if (_poolTickSpacing <= 0) revert InvalidConfig();
 
@@ -261,21 +394,32 @@ contract VolumeDynamicFeeHook is BaseHook {
         poolCurrency1 = _poolCurrency1;
         poolTickSpacing = _poolTickSpacing;
 
-        // Currency overloads `==` (not `!=`)
         if (!(_stableCurrency == _poolCurrency0) && !(_stableCurrency == _poolCurrency1)) {
             revert InvalidConfig();
         }
         stableCurrency = _stableCurrency;
         _stableIsCurrency0 = (_stableCurrency == _poolCurrency0);
 
+        if (stableDecimals != 6 && stableDecimals != 18) {
+            revert InvalidStableDecimals(stableDecimals);
+        }
+
+        if (stableDecimals == 6) {
+            _scaleIsMul = true;
+            _stableScale = 1;
+        } else {
+            _scaleIsMul = false;
+            _stableScale = 1_000_000_000_000;
+        }
+
         _setTimingParamsInternal(_periodSeconds, _emaPeriods, _lullResetSeconds, _deadbandBps);
-        _setCreatorInternal(_creatorAddr);
-        _setCreatorFeeRecipientInternal(_creatorFeeRecipientAddr);
-        _setCreatorFeeBpsInternal(_creatorFeeBps);
+        _setOwnerInternal(ownerAddr);
+        _setHookFeeRecipientInternal(hookFeeRecipientAddr);
+        _setHookFeePercentInternal(hookFeePercent_);
 
         uint8 cashTierIdx_ = _mustFindTierIdx(_feeTiers, _cashTier);
         uint8 extremeTierIdx_ = _mustFindTierIdx(_feeTiers, _extremeTier);
-        _setFeeTiersAndRolesInternal(_feeTiers, _floorIdx, cashTierIdx_, extremeTierIdx_, _capIdx);
+        _setFeeTiersAndRolesInternal(_feeTiers, _floorIdx, cashTierIdx_, extremeTierIdx_);
 
         ControllerParams memory p = ControllerParams({
             minCloseVolToCashUsd6: _minCloseVolToCashUsd6,
@@ -294,24 +438,12 @@ contract VolumeDynamicFeeHook is BaseHook {
         });
         _setControllerParamsInternal(p);
 
-        if (stableDecimals > 18) revert InvalidConfig();
+        _config.minCountedSwapUsd6 = DEFAULT_MIN_COUNTED_SWAP_USD6;
 
-        // Scale stableAmount (stableDecimals) to USD6.
-        if (stableDecimals == 6) {
-            _scaleIsMul = true;
-            _stableScale = 1;
-        } else if (stableDecimals < 6) {
-            _scaleIsMul = true;
-            _stableScale = uint64(10 ** (6 - stableDecimals));
-        } else {
-            _scaleIsMul = false;
-            _stableScale = uint64(10 ** (stableDecimals - 6));
-        }
-
-        emit CreatorUpdated(address(0), _creatorAddr);
-        emit CreatorFeeRecipientUpdated(address(0), _creatorFeeRecipientAddr);
-        emit CreatorFeeConfigUpdated(_creatorAddr, _creatorFeeBps);
-        emit FeeTiersUpdated(_feeTiers, _floorIdx, cashTierIdx_, extremeTierIdx_, _capIdx);
+        emit OwnerUpdated(address(0), ownerAddr);
+        emit HookFeeRecipientUpdated(address(0), hookFeeRecipientAddr);
+        emit HookFeePercentChanged(0, hookFeePercent_);
+        emit FeeTiersUpdated(_feeTiers, _floorIdx, cashTierIdx_, extremeTierIdx_);
         emit ControllerParamsUpdated(
             p.minCloseVolToCashUsd6,
             p.upRToCashBps,
@@ -328,10 +460,15 @@ contract VolumeDynamicFeeHook is BaseHook {
             p.emergencyConfirmPeriods
         );
         emit TimingParamsUpdated(_periodSeconds, _emaPeriods, _lullResetSeconds, _deadbandBps);
+        emit MinCountedSwapUsd6Changed(0, DEFAULT_MIN_COUNTED_SWAP_USD6);
     }
 
-    modifier onlyCreator() {
-        if (msg.sender != _creator) revert NotCreator();
+    // -----------------------------------------------------------------------
+    // Modifiers
+    // -----------------------------------------------------------------------
+
+    modifier onlyOwner() {
+        if (msg.sender != _owner) revert NotOwner();
         _;
     }
 
@@ -340,32 +477,795 @@ contract VolumeDynamicFeeHook is BaseHook {
         _;
     }
 
-    function _setCreatorInternal(address newCreator) internal {
-        if (newCreator == address(0)) revert InvalidConfig();
-        _creator = newCreator;
+    // -----------------------------------------------------------------------
+    // Hook permissions
+    // -----------------------------------------------------------------------
+
+    /// @notice Declares required callback permissions for address flag mining.
+    /// @return perms Hook permission flags expected from deployed hook address.
+    function getHookPermissions() public pure override returns (Hooks.Permissions memory perms) {
+        perms.afterInitialize = true;
+        perms.afterSwap = true;
+        perms.afterSwapReturnDelta = true;
     }
 
-    function _setCreatorFeeRecipientInternal(address newRecipient) internal {
-        if (newRecipient == address(0) && _config.creatorFeeBps > 0) revert CreatorFeeRecipientRequired();
-        _creatorFeeRecipient = newRecipient;
+    // -----------------------------------------------------------------------
+    // Hook implementations
+    // -----------------------------------------------------------------------
+
+    function _afterInitialize(address, PoolKey calldata key, uint160, int24) internal override returns (bytes4) {
+        _validateKey(key);
+
+        (,, uint64 periodStart,,,,,,) = _unpackState(_state);
+        if (periodStart != 0) revert AlreadyInitialized();
+
+        uint64 nowTs = _now64();
+        uint8 feeIdx = _config.floorIdx;
+
+        _state = _packState(0, 0, nowTs, feeIdx, isPaused(), 0, 0, 0, 0);
+
+        poolManager.updateDynamicLPFee(key, _feeTier(feeIdx));
+        emit FeeUpdated(_feeTier(feeIdx), feeIdx, 0, 0);
+
+        return IHooks.afterInitialize.selector;
     }
 
-    function _setCreatorFeeBpsInternal(uint16 newCreatorFeeBps) internal {
-        uint16 maxAllowedBps = _creatorFeeLimitBps();
-        if (newCreatorFeeBps > maxAllowedBps) {
-            revert CreatorFeeLimitExceeded(newCreatorFeeBps, maxAllowedBps);
+    function _afterSwap(
+        address,
+        PoolKey calldata key,
+        SwapParams calldata params,
+        BalanceDelta delta,
+        bytes calldata
+    ) internal override returns (bytes4, int128) {
+        _validateKey(key);
+
+        (
+            uint64 periodVol,
+            uint96 emaVolScaled,
+            uint64 periodStart,
+            uint8 feeIdx,
+            bool paused_,
+            uint8 holdRemaining,
+            uint8 upExtremeStreak,
+            uint8 downStreak,
+            uint8 emergencyStreak
+        ) = _unpackState(_state);
+
+        if (periodStart == 0) revert NotInitialized();
+
+        uint24 appliedFeeBips = _feeTier(feeIdx);
+        int128 hookFeeDelta = _accrueHookFeeAfterSwap(key, params, delta, appliedFeeBips);
+
+        if (paused_) {
+            return (IHooks.afterSwap.selector, hookFeeDelta);
         }
-        if (newCreatorFeeBps > 0 && _creatorFeeRecipient == address(0)) revert CreatorFeeRecipientRequired();
-        _config.creatorFeeBps = newCreatorFeeBps;
+
+        uint64 nowTs = _now64();
+        uint64 elapsed = nowTs - periodStart;
+        bool feeChanged;
+        uint64 closeVolForEvent;
+
+        if (elapsed >= _config.lullResetSeconds) {
+            uint8 oldFeeIdx = feeIdx;
+
+            emaVolScaled = 0;
+            feeIdx = _config.floorIdx;
+            periodStart = nowTs;
+            holdRemaining = 0;
+            upExtremeStreak = 0;
+            downStreak = 0;
+            emergencyStreak = 0;
+
+            _activatePendingMinCountedSwapUsd6();
+            periodVol = _addSwapVolumeUsd6(0, delta);
+
+            _state = _packState(
+                periodVol,
+                emaVolScaled,
+                periodStart,
+                feeIdx,
+                paused_,
+                holdRemaining,
+                upExtremeStreak,
+                downStreak,
+                emergencyStreak
+            );
+
+            if (feeIdx != oldFeeIdx) {
+                poolManager.updateDynamicLPFee(key, _feeTier(feeIdx));
+                emit FeeUpdated(_feeTier(feeIdx), feeIdx, 0, 0);
+            }
+
+            emit PeriodClosed(
+                _feeTier(oldFeeIdx), oldFeeIdx, _feeTier(feeIdx), feeIdx, 0, 0, 0, REASON_LULL_RESET
+            );
+            emit LullReset(_feeTier(feeIdx), feeIdx);
+            return (IHooks.afterSwap.selector, hookFeeDelta);
+        }
+
+        if (elapsed >= _config.periodSeconds) {
+            uint64 periods = elapsed / uint64(_config.periodSeconds);
+            uint64 closeVol0 = periodVol;
+            closeVolForEvent = closeVol0;
+
+            uint8 oldFeeIdx = feeIdx;
+
+            uint96 ema = emaVolScaled;
+            uint8 f = feeIdx;
+            uint8 hold = holdRemaining;
+            uint8 upStreak = upExtremeStreak;
+            uint8 down = downStreak;
+            uint8 emergency = emergencyStreak;
+
+            for (uint64 i = 0; i < periods; ++i) {
+                uint64 closeVol = i == 0 ? closeVol0 : uint64(0);
+
+                uint96 emaBefore = ema;
+                ema = _updateEmaScaled(ema, closeVol);
+                bool bootstrapV2 = emaBefore == 0 && closeVol > 0;
+
+                uint8 fromFeeIdx = f;
+                uint24 fromFee = _feeTier(fromFeeIdx);
+                (uint8 nf, uint8 nh, uint8 nu, uint8 nd, uint8 ne,, uint8 reasonCode) =
+                    _computeNextFeeIdxV2(f, closeVol, ema, bootstrapV2, hold, upStreak, down, emergency);
+                f = nf;
+                hold = nh;
+                upStreak = nu;
+                down = nd;
+                emergency = ne;
+
+                emit PeriodClosed(
+                    fromFee,
+                    fromFeeIdx,
+                    _feeTier(f),
+                    f,
+                    closeVol,
+                    ema,
+                    _estimateApproxLpFeesUsd6(closeVol, fromFee),
+                    reasonCode
+                );
+            }
+
+            emaVolScaled = ema;
+            feeIdx = f;
+            holdRemaining = hold;
+            upExtremeStreak = upStreak;
+            downStreak = down;
+            emergencyStreak = emergency;
+            feeChanged = feeIdx != oldFeeIdx;
+
+            periodStart = periodStart + periods * uint64(_config.periodSeconds);
+            if (periodStart > nowTs) {
+                periodStart = nowTs;
+            }
+
+            periodVol = 0;
+            _activatePendingMinCountedSwapUsd6();
+        }
+
+        periodVol = _addSwapVolumeUsd6(periodVol, delta);
+
+        _state = _packState(
+            periodVol,
+            emaVolScaled,
+            periodStart,
+            feeIdx,
+            paused_,
+            holdRemaining,
+            upExtremeStreak,
+            downStreak,
+            emergencyStreak
+        );
+
+        if (feeChanged) {
+            poolManager.updateDynamicLPFee(key, _feeTier(feeIdx));
+            emit FeeUpdated(_feeTier(feeIdx), feeIdx, closeVolForEvent, emaVolScaled);
+        }
+
+        return (IHooks.afterSwap.selector, hookFeeDelta);
     }
 
-    function _setCreatorFeeConfigInternal(address newCreator, uint16 newCreatorFeeBps) internal {
-        _setCreatorInternal(newCreator);
-        _setCreatorFeeBpsInternal(newCreatorFeeBps);
+    // -----------------------------------------------------------------------
+    // View functions
+    // -----------------------------------------------------------------------
+
+    /// @notice Returns whether controller is paused.
+    function isPaused() public view returns (bool) {
+        return ((_state >> PAUSED_BIT) & 1) == 1;
     }
 
-    function _creatorFeeLimitBps() internal view returns (uint16) {
-        return creatorFeeLimitPercent * 100;
+    /// @notice Returns currently active LP fee tier.
+    function currentFeeBips() external view returns (uint24) {
+        (,, uint64 periodStart, uint8 feeIdx,,,,,) = _unpackState(_state);
+        if (periodStart == 0) revert NotInitialized();
+        return _feeTier(feeIdx);
+    }
+
+    /// @notice Returns packed runtime fields used by offchain telemetry.
+    /// @return periodVolumeUsd6 Counted stable-side period volume in USD6.
+    /// @return emaVolumeUsd6Scaled Scaled EMA in USD6 * 1e6.
+    /// @return periodStart Current period start timestamp.
+    /// @return feeIdx Active fee tier index.
+    function unpackedState()
+        external
+        view
+        returns (uint64 periodVolumeUsd6, uint96 emaVolumeUsd6Scaled, uint64 periodStart, uint8 feeIdx)
+    {
+        (periodVolumeUsd6, emaVolumeUsd6Scaled, periodStart, feeIdx,,,,,) = _unpackState(_state);
+    }
+
+    /// @notice Returns floor fee tier index.
+    function floorIdx() public view returns (uint8) {
+        return _config.floorIdx;
+    }
+
+    /// @notice Returns cash fee tier index.
+    function cashIdx() public view returns (uint8) {
+        return _config.cashIdx;
+    }
+
+    /// @notice Returns extreme fee tier index.
+    function extremeIdx() public view returns (uint8) {
+        return _config.extremeIdx;
+    }
+
+    /// @notice Returns threshold for floor->cash transition.
+    function minCloseVolToCashUsd6() public view returns (uint64) {
+        return _config.minCloseVolToCashUsd6;
+    }
+
+    /// @notice Returns ratio threshold for floor->cash transition.
+    function upRToCashBps() public view returns (uint16) {
+        return _config.upRToCashBps;
+    }
+
+    /// @notice Returns hold periods after entering cash regime.
+    function cashHoldPeriods() public view returns (uint8) {
+        return _config.cashHoldPeriods;
+    }
+
+    /// @notice Returns threshold for cash->extreme transition.
+    function minCloseVolToExtremeUsd6() public view returns (uint64) {
+        return _config.minCloseVolToExtremeUsd6;
+    }
+
+    /// @notice Returns ratio threshold for cash->extreme transition.
+    function upRToExtremeBps() public view returns (uint16) {
+        return _config.upRToExtremeBps;
+    }
+
+    /// @notice Returns confirmation periods for cash->extreme transition.
+    function upExtremeConfirmPeriods() public view returns (uint8) {
+        return _config.upExtremeConfirmPeriods;
+    }
+
+    /// @notice Returns hold periods after entering extreme regime.
+    function extremeHoldPeriods() public view returns (uint8) {
+        return _config.extremeHoldPeriods;
+    }
+
+    /// @notice Returns ratio threshold for extreme->cash transition.
+    function downRFromExtremeBps() public view returns (uint16) {
+        return _config.downRFromExtremeBps;
+    }
+
+    /// @notice Returns confirmation periods for extreme->cash transition.
+    function downExtremeConfirmPeriods() public view returns (uint8) {
+        return _config.downExtremeConfirmPeriods;
+    }
+
+    /// @notice Returns ratio threshold for cash->floor transition.
+    function downRFromCashBps() public view returns (uint16) {
+        return _config.downRFromCashBps;
+    }
+
+    /// @notice Returns confirmation periods for cash->floor transition.
+    function downCashConfirmPeriods() public view returns (uint8) {
+        return _config.downCashConfirmPeriods;
+    }
+
+    /// @notice Returns emergency floor volume threshold.
+    function emergencyFloorCloseVolUsd6() public view returns (uint64) {
+        return _config.emergencyFloorCloseVolUsd6;
+    }
+
+    /// @notice Returns emergency floor confirmation periods.
+    function emergencyConfirmPeriods() public view returns (uint8) {
+        return _config.emergencyConfirmPeriods;
+    }
+
+    /// @notice Returns period duration in seconds.
+    function periodSeconds() public view returns (uint32) {
+        return _config.periodSeconds;
+    }
+
+    /// @notice Returns EMA denominator.
+    function emaPeriods() public view returns (uint8) {
+        return _config.emaPeriods;
+    }
+
+    /// @notice Returns deadband threshold in bps.
+    function deadbandBps() public view returns (uint16) {
+        return _config.deadbandBps;
+    }
+
+    /// @notice Returns lull reset threshold in seconds.
+    function lullResetSeconds() public view returns (uint32) {
+        return _config.lullResetSeconds;
+    }
+
+    /// @notice Returns current owner address.
+    function owner() public view returns (address) {
+        return _owner;
+    }
+
+    /// @notice Returns pending owner address.
+    function pendingOwner() public view returns (address) {
+        return _pendingOwner;
+    }
+
+    /// @notice Returns HookFee recipient address.
+    function hookFeeRecipient() public view returns (address) {
+        return _hookFeeRecipient;
+    }
+
+    /// @notice Returns current HookFee percent of LP fee.
+    function hookFeePercent() public view returns (uint16) {
+        return _config.hookFeePercent;
+    }
+
+    /// @notice Returns minimum swap notional counted into period volume telemetry.
+    function minCountedSwapUsd6() public view returns (uint64) {
+        return _config.minCountedSwapUsd6;
+    }
+
+    /// @notice Returns pending HookFee percent timelock data.
+    function pendingHookFeePercentChange() external view returns (bool exists, uint16 nextValue, uint64 executeAfter) {
+        return (
+            _hasPendingHookFeePercentChange,
+            _pendingHookFeePercent,
+            _pendingHookFeePercentExecuteAfter
+        );
+    }
+
+    /// @notice Returns pending min-counted-swap threshold update.
+    /// @dev This update path is intentionally timelock-free and activates on next period boundary only.
+    function pendingMinCountedSwapUsd6Change() external view returns (bool exists, uint64 nextValue) {
+        return (_hasPendingMinCountedSwapUsd6Change, _pendingMinCountedSwapUsd6);
+    }
+
+    /// @notice Returns grouped controller transition params.
+    function getControllerParams() external view returns (ControllerParams memory p) {
+        p = ControllerParams({
+            minCloseVolToCashUsd6: _config.minCloseVolToCashUsd6,
+            upRToCashBps: _config.upRToCashBps,
+            cashHoldPeriods: _config.cashHoldPeriods,
+            minCloseVolToExtremeUsd6: _config.minCloseVolToExtremeUsd6,
+            upRToExtremeBps: _config.upRToExtremeBps,
+            upExtremeConfirmPeriods: _config.upExtremeConfirmPeriods,
+            extremeHoldPeriods: _config.extremeHoldPeriods,
+            downRFromExtremeBps: _config.downRFromExtremeBps,
+            downExtremeConfirmPeriods: _config.downExtremeConfirmPeriods,
+            downRFromCashBps: _config.downRFromCashBps,
+            downCashConfirmPeriods: _config.downCashConfirmPeriods,
+            emergencyFloorCloseVolUsd6: _config.emergencyFloorCloseVolUsd6,
+            emergencyConfirmPeriods: _config.emergencyConfirmPeriods
+        });
+    }
+
+    /// @notice Returns fee tiers with role indices.
+    function getFeeTiersAndRoles()
+        external
+        view
+        returns (uint24[] memory tiers, uint8 floorIdx_, uint8 cashIdx_, uint8 extremeIdx_)
+    {
+        uint256 len = _feeTiersByIdx.length;
+        tiers = new uint24[](len);
+        for (uint256 i = 0; i < len; ++i) {
+            tiers[i] = _feeTiersByIdx[i];
+        }
+        floorIdx_ = _config.floorIdx;
+        cashIdx_ = _config.cashIdx;
+        extremeIdx_ = _config.extremeIdx;
+    }
+
+    /// @notice Returns detailed packed state counters for debugging and monitoring.
+    function getStateDebug()
+        external
+        view
+        returns (
+            uint8 feeIdx,
+            uint8 holdRemaining,
+            uint8 upExtremeStreak,
+            uint8 downStreak,
+            uint8 emergencyStreak,
+            uint64 periodStart,
+            uint64 periodVol,
+            uint96 emaVolScaled,
+            bool paused
+        )
+    {
+        (
+            periodVol,
+            emaVolScaled,
+            periodStart,
+            feeIdx,
+            paused,
+            holdRemaining,
+            upExtremeStreak,
+            downStreak,
+            emergencyStreak
+        ) = _unpackState(_state);
+    }
+
+    /// @notice Returns accrued HookFee balances by pool currency order.
+    function hookFeesAccrued() external view returns (uint256 token0, uint256 token1) {
+        return (_hookFees0, _hookFees1);
+    }
+
+    /// @notice Returns number of configured fee tiers.
+    function feeTierCount() public view returns (uint16) {
+        return uint16(_feeTiersByIdx.length);
+    }
+
+    /// @notice Returns fee tier by index.
+    function feeTiers(uint256 idx) public view returns (uint24) {
+        if (idx >= _feeTiersByIdx.length) revert InvalidFeeIndex();
+        return _feeTiersByIdx[idx];
+    }
+
+    // -----------------------------------------------------------------------
+    // Admin and owner controls
+    // -----------------------------------------------------------------------
+
+    /// @notice Proposes a new owner address. Acceptance must be performed by pending owner.
+    function proposeNewOwner(address newOwner) external onlyOwner {
+        if (newOwner == address(0)) revert InvalidOwner();
+        if (_pendingOwner != address(0)) revert PendingOwnerExists();
+        _pendingOwner = newOwner;
+        emit OwnerTransferStarted(_owner, newOwner);
+    }
+
+    /// @notice Cancels currently pending owner transfer.
+    function cancelOwnerTransfer() external onlyOwner {
+        address pending = _pendingOwner;
+        if (pending == address(0)) revert NoPendingOwnerTransfer();
+        _pendingOwner = address(0);
+        emit OwnerTransferCancelled(pending);
+    }
+
+    /// @notice Accepts owner role by pending owner.
+    function acceptOwner() external {
+        address pending = _pendingOwner;
+        if (msg.sender != pending) revert NotPendingOwner();
+
+        address oldOwner = _owner;
+        _pendingOwner = address(0);
+        _owner = pending;
+
+        emit OwnerTransferAccepted(oldOwner, pending);
+        emit OwnerUpdated(oldOwner, pending);
+    }
+
+    /// @notice Updates HookFee recipient.
+    /// @dev Recipient may be zero only when HookFee percent is zero.
+    /// @dev Change is immediate by design (no timelock).
+    function setHookFeeRecipient(address newRecipient) external onlyOwner {
+        address oldRecipient = _hookFeeRecipient;
+        _setHookFeeRecipientInternal(newRecipient);
+        emit HookFeeRecipientUpdated(oldRecipient, newRecipient);
+    }
+
+    /// @notice Schedules HookFee percent change through 48h timelock.
+    function scheduleHookFeePercentChange(uint16 newHookFeePercent) external onlyOwner {
+        if (_hasPendingHookFeePercentChange) revert PendingHookFeePercentChangeExists();
+        _validateHookFeePercent(newHookFeePercent);
+        if (newHookFeePercent > 0 && _hookFeeRecipient == address(0)) revert HookFeeRecipientRequired();
+
+        uint64 executeAfter = _now64() + HOOK_FEE_PERCENT_CHANGE_DELAY;
+        _hasPendingHookFeePercentChange = true;
+        _pendingHookFeePercent = newHookFeePercent;
+        _pendingHookFeePercentExecuteAfter = executeAfter;
+
+        emit HookFeePercentChangeScheduled(newHookFeePercent, executeAfter);
+    }
+
+    /// @notice Cancels scheduled HookFee percent change.
+    function cancelHookFeePercentChange() external onlyOwner {
+        if (!_hasPendingHookFeePercentChange) revert NoPendingHookFeePercentChange();
+
+        uint16 cancelled = _pendingHookFeePercent;
+        _hasPendingHookFeePercentChange = false;
+        _pendingHookFeePercent = 0;
+        _pendingHookFeePercentExecuteAfter = 0;
+
+        emit HookFeePercentChangeCancelled(cancelled);
+    }
+
+    /// @notice Executes scheduled HookFee percent change after timelock delay.
+    function executeHookFeePercentChange() external onlyOwner {
+        if (!_hasPendingHookFeePercentChange) revert NoPendingHookFeePercentChange();
+
+        uint64 executeAfter = _pendingHookFeePercentExecuteAfter;
+        if (_now64() < executeAfter) revert HookFeePercentChangeNotReady(executeAfter);
+
+        uint16 oldValue = _config.hookFeePercent;
+        uint16 newValue = _pendingHookFeePercent;
+
+        _hasPendingHookFeePercentChange = false;
+        _pendingHookFeePercent = 0;
+        _pendingHookFeePercentExecuteAfter = 0;
+
+        _setHookFeePercentInternal(newValue);
+        emit HookFeePercentChanged(oldValue, newValue);
+    }
+
+    /// @notice Schedules a new minimum counted swap threshold.
+    /// @dev Allowed range is `[1e6, 10e6]` in USD6 units.
+    /// @dev New value is applied only at the next period boundary in `afterSwap`.
+    /// @dev This path intentionally has no timelock; operations should use offchain recalibration discipline.
+    function scheduleMinCountedSwapUsd6Change(uint64 newMinCountedSwapUsd6) external onlyOwner {
+        if (_hasPendingMinCountedSwapUsd6Change) revert PendingMinCountedSwapUsd6ChangeExists();
+        _validateMinCountedSwapUsd6(newMinCountedSwapUsd6);
+
+        _hasPendingMinCountedSwapUsd6Change = true;
+        _pendingMinCountedSwapUsd6 = newMinCountedSwapUsd6;
+
+        emit MinCountedSwapUsd6ChangeScheduled(newMinCountedSwapUsd6);
+    }
+
+    /// @notice Cancels scheduled minimum counted swap threshold.
+    function cancelMinCountedSwapUsd6Change() external onlyOwner {
+        if (!_hasPendingMinCountedSwapUsd6Change) revert NoPendingMinCountedSwapUsd6Change();
+
+        uint64 cancelled = _pendingMinCountedSwapUsd6;
+        _hasPendingMinCountedSwapUsd6Change = false;
+        _pendingMinCountedSwapUsd6 = 0;
+
+        emit MinCountedSwapUsd6ChangeCancelled(cancelled);
+    }
+
+    /// @notice Updates fee tiers and role indices while paused.
+    function setFeeTiersAndRoles(uint24[] calldata tiers, uint8 floorIdx_, uint8 cashIdx_, uint8 extremeIdx_)
+        external
+        onlyOwner
+        whenPaused
+    {
+        (,, uint64 periodStart, uint8 feeIdx, bool paused_, uint8 holdRemaining, uint8 upExtremeStreak, uint8 downStreak, uint8 emergencyStreak) =
+            _unpackState(_state);
+        uint24 oldFee = _feeTier(feeIdx);
+
+        _setFeeTiersAndRolesInternal(tiers, floorIdx_, cashIdx_, extremeIdx_);
+        emit FeeTiersUpdated(tiers, floorIdx_, cashIdx_, extremeIdx_);
+
+        if (periodStart == 0) return;
+
+        (uint8 nextFeeIdx, bool found) = _findTierIdx(tiers, oldFee);
+        bool validRoleIdx = nextFeeIdx == _config.floorIdx || nextFeeIdx == _config.cashIdx || nextFeeIdx == _config.extremeIdx;
+        if (!found || !validRoleIdx) {
+            nextFeeIdx = _config.floorIdx;
+            holdRemaining = 0;
+            upExtremeStreak = 0;
+            downStreak = 0;
+            emergencyStreak = 0;
+        }
+        if (nextFeeIdx == _config.floorIdx) {
+            holdRemaining = 0;
+            upExtremeStreak = 0;
+            downStreak = 0;
+            emergencyStreak = 0;
+        }
+
+        uint64 nextPeriodStart = _now64();
+        _state = _packState(0, _emaFromState(), nextPeriodStart, nextFeeIdx, paused_, holdRemaining, upExtremeStreak, downStreak, emergencyStreak);
+
+        if (nextFeeIdx != feeIdx) {
+            poolManager.updateDynamicLPFee(_poolKey(), _feeTier(nextFeeIdx));
+            emit FeeUpdated(_feeTier(nextFeeIdx), nextFeeIdx, 0, _emaFromState());
+        }
+    }
+
+    /// @notice Updates controller transition parameters while paused.
+    function setControllerParams(ControllerParams calldata p) external onlyOwner whenPaused {
+        _setControllerParamsInternal(p);
+        emit ControllerParamsUpdated(
+            p.minCloseVolToCashUsd6,
+            p.upRToCashBps,
+            p.cashHoldPeriods,
+            p.minCloseVolToExtremeUsd6,
+            p.upRToExtremeBps,
+            p.upExtremeConfirmPeriods,
+            p.extremeHoldPeriods,
+            p.downRFromExtremeBps,
+            p.downExtremeConfirmPeriods,
+            p.downRFromCashBps,
+            p.downCashConfirmPeriods,
+            p.emergencyFloorCloseVolUsd6,
+            p.emergencyConfirmPeriods
+        );
+    }
+
+    /// @notice Updates timing and smoothing parameters while paused.
+    /// @dev Does not reset fee regime, EMA, or streak counters; only starts a fresh open period.
+    function setTimingParams(
+        uint32 periodSeconds_,
+        uint8 emaPeriods_,
+        uint32 lullResetSeconds_,
+        uint16 deadbandBps_
+    ) external onlyOwner whenPaused {
+        _setTimingParamsInternal(periodSeconds_, emaPeriods_, lullResetSeconds_, deadbandBps_);
+        emit TimingParamsUpdated(periodSeconds_, emaPeriods_, lullResetSeconds_, deadbandBps_);
+        _resetOpenPeriodOnly();
+    }
+
+    /// @notice Enters paused freeze mode.
+    /// @dev Keeps feeIdx, EMA and streak counters unchanged. Clears only open-period volume and restarts period clock.
+    /// @dev Does not disable swaps and does not disable HookFee accrual/claim accounting.
+    function pause() external onlyOwner {
+        if (isPaused()) return;
+
+        (
+            ,
+            uint96 emaVolScaled,
+            uint64 periodStart,
+            uint8 feeIdx,
+            ,
+            uint8 holdRemaining,
+            uint8 upExtremeStreak,
+            uint8 downStreak,
+            uint8 emergencyStreak
+        ) = _unpackState(_state);
+
+        uint64 nextPeriodStart = periodStart == 0 ? uint64(0) : _now64();
+        _state = _packState(
+            0,
+            emaVolScaled,
+            nextPeriodStart,
+            feeIdx,
+            true,
+            holdRemaining,
+            upExtremeStreak,
+            downStreak,
+            emergencyStreak
+        );
+
+        emit Paused(_feeTier(feeIdx), feeIdx);
+    }
+
+    /// @notice Exits paused freeze mode.
+    /// @dev Continues from the same fee regime and counters, with a fresh open period.
+    /// @dev Resuming does not retroactively alter HookFee accrual that happened while paused.
+    function unpause() external onlyOwner {
+        if (!isPaused()) return;
+
+        (
+            ,
+            uint96 emaVolScaled,
+            uint64 periodStart,
+            uint8 feeIdx,
+            ,
+            uint8 holdRemaining,
+            uint8 upExtremeStreak,
+            uint8 downStreak,
+            uint8 emergencyStreak
+        ) = _unpackState(_state);
+
+        uint64 nextPeriodStart = periodStart == 0 ? uint64(0) : _now64();
+        _state = _packState(
+            0,
+            emaVolScaled,
+            nextPeriodStart,
+            feeIdx,
+            false,
+            holdRemaining,
+            upExtremeStreak,
+            downStreak,
+            emergencyStreak
+        );
+
+        emit Unpaused(_feeTier(feeIdx), feeIdx);
+    }
+
+    /// @notice Emergency reset while paused to floor regime.
+    /// @dev Clears EMA/counters (`emaVolumeUsd6Scaled`, hold/streak counters) and restarts open period state.
+    /// @dev If the target fee index already matches current index, fee state still resets but no `FeeUpdated` is emitted.
+    function emergencyResetToFloor() external onlyOwner whenPaused {
+        _emergencyReset(_config.floorIdx, true);
+    }
+
+    /// @notice Emergency reset while paused to cash regime.
+    /// @dev Clears EMA/counters (`emaVolumeUsd6Scaled`, hold/streak counters) and restarts open period state.
+    /// @dev If the target fee index already matches current index, fee state still resets but no `FeeUpdated` is emitted.
+    function emergencyResetToCash() external onlyOwner whenPaused {
+        _emergencyReset(_config.cashIdx, false);
+    }
+
+    /// @notice Claims selected amounts of accrued HookFees.
+    /// @dev `to` must equal currently configured `hookFeeRecipient`.
+    /// @dev Uses PoolManager accounting withdrawal flow (`unlock` -> `burn` -> `take`) to transfer funds to recipient.
+    function claimHookFees(address to, uint256 amount0, uint256 amount1) external onlyOwner {
+        _claimHookFeesInternal(to, amount0, amount1);
+    }
+
+    /// @notice Claims all accrued HookFees to current HookFee recipient.
+    /// @dev Uses PoolManager accounting withdrawal flow (`unlock` -> `burn` -> `take`) to transfer funds to recipient.
+    function claimAllHookFees() external onlyOwner {
+        _claimHookFeesInternal(_hookFeeRecipient, _hookFees0, _hookFees1);
+    }
+
+    /// @notice Claims all accrued HookFees to explicit recipient.
+    /// @dev `to` must equal currently configured `hookFeeRecipient`.
+    /// @dev Uses PoolManager accounting withdrawal flow (`unlock` -> `burn` -> `take`) to transfer funds to recipient.
+    function claimAllHookFees(address to) external onlyOwner {
+        _claimHookFeesInternal(to, _hookFees0, _hookFees1);
+    }
+
+    /// @inheritdoc IUnlockCallback
+    /// @dev Restricted to PoolManager and used only for HookFee claim settlement.
+    function unlockCallback(bytes calldata data) external override onlyPoolManager returns (bytes memory) {
+        HookFeeClaimUnlockData memory claimData = abi.decode(data, (HookFeeClaimUnlockData));
+        if (claimData.recipient == address(0)) revert InvalidUnlockData();
+        _withdrawHookFeeViaPoolManagerAccounting(claimData.recipient, claimData.amount0, claimData.amount1);
+        return "";
+    }
+
+    /// @notice Rescues non-pool ERC20 balance from the hook contract.
+    function rescueToken(Currency currency, uint256 amount) external onlyOwner {
+        if (currency == poolCurrency0 || currency == poolCurrency1) revert InvalidRescueCurrency();
+
+        currency.transfer(_owner, amount);
+        emit RescueTransfer(Currency.unwrap(currency), amount, _owner);
+    }
+
+    /// @notice Rescues ETH balance from the hook contract.
+    function rescueETH(address to, uint256 amount) external onlyOwner {
+        if (to == address(0)) revert InvalidRecipient();
+        if (amount > address(this).balance) revert ClaimTooLarge();
+
+        (bool ok,) = payable(to).call{value: amount}("");
+        if (!ok) revert EthTransferFailed();
+
+        emit RescueTransfer(address(0), amount, to);
+    }
+
+    /// @notice Rejects direct ETH transfers.
+    receive() external payable {
+        revert EthReceiveRejected();
+    }
+
+    // -----------------------------------------------------------------------
+    // Internal configuration helpers
+    // -----------------------------------------------------------------------
+
+    function _setOwnerInternal(address newOwner) internal {
+        if (newOwner == address(0)) revert InvalidOwner();
+        _owner = newOwner;
+    }
+
+    function _setHookFeeRecipientInternal(address newRecipient) internal {
+        if (newRecipient == address(0) && _config.hookFeePercent > 0) revert HookFeeRecipientRequired();
+        _hookFeeRecipient = newRecipient;
+    }
+
+    function _validateHookFeePercent(uint16 newHookFeePercent) internal pure {
+        if (newHookFeePercent > MAX_HOOK_FEE_PERCENT) {
+            revert HookFeePercentLimitExceeded(newHookFeePercent, MAX_HOOK_FEE_PERCENT);
+        }
+    }
+
+    function _setHookFeePercentInternal(uint16 newHookFeePercent) internal {
+        _validateHookFeePercent(newHookFeePercent);
+        if (newHookFeePercent > 0 && _hookFeeRecipient == address(0)) revert HookFeeRecipientRequired();
+        _config.hookFeePercent = newHookFeePercent;
+    }
+
+    /// @notice Validates telemetry dust-threshold bounds.
+    /// @dev Allowed range is `[1e6, 10e6]` in USD6 units.
+    function _validateMinCountedSwapUsd6(uint64 newMinCountedSwapUsd6) internal pure {
+        if (newMinCountedSwapUsd6 < MIN_MIN_COUNTED_SWAP_USD6 || newMinCountedSwapUsd6 > MAX_MIN_COUNTED_SWAP_USD6)
+        {
+            revert InvalidMinCountedSwapUsd6();
+        }
     }
 
     function _setTimingParamsInternal(
@@ -376,7 +1276,7 @@ contract VolumeDynamicFeeHook is BaseHook {
     ) internal {
         if (periodSeconds_ == 0) revert InvalidConfig();
         if (emaPeriods_ < 2 || emaPeriods_ > MAX_EMA_PERIODS) revert InvalidConfig();
-        if (deadbandBps_ > 5000) revert InvalidConfig();
+        if (deadbandBps_ > 5_000) revert InvalidConfig();
         if (lullResetSeconds_ < periodSeconds_) revert InvalidConfig();
         if (uint256(lullResetSeconds_) > uint256(periodSeconds_) * MAX_LULL_PERIODS) revert InvalidConfig();
 
@@ -388,9 +1288,8 @@ contract VolumeDynamicFeeHook is BaseHook {
 
     function _setControllerParamsInternal(ControllerParams memory p) internal {
         if (p.cashHoldPeriods == 0 || p.cashHoldPeriods > MAX_HOLD_PERIODS) revert InvalidHoldPeriods();
-        if (p.extremeHoldPeriods == 0 || p.extremeHoldPeriods > MAX_HOLD_PERIODS) {
-            revert InvalidHoldPeriods();
-        }
+        if (p.extremeHoldPeriods == 0 || p.extremeHoldPeriods > MAX_HOLD_PERIODS) revert InvalidHoldPeriods();
+
         if (p.upExtremeConfirmPeriods == 0 || p.upExtremeConfirmPeriods > MAX_UP_EXTREME_STREAK) {
             revert InvalidConfirmPeriods();
         }
@@ -423,31 +1322,31 @@ contract VolumeDynamicFeeHook is BaseHook {
         uint256 len = tiers.length;
         for (uint256 i = 0; i < len; ++i) {
             if (tiers[i] == tier) {
-                // forge-lint: disable-next-line(unsafe-typecast)
                 return uint8(i);
             }
         }
         revert TierNotFound();
     }
 
-    function _setFeeTiersAndRolesInternal(
-        uint24[] memory tiers,
-        uint8 floorIdx_,
-        uint8 cashIdx_,
-        uint8 extremeIdx_,
-        uint8 capIdx_
-    ) internal {
+    function _findTierIdx(uint24[] memory tiers, uint24 tier) internal pure returns (uint8 idx, bool found) {
+        uint256 len = tiers.length;
+        for (uint256 i = 0; i < len; ++i) {
+            if (tiers[i] == tier) {
+                return (uint8(i), true);
+            }
+        }
+        return (0, false);
+    }
+
+    function _setFeeTiersAndRolesInternal(uint24[] memory tiers, uint8 floorIdx_, uint8 cashIdx_, uint8 extremeIdx_)
+        internal
+    {
         uint256 len = tiers.length;
         if (len == 0 || len > MAX_FEE_TIER_COUNT) revert InvalidConfig();
-        if (
-            len <= uint256(floorIdx_) || len <= uint256(cashIdx_) || len <= uint256(extremeIdx_)
-                || len <= uint256(capIdx_)
-        ) {
+        if (len <= uint256(floorIdx_) || len <= uint256(cashIdx_) || len <= uint256(extremeIdx_)) {
             revert InvalidFeeIndex();
         }
-        if (floorIdx_ >= cashIdx_ || cashIdx_ >= extremeIdx_ || extremeIdx_ != capIdx_) {
-            revert InvalidTierBounds();
-        }
+        if (floorIdx_ >= cashIdx_ || cashIdx_ >= extremeIdx_) revert InvalidTierBounds();
 
         delete _feeTiersByIdx;
         uint24 prevTier;
@@ -459,84 +1358,17 @@ contract VolumeDynamicFeeHook is BaseHook {
             prevTier = tier;
         }
 
-        // forge-lint: disable-next-line(unsafe-typecast)
-        feeTierCount = uint16(len);
         _config.floorIdx = floorIdx_;
         _config.cashIdx = cashIdx_;
         _config.extremeIdx = extremeIdx_;
-        _config.capIdx = extremeIdx_;
     }
 
-    function _resetStateToFloor(bool pausedValue, uint8 reasonCode) internal {
-        (,, uint64 periodStart,,,,,,,) = _unpackState(_state);
-        bool initialized = periodStart != 0;
-        uint8 feeIdx = _config.floorIdx;
-        uint64 nextPeriodStart = initialized ? _now64() : uint64(0);
-
-        _state = _packState(0, 0, nextPeriodStart, feeIdx, DIR_NONE, pausedValue, 0, 0, 0, 0);
-
-        if (initialized) {
-            poolManager.updateDynamicLPFee(_poolKey(), _feeTier(feeIdx));
-            emit FeeUpdated(_feeTier(feeIdx), feeIdx, 0, 0);
-        }
-
-        emit StateReset(feeIdx, nextPeriodStart, pausedValue, reasonCode);
-    }
-
-    // -----------------------------------------------------------------------
-    // Hook permissions
-    // -----------------------------------------------------------------------
-    function getHookPermissions() public pure override returns (Hooks.Permissions memory perms) {
-        perms.afterInitialize = true;
-        perms.afterSwap = true;
-    }
-
-    // -----------------------------------------------------------------------
-    // Hook implementations (override INTERNAL hook functions)
-    // -----------------------------------------------------------------------
-
-    function _afterInitialize(address, PoolKey calldata key, uint160, int24)
-        internal
-        override
-        returns (bytes4)
-    {
-        _validateKey(key);
-
-        (,, uint64 periodStart,,,,,,,) = _unpackState(_state);
-        if (periodStart != 0) revert AlreadyInitialized();
-
-        uint64 nowTs = _now64();
-
-        uint8 feeIdx = _config.floorIdx;
-
-        _state = _packState(0, 0, nowTs, feeIdx, DIR_NONE, isPaused(), 0, 0, 0, 0);
-
-        poolManager.updateDynamicLPFee(key, _feeTier(feeIdx));
-        emit FeeUpdated(_feeTier(feeIdx), feeIdx, 0, 0);
-
-        return IHooks.afterInitialize.selector;
-    }
-
-    function _afterSwap(
-        address,
-        PoolKey calldata key,
-        SwapParams calldata params,
-        BalanceDelta delta,
-        bytes calldata
-    ) internal override returns (bytes4, int128) {
-        _validateKey(key);
-
-        if (isPaused()) {
-            // Fee is applied immediately in pause()/unpause(); swaps while paused do not update state.
-            return (IHooks.afterSwap.selector, 0);
-        }
-
+    function _resetOpenPeriodOnly() internal {
         (
-            uint64 periodVol,
-            uint96 emaVol,
+            ,
+            uint96 emaVolScaled,
             uint64 periodStart,
             uint8 feeIdx,
-            uint8 lastDir,
             bool paused_,
             uint8 holdRemaining,
             uint8 upExtremeStreak,
@@ -544,489 +1376,85 @@ contract VolumeDynamicFeeHook is BaseHook {
             uint8 emergencyStreak
         ) = _unpackState(_state);
 
-        if (periodStart == 0) revert NotInitialized();
-
-        uint24 appliedFeeBips = _feeTier(feeIdx);
-        _accrueCreatorFeeAfterSwap(key, params, delta, appliedFeeBips);
-
-        uint64 nowTs = _now64();
-        uint64 elapsed = nowTs - periodStart;
-        bool feeChanged;
-        uint64 closeVolForEvent;
-
-        if (elapsed >= _config.lullResetSeconds) {
-            uint8 oldFeeIdx = feeIdx;
-
-            emaVol = 0;
-            lastDir = DIR_NONE;
-            feeIdx = _config.floorIdx;
-            periodStart = nowTs;
-            holdRemaining = 0;
-            upExtremeStreak = 0;
-            downStreak = 0;
-            emergencyStreak = 0;
-
-            periodVol = _addSwapVolumeUsd6(0, delta);
-
-            _state = _packState(
-                periodVol,
-                emaVol,
-                periodStart,
-                feeIdx,
-                lastDir,
-                paused_,
-                holdRemaining,
-                upExtremeStreak,
-                downStreak,
-                emergencyStreak
-            );
-
-            if (feeIdx != oldFeeIdx) {
-                poolManager.updateDynamicLPFee(key, _feeTier(feeIdx));
-                emit FeeUpdated(_feeTier(feeIdx), feeIdx, 0, 0);
-            }
-
-            emit PeriodClosed(
-                _feeTier(oldFeeIdx), oldFeeIdx, _feeTier(feeIdx), feeIdx, 0, 0, 0, REASON_LULL_RESET
-            );
-            emit LullReset(_feeTier(feeIdx), feeIdx);
-            return (IHooks.afterSwap.selector, 0);
-        }
-
-        if (elapsed >= _config.periodSeconds) {
-            uint64 periods = elapsed / uint64(_config.periodSeconds);
-            uint64 closeVol0 = periodVol;
-            closeVolForEvent = closeVol0 <= DUST_CLOSE_VOL_USD6 ? uint64(0) : closeVol0;
-
-            uint8 oldFeeIdx = feeIdx;
-
-            uint96 ema = emaVol;
-            uint8 f = feeIdx;
-            uint8 hold = holdRemaining;
-            uint8 upStreak = upExtremeStreak;
-            uint8 down = downStreak;
-            uint8 emergency = emergencyStreak;
-
-            for (uint64 i = 0; i < periods; i++) {
-                uint64 vRaw = (i == 0) ? closeVol0 : uint64(0);
-                uint64 vEff = vRaw <= DUST_CLOSE_VOL_USD6 ? uint64(0) : vRaw;
-
-                uint96 emaBefore = ema;
-                ema = _updateEma(ema, vEff);
-                bool bootstrapV2 = emaBefore == 0 && vEff > 0;
-
-                uint8 fromFeeIdx = f;
-                uint24 fromFee = _feeTier(fromFeeIdx);
-                (uint8 nf, uint8 nh, uint8 nu, uint8 nd, uint8 ne,, uint8 reasonCode) =
-                    _computeNextFeeIdxV2(f, vEff, ema, bootstrapV2, hold, upStreak, down, emergency);
-                f = nf;
-                hold = nh;
-                upStreak = nu;
-                down = nd;
-                emergency = ne;
-
-                emit PeriodClosed(
-                    fromFee,
-                    fromFeeIdx,
-                    _feeTier(f),
-                    f,
-                    vEff,
-                    ema,
-                    _estimateLpFeesUsd6(vEff, fromFee),
-                    reasonCode
-                );
-            }
-
-            emaVol = ema;
-            feeIdx = f;
-            lastDir = DIR_NONE;
-            holdRemaining = hold;
-            upExtremeStreak = upStreak;
-            downStreak = down;
-            emergencyStreak = emergency;
-            feeChanged = feeIdx != oldFeeIdx;
-
-            uint256 nextPeriodStart = uint256(periodStart) + uint256(periods) * uint256(_config.periodSeconds);
-            if (nextPeriodStart > uint256(nowTs)) {
-                nextPeriodStart = nowTs;
-            }
-            if (nextPeriodStart > type(uint64).max) {
-                periodStart = type(uint64).max;
-            } else {
-                // forge-lint: disable-next-line(unsafe-typecast)
-                periodStart = uint64(nextPeriodStart);
-            }
-            periodVol = 0;
-        }
-
-        periodVol = _addSwapVolumeUsd6(periodVol, delta);
-
+        uint64 nextPeriodStart = periodStart == 0 ? uint64(0) : _now64();
         _state = _packState(
-            periodVol,
-            emaVol,
-            periodStart,
+            0,
+            emaVolScaled,
+            nextPeriodStart,
             feeIdx,
-            lastDir,
             paused_,
             holdRemaining,
             upExtremeStreak,
             downStreak,
             emergencyStreak
         );
-
-        if (feeChanged) {
-            poolManager.updateDynamicLPFee(key, _feeTier(feeIdx));
-            emit FeeUpdated(_feeTier(feeIdx), feeIdx, closeVolForEvent, emaVol);
-        }
-        return (IHooks.afterSwap.selector, 0);
     }
 
-    // -----------------------------------------------------------------------
-    // Views
-    // -----------------------------------------------------------------------
+    function _emergencyReset(uint8 targetFeeIdx, bool toFloor) internal {
+        (,, uint64 periodStart, uint8 oldFeeIdx, bool paused_,,,,) = _unpackState(_state);
 
-    function isPaused() public view returns (bool) {
-        return ((_state >> PAUSED_BIT) & 1) == 1;
-    }
-
-    function currentFeeBips() external view returns (uint24) {
-        (,, uint64 periodStart, uint8 feeIdx,,,,,,) = _unpackState(_state);
         if (periodStart == 0) revert NotInitialized();
-        return _feeTier(feeIdx);
-    }
 
-    function unpackedState()
-        external
-        view
-        returns (
-            uint64 periodVolumeUsd6,
-            uint96 emaVolumeUsd6,
-            uint64 periodStart,
-            uint8 feeIdx,
-            uint8 lastDir
-        )
-    {
-        (uint64 pv, uint96 ev, uint64 ps, uint8 fi, uint8 ld,,,,,) = _unpackState(_state);
-        return (pv, ev, ps, fi, ld);
-    }
+        uint64 nowTs = _now64();
+        _state = _packState(0, 0, nowTs, targetFeeIdx, paused_, 0, 0, 0, 0);
 
-    function floorIdx() public view returns (uint8) {
-        return _config.floorIdx;
-    }
-
-    function cashIdx() public view returns (uint8) {
-        return _config.cashIdx;
-    }
-
-    function extremeIdx() public view returns (uint8) {
-        return _config.extremeIdx;
-    }
-
-    function capIdx() public view returns (uint8) {
-        return _config.capIdx;
-    }
-
-    function minCloseVolToCashUsd6() public view returns (uint64) {
-        return _config.minCloseVolToCashUsd6;
-    }
-
-    function upRToCashBps() public view returns (uint16) {
-        return _config.upRToCashBps;
-    }
-
-    function cashHoldPeriods() public view returns (uint8) {
-        return _config.cashHoldPeriods;
-    }
-
-    function minCloseVolToExtremeUsd6() public view returns (uint64) {
-        return _config.minCloseVolToExtremeUsd6;
-    }
-
-    function upRToExtremeBps() public view returns (uint16) {
-        return _config.upRToExtremeBps;
-    }
-
-    function upExtremeConfirmPeriods() public view returns (uint8) {
-        return _config.upExtremeConfirmPeriods;
-    }
-
-    function extremeHoldPeriods() public view returns (uint8) {
-        return _config.extremeHoldPeriods;
-    }
-
-    function downRFromExtremeBps() public view returns (uint16) {
-        return _config.downRFromExtremeBps;
-    }
-
-    function downExtremeConfirmPeriods() public view returns (uint8) {
-        return _config.downExtremeConfirmPeriods;
-    }
-
-    function downRFromCashBps() public view returns (uint16) {
-        return _config.downRFromCashBps;
-    }
-
-    function downCashConfirmPeriods() public view returns (uint8) {
-        return _config.downCashConfirmPeriods;
-    }
-
-    function emergencyFloorCloseVolUsd6() public view returns (uint64) {
-        return _config.emergencyFloorCloseVolUsd6;
-    }
-
-    function emergencyConfirmPeriods() public view returns (uint8) {
-        return _config.emergencyConfirmPeriods;
-    }
-
-    function periodSeconds() public view returns (uint32) {
-        return _config.periodSeconds;
-    }
-
-    function emaPeriods() public view returns (uint8) {
-        return _config.emaPeriods;
-    }
-
-    function deadbandBps() public view returns (uint16) {
-        return _config.deadbandBps;
-    }
-
-    function lullResetSeconds() public view returns (uint32) {
-        return _config.lullResetSeconds;
-    }
-
-    function creator() public view returns (address) {
-        return _creator;
-    }
-
-    function creatorFeeRecipient() public view returns (address) {
-        return _creatorFeeRecipient;
-    }
-
-    function creatorFeeBps() public view returns (uint16) {
-        return _config.creatorFeeBps;
-    }
-
-    function getControllerParams() external view returns (ControllerParams memory p) {
-        p = ControllerParams({
-            minCloseVolToCashUsd6: _config.minCloseVolToCashUsd6,
-            upRToCashBps: _config.upRToCashBps,
-            cashHoldPeriods: _config.cashHoldPeriods,
-            minCloseVolToExtremeUsd6: _config.minCloseVolToExtremeUsd6,
-            upRToExtremeBps: _config.upRToExtremeBps,
-            upExtremeConfirmPeriods: _config.upExtremeConfirmPeriods,
-            extremeHoldPeriods: _config.extremeHoldPeriods,
-            downRFromExtremeBps: _config.downRFromExtremeBps,
-            downExtremeConfirmPeriods: _config.downExtremeConfirmPeriods,
-            downRFromCashBps: _config.downRFromCashBps,
-            downCashConfirmPeriods: _config.downCashConfirmPeriods,
-            emergencyFloorCloseVolUsd6: _config.emergencyFloorCloseVolUsd6,
-            emergencyConfirmPeriods: _config.emergencyConfirmPeriods
-        });
-    }
-
-    function getFeeTiersAndRoles()
-        external
-        view
-        returns (uint24[] memory tiers, uint8 floorIdx_, uint8 cashIdx_, uint8 extremeIdx_, uint8 capIdx_)
-    {
-        uint256 len = _feeTiersByIdx.length;
-        tiers = new uint24[](len);
-        for (uint256 i = 0; i < len; ++i) {
-            tiers[i] = _feeTiersByIdx[i];
+        if (oldFeeIdx != targetFeeIdx) {
+            poolManager.updateDynamicLPFee(_poolKey(), _feeTier(targetFeeIdx));
+            emit FeeUpdated(_feeTier(targetFeeIdx), targetFeeIdx, 0, 0);
         }
-        floorIdx_ = _config.floorIdx;
-        cashIdx_ = _config.cashIdx;
-        extremeIdx_ = _config.extremeIdx;
-        capIdx_ = _config.capIdx;
+
+        if (toFloor) {
+            emit EmergencyResetToFloorApplied(targetFeeIdx, nowTs, 0);
+        } else {
+            emit EmergencyResetToCashApplied(targetFeeIdx, nowTs, 0);
+        }
     }
 
-    function getStateDebug()
-        external
-        view
-        returns (
-            uint8 feeIdx,
-            uint8 holdRemaining,
-            uint8 upExtremeStreak,
-            uint8 downStreak,
-            uint8 emergencyStreak,
-            uint64 periodStart,
-            uint64 periodVol,
-            uint96 emaVol,
-            bool paused
-        )
-    {
-        (
-            periodVol,
-            emaVol,
-            periodStart,
-            feeIdx,,
-            paused,
-            holdRemaining,
-            upExtremeStreak,
-            downStreak,
-            emergencyStreak
-        ) = _unpackState(_state);
+    /// @notice Activates pending telemetry threshold update.
+    /// @dev Called only on period rollover so threshold never changes mid-period.
+    function _activatePendingMinCountedSwapUsd6() internal {
+        if (!_hasPendingMinCountedSwapUsd6Change) return;
+
+        uint64 oldValue = _config.minCountedSwapUsd6;
+        uint64 newValue = _pendingMinCountedSwapUsd6;
+
+        _hasPendingMinCountedSwapUsd6Change = false;
+        _pendingMinCountedSwapUsd6 = 0;
+
+        _config.minCountedSwapUsd6 = newValue;
+        emit MinCountedSwapUsd6Changed(oldValue, newValue);
     }
 
-    function creatorFeesAccrued() external view returns (uint256 token0, uint256 token1) {
-        return (_creatorFees0, _creatorFees1);
+    /// @notice Executes HookFee claim through PoolManager unlock callback flow.
+    /// @dev Internal accounting is reduced before unlock; whole operation reverts atomically on failure.
+    function _claimHookFeesInternal(address to, uint256 amount0, uint256 amount1) internal {
+        if (to != _hookFeeRecipient || to == address(0)) revert InvalidRecipient();
+        if (amount0 > _hookFees0 || amount1 > _hookFees1) revert ClaimTooLarge();
+        if (amount0 == 0 && amount1 == 0) return;
+
+        _hookFees0 -= amount0;
+        _hookFees1 -= amount1;
+
+        poolManager.unlock(abi.encode(HookFeeClaimUnlockData({recipient: to, amount0: amount0, amount1: amount1})));
+        emit HookFeesClaimed(to, amount0, amount1);
     }
 
-    function claimCreatorFees(address to, uint256 amount0, uint256 amount1) external {
-        if (msg.sender != _creator) revert NotCreator();
-        if (to != _creatorFeeRecipient || to == address(0)) revert InvalidRecipient();
-        if (amount0 > _creatorFees0 || amount1 > _creatorFees1) revert ClaimTooLarge();
+    /// @notice Converts hook ERC6909 claims into ERC20/native payouts and sends funds to recipient.
+    /// @dev Burn creates positive PoolManager delta for this hook; take withdraws the same amount to `to`.
+    function _withdrawHookFeeViaPoolManagerAccounting(address to, uint256 amount0, uint256 amount1) internal {
         if (amount0 > 0) {
-            _creatorFees0 -= amount0;
-            poolCurrency0.transfer(to, amount0);
+            poolManager.burn(address(this), poolCurrency0.toId(), amount0);
+            poolManager.take(poolCurrency0, to, amount0);
         }
         if (amount1 > 0) {
-            _creatorFees1 -= amount1;
-            poolCurrency1.transfer(to, amount1);
+            poolManager.burn(address(this), poolCurrency1.toId(), amount1);
+            poolManager.take(poolCurrency1, to, amount1);
         }
-        if (amount0 > 0 || amount1 > 0) {
-            emit CreatorFeesClaimed(to, amount0, amount1);
-        }
-    }
-
-    function claimAllCreatorFees() external {
-        if (msg.sender != _creator) revert NotCreator();
-        address to = _creatorFeeRecipient;
-        if (to == address(0)) revert InvalidRecipient();
-        uint256 amount0 = _creatorFees0;
-        uint256 amount1 = _creatorFees1;
-        if (amount0 > 0) {
-            _creatorFees0 = 0;
-            poolCurrency0.transfer(to, amount0);
-        }
-        if (amount1 > 0) {
-            _creatorFees1 = 0;
-            poolCurrency1.transfer(to, amount1);
-        }
-        if (amount0 > 0 || amount1 > 0) {
-            emit CreatorFeesClaimed(to, amount0, amount1);
-        }
-    }
-
-    function claimAllCreatorFees(address to) external {
-        if (msg.sender != _creator) revert NotCreator();
-        if (to != _creatorFeeRecipient || to == address(0)) revert InvalidRecipient();
-        uint256 amount0 = _creatorFees0;
-        uint256 amount1 = _creatorFees1;
-        if (amount0 > 0) {
-            _creatorFees0 = 0;
-            poolCurrency0.transfer(to, amount0);
-        }
-        if (amount1 > 0) {
-            _creatorFees1 = 0;
-            poolCurrency1.transfer(to, amount1);
-        }
-        if (amount0 > 0 || amount1 > 0) {
-            emit CreatorFeesClaimed(to, amount0, amount1);
-        }
-    }
-
-    function rescueToken(Currency currency, uint256 amount) external {
-        if (msg.sender != _creator) revert NotCreator();
-        if (currency == poolCurrency0 || currency == poolCurrency1) revert InvalidRescueCurrency();
-
-        currency.transfer(_creator, amount);
-        emit RescueTransfer(Currency.unwrap(currency), amount, _creator);
-    }
-
-    function rescueETH(address to, uint256 amount) external onlyCreator {
-        if (to == address(0)) revert InvalidRecipient();
-        if (amount > address(this).balance) revert ClaimTooLarge();
-        (bool ok,) = payable(to).call{value: amount}("");
-        if (!ok) revert EthTransferFailed();
-        emit RescueTransfer(address(0), amount, to);
     }
 
     // -----------------------------------------------------------------------
-    // Admin controls
+    // Internal hook helpers
     // -----------------------------------------------------------------------
-
-    function setCreatorFeeConfig(address newCreator, uint16 newCreatorFeeBps) external onlyCreator {
-        address oldCreator = _creator;
-        _setCreatorFeeConfigInternal(newCreator, newCreatorFeeBps);
-        if (oldCreator != newCreator) {
-            emit CreatorUpdated(oldCreator, newCreator);
-        }
-        emit CreatorFeeConfigUpdated(newCreator, newCreatorFeeBps);
-    }
-
-    function setCreatorFeePercent(uint16 newCreatorFeePercent) external onlyCreator {
-        if (newCreatorFeePercent > creatorFeeLimitPercent) {
-            revert CreatorFeePercentLimitExceeded(newCreatorFeePercent, creatorFeeLimitPercent);
-        }
-        uint16 newCreatorFeeBps = newCreatorFeePercent * 100;
-        _setCreatorFeeBpsInternal(newCreatorFeeBps);
-        emit CreatorFeeConfigUpdated(_creator, newCreatorFeeBps);
-    }
-
-    function setCreatorFeeRecipient(address newRecipient) external onlyCreator {
-        address oldRecipient = _creatorFeeRecipient;
-        _setCreatorFeeRecipientInternal(newRecipient);
-        emit CreatorFeeRecipientUpdated(oldRecipient, newRecipient);
-    }
-
-    function setFeeTiersAndRoles(
-        uint24[] calldata tiers,
-        uint8 floorIdx_,
-        uint8 cashIdx_,
-        uint8 extremeIdx_,
-        uint8 capIdx_
-    ) external onlyCreator whenPaused {
-        _setFeeTiersAndRolesInternal(tiers, floorIdx_, cashIdx_, extremeIdx_, capIdx_);
-        emit FeeTiersUpdated(tiers, floorIdx_, cashIdx_, extremeIdx_, capIdx_);
-        _resetStateToFloor(true, RESET_REASON_ADMIN_TIERS);
-    }
-
-    function setControllerParams(ControllerParams calldata p) external onlyCreator whenPaused {
-        _setControllerParamsInternal(p);
-        emit ControllerParamsUpdated(
-            p.minCloseVolToCashUsd6,
-            p.upRToCashBps,
-            p.cashHoldPeriods,
-            p.minCloseVolToExtremeUsd6,
-            p.upRToExtremeBps,
-            p.upExtremeConfirmPeriods,
-            p.extremeHoldPeriods,
-            p.downRFromExtremeBps,
-            p.downExtremeConfirmPeriods,
-            p.downRFromCashBps,
-            p.downCashConfirmPeriods,
-            p.emergencyFloorCloseVolUsd6,
-            p.emergencyConfirmPeriods
-        );
-    }
-
-    function setTimingParams(
-        uint32 periodSeconds_,
-        uint8 emaPeriods_,
-        uint32 lullResetSeconds_,
-        uint16 deadbandBps_
-    ) external onlyCreator whenPaused {
-        _setTimingParamsInternal(periodSeconds_, emaPeriods_, lullResetSeconds_, deadbandBps_);
-        emit TimingParamsUpdated(periodSeconds_, emaPeriods_, lullResetSeconds_, deadbandBps_);
-        _resetStateToFloor(true, RESET_REASON_ADMIN_TIMING);
-    }
-
-    function pause() external onlyCreator {
-        if (isPaused()) return;
-        _resetStateToFloor(true, RESET_REASON_ADMIN_PAUSE);
-        emit Paused(_feeTier(_config.floorIdx), _config.floorIdx);
-    }
-
-    function unpause() external onlyCreator {
-        if (!isPaused()) return;
-        _resetStateToFloor(false, RESET_REASON_ADMIN_UNPAUSE);
-        emit Unpaused();
-    }
-
-    function emergencyResetStateToFloor() external onlyCreator whenPaused {
-        _resetStateToFloor(true, RESET_REASON_ADMIN_EMERGENCY);
-    }
 
     function _poolKey() internal view returns (PoolKey memory key) {
         key = PoolKey({
@@ -1037,12 +1465,6 @@ contract VolumeDynamicFeeHook is BaseHook {
             hooks: IHooks(address(this))
         });
     }
-
-    receive() external payable {}
-
-    // -----------------------------------------------------------------------
-    // Internal helpers
-    // -----------------------------------------------------------------------
 
     function _validateKey(PoolKey calldata key) internal view {
         if (
@@ -1059,94 +1481,104 @@ contract VolumeDynamicFeeHook is BaseHook {
         return uint64(block.timestamp);
     }
 
+    function _feeTier(uint8 idx) internal view returns (uint24) {
+        return feeTiers(uint256(idx));
+    }
+
+    function _emaFromState() internal view returns (uint96 emaVolScaled) {
+        (, emaVolScaled,,,,,,,) = _unpackState(_state);
+    }
+
+    function _accrueHookFeeAfterSwap(
+        PoolKey calldata key,
+        SwapParams calldata params,
+        BalanceDelta delta,
+        uint24 appliedFeeBips
+    ) internal returns (int128 hookFeeDelta) {
+        uint16 hookFeePct = _config.hookFeePercent;
+        if (hookFeePct == 0) return 0;
+
+        bool specifiedTokenIs0 = (params.amountSpecified < 0) == params.zeroForOne;
+        Currency unspecifiedCurrency = specifiedTokenIs0 ? key.currency1 : key.currency0;
+        int128 unspecifiedAmountSigned = specifiedTokenIs0 ? delta.amount1() : delta.amount0();
+
+        uint256 absUnspecified =
+            unspecifiedAmountSigned < 0 ? uint256(-int256(unspecifiedAmountSigned)) : uint256(uint128(unspecifiedAmountSigned));
+        if (absUnspecified == 0) return 0;
+
+        uint256 lpFeeAmount = (absUnspecified * uint256(appliedFeeBips)) / FEE_SCALE;
+        uint256 hookFeeAmount = (lpFeeAmount * uint256(hookFeePct)) / 100;
+        if (hookFeeAmount == 0) return 0;
+
+        if (hookFeeAmount > uint256(uint128(type(int128).max))) {
+            hookFeeAmount = uint256(uint128(type(int128).max));
+        }
+
+        if (unspecifiedCurrency == poolCurrency0) {
+            _hookFees0 += hookFeeAmount;
+        } else {
+            _hookFees1 += hookFeeAmount;
+        }
+
+        // Persist claimable balance in PoolManager ERC6909 accounting during the same unlocked swap context.
+        poolManager.mint(address(this), unspecifiedCurrency.toId(), hookFeeAmount);
+
+        emit HookFeeAccrued(Currency.unwrap(unspecifiedCurrency), hookFeeAmount, appliedFeeBips, hookFeePct);
+
+        return int128(uint128(hookFeeAmount));
+    }
+
     function _addSwapVolumeUsd6(uint64 current, BalanceDelta delta) internal view returns (uint64) {
-        int128 s = _stableIsCurrency0 ? delta.amount0() : delta.amount1();
-        // forge-lint: disable-next-line(unsafe-typecast)
-        uint256 absStable = s < 0 ? uint256(-int256(s)) : uint256(uint128(s));
+        int128 stableAmount = _stableIsCurrency0 ? delta.amount0() : delta.amount1();
+        uint256 absStable = stableAmount < 0 ? uint256(-int256(stableAmount)) : uint256(uint128(stableAmount));
 
         uint256 usd6 = _toUsd6(absStable);
+        if (usd6 < _config.minCountedSwapUsd6) {
+            return current;
+        }
 
-        // treat swap volume as one-sided stable notional
-        uint256 add = usd6;
-
-        uint256 sum = uint256(current) + add;
+        uint256 sum = uint256(current) + usd6;
         if (sum > type(uint64).max) return type(uint64).max;
-        // forge-lint: disable-next-line(unsafe-typecast)
         return uint64(sum);
     }
 
     function _toUsd6(uint256 stableAmount) internal view returns (uint256) {
         if (_stableScale == 1) return stableAmount;
-        if (_scaleIsMul) return stableAmount * _stableScale;
+        if (_scaleIsMul) {
+            if (stableAmount > type(uint256).max / _stableScale) return type(uint256).max;
+            return stableAmount * _stableScale;
+        }
         return stableAmount / _stableScale;
     }
 
-    function _updateEma(uint96 ema, uint64 closeVol) internal view returns (uint96) {
-        if (ema == 0) {
+    function _updateEmaScaled(uint96 emaScaled, uint64 closeVol) internal view returns (uint96) {
+        if (emaScaled == 0) {
             if (closeVol == 0) return 0;
-            return uint96(closeVol);
+            uint256 seeded = uint256(closeVol) * EMA_SCALE;
+            if (seeded > type(uint96).max) return type(uint96).max;
+            return uint96(seeded);
         }
 
         uint256 n = uint256(_config.emaPeriods);
-        uint256 updated = (uint256(ema) * (n - 1) + uint256(closeVol)) / n;
+        uint256 updated = (uint256(emaScaled) * (n - 1) + uint256(closeVol) * EMA_SCALE) / n;
         if (updated > type(uint96).max) return type(uint96).max;
-        // forge-lint: disable-next-line(unsafe-typecast)
         return uint96(updated);
     }
 
-    function _estimateLpFeesUsd6(uint64 closeVol, uint24 feeBips) internal pure returns (uint64) {
-        uint256 fees = (uint256(closeVol) * uint256(feeBips)) / 1_000_000;
+    function _estimateApproxLpFeesUsd6(uint64 closeVol, uint24 feeBips) internal pure returns (uint64) {
+        uint256 fees = (uint256(closeVol) * uint256(feeBips)) / FEE_SCALE;
         if (fees > type(uint64).max) return type(uint64).max;
-        // forge-lint: disable-next-line(unsafe-typecast)
         return uint64(fees);
     }
 
-    function _computeCreatorFee(uint256 amountIn, uint24 feeBips) internal view returns (uint256) {
-        uint256 lpFeeAmount = (amountIn * uint256(feeBips)) / FEE_SCALE;
-        return (lpFeeAmount * uint256(_config.creatorFeeBps)) / BPS_SCALE;
-    }
-
-    function _accrueCreatorFeeAfterSwap(
-        PoolKey calldata key,
-        SwapParams calldata params,
-        BalanceDelta delta,
-        uint24 feeBips
-    ) internal {
-        if (_config.creatorFeeBps == 0) return;
-
-        int128 amountInSigned = params.zeroForOne ? delta.amount0() : delta.amount1();
-        uint256 amountIn =
-            amountInSigned < 0 ? uint256(-int256(amountInSigned)) : uint256(uint128(amountInSigned));
-        if (amountIn == 0) return;
-
-        uint256 creatorCut = _computeCreatorFee(amountIn, feeBips);
-        if (creatorCut == 0) return;
-
-        Currency inputCurrency = params.zeroForOne ? key.currency0 : key.currency1;
-        poolManager.take(inputCurrency, address(this), creatorCut);
-        if (inputCurrency == poolCurrency0) {
-            _creatorFees0 += creatorCut;
-        } else {
-            _creatorFees1 += creatorCut;
-        }
-        emit CreatorFeeAccrued(Currency.unwrap(inputCurrency), creatorCut, feeBips);
-    }
-
-    // Backward-compatible internal surface for existing test harnesses.
-    function _computeNextFeeIdx(uint8 feeIdx, uint8, uint64 closeVol, uint96 emaVol)
-        internal
-        view
-        returns (uint8 newFeeIdx, uint8 newLastDir, bool changed, uint8 reasonCode)
-    {
-        (newFeeIdx,,,,, changed, reasonCode) =
-            _computeNextFeeIdxV2(feeIdx, closeVol, emaVol, false, 0, 0, 0, 0);
-        newLastDir = DIR_NONE;
+    function _incrementStreak(uint8 current, uint8 maxValue) internal pure returns (uint8) {
+        return current < maxValue ? current + 1 : maxValue;
     }
 
     function _computeNextFeeIdxV2(
         uint8 feeIdx,
         uint64 closeVol,
-        uint96 emaVol,
+        uint96 emaVolScaled,
         bool bootstrapV2,
         uint8 holdRemaining,
         uint8 upExtremeStreak,
@@ -1172,14 +1604,12 @@ contract VolumeDynamicFeeHook is BaseHook {
         newEmergencyStreak = emergencyStreak;
         reasonCode = closeVol == 0 ? REASON_NO_SWAPS : REASON_NO_CHANGE;
 
-        // Rule 1: hold counter always decays first.
         if (newHoldRemaining > 0) {
             unchecked {
                 newHoldRemaining -= 1;
             }
         }
 
-        // Rule 2: emergency floor guard runs before all transitions.
         if (closeVol < _config.emergencyFloorCloseVolUsd6) {
             newEmergencyStreak = _incrementStreak(newEmergencyStreak, MAX_EMERGENCY_STREAK);
         } else {
@@ -1202,18 +1632,17 @@ contract VolumeDynamicFeeHook is BaseHook {
             );
         }
 
-        uint256 rBps = emaVol == 0 ? 0 : (uint256(closeVol) * BPS_SCALE) / uint256(emaVol);
+        uint256 rBps = emaVolScaled == 0 ? 0 : (uint256(closeVol) * EMA_SCALE * BPS_SCALE) / uint256(emaVolScaled);
         uint256 deadband = uint256(_config.deadbandBps);
         bool deadbandBlocked;
 
-        // Rule 3a: floor -> cash fast jump.
         if (newFeeIdx == _config.floorIdx) {
             bool upCashRaw = rBps >= uint256(_config.upRToCashBps);
             bool upCashPass = rBps >= uint256(_config.upRToCashBps) + deadband;
             bool canJumpCash =
-                !bootstrapV2 && emaVol != 0 && closeVol >= _config.minCloseVolToCashUsd6 && upCashPass;
+                !bootstrapV2 && emaVolScaled != 0 && closeVol >= _config.minCloseVolToCashUsd6 && upCashPass;
             if (
-                !bootstrapV2 && emaVol != 0 && closeVol >= _config.minCloseVolToCashUsd6 && upCashRaw
+                !bootstrapV2 && emaVolScaled != 0 && closeVol >= _config.minCloseVolToCashUsd6 && upCashRaw
                     && !upCashPass && newFeeIdx != _config.cashIdx
             ) {
                 deadbandBlocked = true;
@@ -1236,7 +1665,6 @@ contract VolumeDynamicFeeHook is BaseHook {
             }
         }
 
-        // Rule 3b: cash -> extreme jump after consecutive confirmations.
         if (newFeeIdx == _config.cashIdx) {
             bool upExtremeRaw =
                 closeVol >= _config.minCloseVolToExtremeUsd6 && rBps >= uint256(_config.upRToExtremeBps);
@@ -1278,7 +1706,6 @@ contract VolumeDynamicFeeHook is BaseHook {
             newUpExtremeStreak = 0;
         }
 
-        // Rule 4: down transitions are blocked while hold is active.
         if (newHoldRemaining > 0) {
             newDownStreak = 0;
             return (
@@ -1369,20 +1796,15 @@ contract VolumeDynamicFeeHook is BaseHook {
         }
     }
 
-    function _incrementStreak(uint8 current, uint8 maxValue) internal pure returns (uint8) {
-        return current < maxValue ? current + 1 : maxValue;
-    }
-
     // -----------------------------------------------------------------------
     // Bit packing
     // -----------------------------------------------------------------------
 
     function _packState(
         uint64 periodVol,
-        uint96 emaVol,
+        uint96 emaVolScaled,
         uint64 periodStart,
         uint8 feeIdx,
-        uint8 lastDir,
         bool paused,
         uint8 holdRemaining,
         uint8 upExtremeStreak,
@@ -1390,10 +1812,9 @@ contract VolumeDynamicFeeHook is BaseHook {
         uint8 emergencyStreak
     ) internal pure returns (uint256 packed) {
         packed = uint256(periodVol);
-        packed |= uint256(emaVol) << 64;
+        packed |= uint256(emaVolScaled) << 64;
         packed |= uint256(periodStart) << 160;
         packed |= uint256(feeIdx) << 224;
-        packed |= (uint256(lastDir) & 0x3) << 232;
         packed |= (uint256(holdRemaining) & 0x1F) << HOLD_REMAINING_SHIFT;
         packed |= (uint256(upExtremeStreak) & 0x3) << UP_EXTREME_STREAK_SHIFT;
         packed |= (uint256(downStreak) & 0x7) << DOWN_STREAK_SHIFT;
@@ -1407,10 +1828,9 @@ contract VolumeDynamicFeeHook is BaseHook {
         pure
         returns (
             uint64 periodVol,
-            uint96 emaVol,
+            uint96 emaVolScaled,
             uint64 periodStart,
             uint8 feeIdx,
-            uint8 lastDir,
             bool paused,
             uint8 holdRemaining,
             uint8 upExtremeStreak,
@@ -1418,15 +1838,10 @@ contract VolumeDynamicFeeHook is BaseHook {
             uint8 emergencyStreak
         )
     {
-        // forge-lint: disable-next-line(unsafe-typecast)
         periodVol = uint64(packed);
-        // forge-lint: disable-next-line(unsafe-typecast)
-        emaVol = uint96(packed >> 64);
-        // forge-lint: disable-next-line(unsafe-typecast)
+        emaVolScaled = uint96(packed >> 64);
         periodStart = uint64(packed >> 160);
-        // forge-lint: disable-next-line(unsafe-typecast)
         feeIdx = uint8(packed >> 224);
-        lastDir = uint8((packed >> 232) & 0x3);
 
         paused = ((packed >> PAUSED_BIT) & 1) == 1;
         holdRemaining = uint8((packed >> HOLD_REMAINING_SHIFT) & 0x1F);

@@ -1,69 +1,70 @@
 # FAQ
 
-## Where are deployment instructions?
+## Where is the authoritative behavior definition?
 
-See `./scripts/README.md`.
+Contract NatSpec in `src/VolumeDynamicFeeHook.sol` is primary. `docs/SPEC.md` mirrors it for operations.
 
-## What is "lull"?
+## Can I change parameters without redeploy?
 
-"Lull" means a quiet period (low activity / inactivity). In this hook, a lull is detected when no swaps happened for at least `lullResetSeconds`.
+Yes, Owner can update runtime config onchain:
+- `setFeeTiersAndRoles(...)` (paused only)
+- `setControllerParams(...)` (paused only)
+- `setTimingParams(...)` (paused only)
+- `setHookFeeRecipient(...)`
+- HookFee timelock flow (`schedule/cancel/execute`)
 
-## Why no oracles / TWAP?
+## Is HookFee the same as LP fee?
 
+No.
+- LP fee belongs to pool accounting.
+- HookFee is an extra trader-facing fee returned from `afterSwap` delta.
 
-This hook intentionally avoids on-chain price oracles (e.g., Chainlink) and cross-pool TWAP reads.
+## Does HookFee use `poolManager.take()` in swap path?
 
-### Motivation
-1. **Gas predictability**
-   - Oracle reads add overhead on every hook execution.
-   - In extreme gas conditions (Ethereum mainnet spikes), oracle-heavy hooks become economically unattractive.
+No. Swap path uses `afterSwap` return delta plus `poolManager.mint(...)` to persist claim accounting.
+Actual payout happens later in claim flow via `unlock` -> `burn` -> `take`.
 
-2. **Reliability / liveness**
-   - External oracles can be paused, stale, or revert.
-   - A reverting oracle call inside a hook can break swaps (availability risk).
+## How is HookFee bounded?
 
-3. **Attack surface**
-   - Any dependency expands the audit scope and introduces new failure modes.
-   - Cross-pool TWAP introduces additional protocol and integration assumptions.
+`hookFeePercent` is hard-capped at 10% and can only change through 48-hour timelock.
 
-4. **Simplicity and auditability**
-   - The model is designed to be explainable and fully contained:
-     - fixed fee buckets,
-     - one step per period,
-     - EMA smoothing,
-     - hard cap (`capIdx`) and floor (`floorIdx`),
-     - bounded catch-up via a capped lull reset window.
+## What does pause do now?
 
-### Trade-off (explicitly accepted)
-- The hook treats the configured stable token as a USD proxy.
-- Depeg risk is handled operationally (monitoring + guardian pause), not by on-chain oracle logic.
+`pause()` freezes controller evolution but does not reset to floor by default.
+It preserves fee regime and EMA, clears only open period volume, and restarts period clock.
+It does not stop swaps and does not stop HookFee accrual.
 
-### When to consider adding oracles anyway
-If your primary goal shifts from gas efficiency to maximizing *pricing accuracy* under stable depegs, then:
-- a stablecoin price oracle, or
-- a cross-pool TWAP (from a deep reference pool)
-may be appropriate — but this is a **different design point** with a higher complexity and reliability cost.
+## When should emergency reset be used?
 
-## Does this assume every stable = $1?
+Only when paused and explicit reset is required:
+- `emergencyResetToFloor()` for full conservative reset.
+- `emergencyResetToCash()` when you need fast recovery without forcing floor regime.
 
-Yes. For stable-paired pools, the stable side is treated as USD.
-This is a deliberate simplification to keep the hook stateless and cheap.
-If a stable depegs, the USD proxy volume becomes inaccurate. This is an accepted risk.
+Operationally, `emergencyResetToCash()` is typically preferred default.
+Monitoring should track emergency reset events directly, not only fee update events.
 
-## How should I choose tickSpacing?
+## What is `minCountedSwapUsd6`?
 
-This hook is compatible with any tickSpacing supported by the pool.
-In this repository, deployment configs are standardized to **tickSpacing = 10** across environments.
+A telemetry dust filter:
+- swaps below threshold are excluded from period volume statistics,
+- swaps still execute and still pay LP fee/HookFee.
 
-## Can I use WBTC or other non-ETH assets?
+Default is `4e6` (USD6).
+Allowed update range is `1e6..10e6`.
 
-Yes, as long as the pool has a stable (USD proxy) token on one side and you configure:
-- which currency is stable (`STABLE`)
-- stable decimals (`STABLE_DECIMALS`) — deployment script validates on-chain decimals()
+## Can threshold changes apply mid-period?
 
-## Does pause/unpause apply immediately?
+No. Scheduled threshold changes are activated only at next period boundary.
+This path intentionally has no timelock.
 
-Yes, for initialized pools.
-`pause()` / `unpause()` call `PoolManager.updateDynamicLPFee(...)` directly (the PoolManager authorizes the hook address as the caller).
+## Is `setHookFeeRecipient(...)` timelocked?
 
-If called before pool initialization, the hook only updates its internal state; `afterInitialize` will set the correct initial fee based on the paused flag.
+No. Recipient change is immediate by design and treated as accepted owner-key governance risk.
+
+## Is `approxLpFeesUsd6` accounting-accurate?
+
+No. It is approximate telemetry for regime analytics.
+
+## Why does `receive()` revert?
+
+To avoid accidental ETH transfers into hook accounting. ETH movement is explicit through `rescueETH(...)`.
