@@ -2331,11 +2331,6 @@ test_t12_hook_fee_e2e() {
     "cast call --rpc-url \"${RPC_URL}\" --from \"${OWNER_ADDR}\" \"${HOOK_ADDRESS}\" \"claimHookFees(address,uint256,uint256)\" 0x0000000000000000000000000000000000000000 0 0" \
     "InvalidRecipient" || return 1
 
-  cover_function "claimAllHookFees(address)"
-  expect_revert_custom "T12 claimAllHookFees zero recipient" \
-    "cast call --rpc-url \"${RPC_URL}\" --from \"${OWNER_ADDR}\" \"${HOOK_ADDRESS}\" \"claimAllHookFees(address)\" 0x0000000000000000000000000000000000000000" \
-    "InvalidRecipient" || return 1
-
   # deterministic no-op when accrued==0
   cover_function "claimAllHookFees()"
   cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" "claimAllHookFees()" >/dev/null || return 1

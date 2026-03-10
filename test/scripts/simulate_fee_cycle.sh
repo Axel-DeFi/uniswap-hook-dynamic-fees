@@ -968,12 +968,6 @@ run_cases_anomaly_checks() {
     0 \
     0 || return 1
   expect_hook_call_revert_contains \
-    "ANOM-04 claimAllHookFees zero recipient" \
-    "${sel_invalid_recipient}" \
-    "${HOOK_OWNER_ADDR}" \
-    "claimAllHookFees(address)" \
-    "0x0000000000000000000000000000000000000000" || return 1
-  expect_hook_call_revert_contains \
     "ANOM-05 emergency reset requires paused" \
     "${sel_requires_paused}" \
     "${HOOK_OWNER_ADDR}" \

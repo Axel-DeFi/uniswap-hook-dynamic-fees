@@ -75,6 +75,8 @@ This path intentionally has no timelock.
 
 No. Recipient change is immediate by design and treated as accepted owner-key governance risk.
 
+No-op update (`newRecipient == currentRecipient`) is ignored and does not emit `HookFeeRecipientUpdated`.
+
 Production guidance:
 - owner must be multisig,
 - owner key custody should be cold/hardware,
@@ -111,3 +113,7 @@ No. The key check is strict: `key.fee` must equal `LPFeeLibrary.DYNAMIC_FEE_FLAG
 ## Why does `receive()` revert?
 
 To avoid accidental ETH transfers into hook accounting. ETH movement is explicit through `rescueETH(...)`.
+
+## Can emergency floor threshold be zero?
+
+No. `emergencyFloorCloseVolUsd6` must be strictly greater than zero in constructor and paused config updates.

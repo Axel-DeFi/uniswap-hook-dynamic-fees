@@ -16,9 +16,11 @@
 - `HookFeeRecipient` is a separate accounting entity from `Owner`.
 - Ownership transfer is two-step; `proposeNewOwner(...)` rejects zero address and current owner.
 - `setHookFeeRecipient(...)` is immediate (no timelock) by design.
+- No-op `setHookFeeRecipient(...)` calls (same address) are ignored and do not emit `HookFeeRecipientUpdated`.
 - `HookFeePercent` is timelocked for 48 hours and capped at 10% (hard constant).
 - HookFee is based on an approximate LP-fee estimate from the unspecified side; exact-input vs exact-output can diverge by design.
 - HookFee accrual is persisted as PoolManager ERC6909 claims and claimed via `unlock` + `burn` + `take`.
+- Claim-all path is single and explicit: `claimAllHookFees()` always pays to current `hookFeeRecipient`.
 - `pause()/unpause()` freeze/resume regulator transitions at the current LP fee tier (no automatic floor reset, no swap stop, no HookFee stop).
 - Emergency resets are explicit and available only while paused:
   - `emergencyResetToFloor()`
@@ -29,6 +31,7 @@
   - `minCloseVolToCashUsd6 <= minCloseVolToExtremeUsd6`
   - `upRToCashBps <= upRToExtremeBps`
   - `downRFromCashBps >= downRFromExtremeBps`
+  - `emergencyFloorCloseVolUsd6 > 0`
 - Pool key validation requires exact dynamic-fee flag: `key.fee == LPFeeLibrary.DYNAMIC_FEE_FLAG`.
 - Telemetry fields are explicit:
   - counted volume threshold `minCountedSwapUsd6` (default `$4 / 4e6`, bounded to `1e6..10e6`)

@@ -53,6 +53,8 @@ Uses:
 - Threshold updates are pending-state only, bounded to `1e6..10e6`, and activate at next period boundary.
 - Threshold updates intentionally have no timelock; recalibration target cadence is 5 days offchain.
 - Claim payout path uses PoolManager accounting withdrawal (`unlock` -> `burn` -> `take`).
+- Full claim path is `claimAllHookFees()` only; recipient override is intentionally unavailable.
 - `approxLpFeesUsd6` is approximate analytics, not accounting output.
 - Pool key uses strict dynamic fee flag matching (`key.fee == LPFeeLibrary.DYNAMIC_FEE_FLAG`).
+- `emergencyFloorCloseVolUsd6` must be configured as strictly positive.
 - Production owner baseline: multisig + cold/hardware key custody; hot-wallet ownership is not acceptable.

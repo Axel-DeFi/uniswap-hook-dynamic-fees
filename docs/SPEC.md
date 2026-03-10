@@ -99,6 +99,7 @@ Controller params are validated with cross-invariants:
 - `minCloseVolToCashUsd6 <= minCloseVolToExtremeUsd6`
 - `upRToCashBps <= upRToExtremeBps`
 - `downRFromCashBps >= downRFromExtremeBps`
+- `emergencyFloorCloseVolUsd6 > 0`
 
 Invalid combinations revert with `InvalidConfig`.
 
@@ -221,7 +222,11 @@ HookFee accrual/claim surface:
 - `hookFeesAccrued()`
 - `claimHookFees(address,uint256,uint256)`
 - `claimAllHookFees()`
-- `claimAllHookFees(address)`
+
+Recipient semantics:
+- `claimAllHookFees()` always pays to current `hookFeeRecipient`.
+- `claimHookFees(address,uint256,uint256)` requires `to == hookFeeRecipient`.
+- No-op `setHookFeeRecipient(...)` updates do not emit `HookFeeRecipientUpdated`.
 
 Claim settlement path:
 1. owner request enters `poolManager.unlock(...)`,

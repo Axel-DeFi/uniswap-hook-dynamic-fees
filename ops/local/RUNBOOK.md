@@ -36,6 +36,7 @@ ops/local/scripts/emergency.sh
 ### HookFee claim settlement
 
 - Use `claimHookFees(...)` / `claimAllHookFees(...)` as owner.
+- `claimAllHookFees(...)` has no recipient overload; full claim always pays to current `hookFeeRecipient`.
 - Payout path is PoolManager accounting withdrawal: `unlock` -> `burn` -> `take`.
 - Recipient must match current `hookFeeRecipient`.
 
@@ -76,9 +77,13 @@ Notes:
 ## Accepted governance risks
 
 - `setHookFeeRecipient(...)` is immediate (no timelock) by design.
+- No-op recipient update does not emit `HookFeeRecipientUpdated`.
 - Mitigation is operational: owner key controls + monitoring/alerting.
 - Production owner must be multisig; local EOA owner is acceptable only for dev/test.
 - Hot-wallet owner usage is unacceptable for production; use cold/hardware custody.
+
+Controller safety note:
+- `emergencyFloorCloseVolUsd6` must remain strictly greater than zero.
 
 ## Monitoring minimums
 

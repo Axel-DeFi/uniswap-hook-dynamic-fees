@@ -2,6 +2,7 @@
 pragma solidity ^0.8.26;
 
 import {Test} from "forge-std/Test.sol";
+import {Vm} from "forge-std/Vm.sol";
 
 import {BaseHook} from "@uniswap/v4-hooks-public/src/base/BaseHook.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
@@ -111,6 +112,8 @@ contract VolumeDynamicFeeHookConfigAndEdgesTest is Test, VolumeDynamicFeeHookV2D
         address owner;
         address hookFeeRecipient;
         uint16 hookFeePercent;
+        uint64 emergencyFloorCloseVolUsd6;
+        uint8 emergencyConfirmPeriods;
     }
 
     function setUp() public {
@@ -137,7 +140,9 @@ contract VolumeDynamicFeeHookConfigAndEdgesTest is Test, VolumeDynamicFeeHookV2D
             lullResetSeconds: LULL_RESET_SECONDS,
             owner: address(this),
             hookFeeRecipient: address(this),
-            hookFeePercent: V2_INITIAL_HOOK_FEE_PERCENT
+            hookFeePercent: V2_INITIAL_HOOK_FEE_PERCENT,
+            emergencyFloorCloseVolUsd6: V2_EMERGENCY_FLOOR_CLOSEVOL_USD6,
+            emergencyConfirmPeriods: V2_EMERGENCY_CONFIRM_PERIODS
         });
     }
 
@@ -171,8 +176,8 @@ contract VolumeDynamicFeeHookConfigAndEdgesTest is Test, VolumeDynamicFeeHookV2D
             V2_DOWN_EXTREME_CONFIRM_PERIODS,
             V2_DOWN_R_FROM_CASH_BPS,
             V2_DOWN_CASH_CONFIRM_PERIODS,
-            V2_EMERGENCY_FLOOR_CLOSEVOL_USD6,
-            V2_EMERGENCY_CONFIRM_PERIODS
+            cfg.emergencyFloorCloseVolUsd6,
+            cfg.emergencyConfirmPeriods
         );
     }
 
@@ -258,6 +263,22 @@ contract VolumeDynamicFeeHookConfigAndEdgesTest is Test, VolumeDynamicFeeHookV2D
         _deploy(cfg);
     }
 
+    function test_constructor_reverts_when_emergency_floor_threshold_is_zero() public {
+        DeployCfg memory cfg = _defaultCfg();
+        cfg.emergencyFloorCloseVolUsd6 = 0;
+
+        vm.expectRevert(VolumeDynamicFeeHook.InvalidConfig.selector);
+        _deploy(cfg);
+    }
+
+    function test_constructor_accepts_positive_emergency_floor_threshold() public {
+        DeployCfg memory cfg = _defaultCfg();
+        cfg.emergencyFloorCloseVolUsd6 = 1;
+
+        VolumeDynamicFeeHookConfigHarness h = _deploy(cfg);
+        assertEq(h.emergencyFloorCloseVolUsd6(), 1);
+    }
+
     function test_constructor_reverts_on_zero_owner() public {
         DeployCfg memory cfg = _defaultCfg();
         cfg.owner = address(0);
@@ -316,6 +337,15 @@ contract VolumeDynamicFeeHookConfigAndEdgesTest is Test, VolumeDynamicFeeHookV2D
         hook.setHookFeeRecipient(recipient);
         assertEq(hook.owner(), address(this));
         assertEq(hook.hookFeeRecipient(), recipient);
+    }
+
+    function test_setHookFeeRecipient_noop_does_not_emit_update_event() public {
+        vm.recordLogs();
+        hook.setHookFeeRecipient(address(this));
+        Vm.Log[] memory logs = vm.getRecordedLogs();
+
+        assertEq(logs.length, 0, "no-op recipient update must not emit HookFeeRecipientUpdated");
+        assertEq(hook.hookFeeRecipient(), address(this));
     }
 
     function test_setHookFeeRecipient_zero_reverts_when_fee_enabled() public {

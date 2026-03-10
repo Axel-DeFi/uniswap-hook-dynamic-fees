@@ -344,6 +344,16 @@ contract VolumeDynamicFeeHookAdminTest is Test, VolumeDynamicFeeHookV2DeployHelp
         hook.setControllerParams(p);
     }
 
+    function test_setControllerParams_reverts_when_emergency_floor_threshold_is_zero() public {
+        hook.pause();
+
+        VolumeDynamicFeeHook.ControllerParams memory p = _defaultControllerParams();
+        p.emergencyFloorCloseVolUsd6 = 0;
+
+        vm.expectRevert(VolumeDynamicFeeHook.InvalidConfig.selector);
+        hook.setControllerParams(p);
+    }
+
     function test_cashHoldPeriods_one_results_in_zero_effective_hold_protection() public {
         hook.pause();
 
@@ -380,6 +390,24 @@ contract VolumeDynamicFeeHookAdminTest is Test, VolumeDynamicFeeHookV2DeployHelp
             "cashHoldPeriods=1 should not provide an extra fully protected period"
         );
         assertEq(holdAfterNextClose, 0, "hold must be consumed at the next close");
+    }
+
+    function test_emergencyFloor_positive_threshold_still_triggers_transition_to_floor() public {
+        hook.pause();
+
+        VolumeDynamicFeeHook.ControllerParams memory p = _defaultControllerParams();
+        p.emergencyFloorCloseVolUsd6 = 1;
+        p.emergencyConfirmPeriods = 1;
+        hook.setControllerParams(p);
+        hook.unpause();
+
+        _moveToCashRegimeWithHold();
+
+        vm.warp(block.timestamp + PERIOD_SECONDS);
+        _swap(true, -1, 0, 0);
+
+        (uint8 feeIdx,,,,,,,,) = hook.getStateDebug();
+        assertEq(feeIdx, hook.floorIdx(), "emergency floor should trigger from cash on low close volume");
     }
 
     function test_pause_unpause_freeze_resume_semantics() public {
@@ -613,6 +641,18 @@ contract VolumeDynamicFeeHookAdminTest is Test, VolumeDynamicFeeHookV2DeployHelp
         assertEq(periodVol, 0, "new threshold must apply after next period boundary");
     }
 
+    function test_period_close_catch_up_keeps_periodStart_aligned_and_not_future() public {
+        (,, uint64 periodStartBefore,) = hook.unpackedState();
+        uint64 elapsed = uint64(PERIOD_SECONDS * 5 + 17);
+        vm.warp(uint256(periodStartBefore) + elapsed);
+
+        _swap(true, -1, 0, 0);
+
+        (,, uint64 periodStartAfter,) = hook.unpackedState();
+        assertEq(periodStartAfter, periodStartBefore + uint64(PERIOD_SECONDS * 5));
+        assertLe(periodStartAfter, uint64(block.timestamp));
+    }
+
     function test_periodVol_saturates_at_uint64_max_under_extreme_volume() public {
         _swap(true, -1, -type(int128).max, 0);
 
@@ -649,6 +689,20 @@ contract VolumeDynamicFeeHookAdminTest is Test, VolumeDynamicFeeHookV2DeployHelp
 
         vm.expectRevert(abi.encodeWithSelector(VolumeDynamicFeeHook.InvalidStableDecimals.selector, uint8(8)));
         _deployHarness(tiers, 0, owner, owner, 1, 8);
+    }
+
+    function test_stable_decimals_18_converts_to_usd6_by_division() public {
+        uint24[] memory tiers = _defaultFeeTiersV2();
+        VolumeDynamicFeeHookAdminHarness h18 = _deployHarness(tiers, 0, owner, owner, 1, 18);
+        PoolKey memory key18 = _poolKey(address(h18));
+        manager.callAfterInitialize(h18, key18);
+
+        SwapParams memory params = SwapParams({zeroForOne: true, amountSpecified: -1, sqrtPriceLimitX96: 0});
+        BalanceDelta delta = toBalanceDelta(-int128(6e18), int128(57e17));
+        manager.callAfterSwapWithParams(h18, key18, params, delta);
+
+        (uint64 periodVol,,,) = h18.unpackedState();
+        assertEq(periodVol, 6_000_000, "18-dec stable amount must be converted to USD6 with division path");
     }
 
     function test_receive_reverts() public {

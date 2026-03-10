@@ -296,6 +296,10 @@ for n in \
   EMERGENCY_CONFIRM_PERIODS; do
   require_uint "$n"
 done
+if (( EMERGENCY_FLOOR_CLOSEVOL_USD6 == 0 )); then
+  echo "ERROR: EMERGENCY_FLOOR_CLOSEVOL_USD6 must be > 0." >&2
+  exit 1
+fi
 
 # Human-friendly percent input in config (10 means 10%).
 if ! [[ "${HOOK_FEE_PERCENT}" =~ ^[0-9]+$ ]]; then

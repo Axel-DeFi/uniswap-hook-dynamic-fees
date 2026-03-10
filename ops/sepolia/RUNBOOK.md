@@ -43,6 +43,7 @@ ops/sepolia/scripts/emergency.sh
 ### HookFee claim settlement
 
 - Use `claimHookFees(...)` / `claimAllHookFees(...)` as owner.
+- `claimAllHookFees(...)` has no recipient overload; full claim always pays to current `hookFeeRecipient`.
 - Payout path is PoolManager accounting withdrawal: `unlock` -> `burn` -> `take`.
 - Recipient must match current `hookFeeRecipient`.
 
@@ -70,10 +71,14 @@ ops/sepolia/scripts/emergency.sh
 ## Accepted governance risks
 
 - `setHookFeeRecipient(...)` remains immediate by design.
+- No-op recipient update does not emit `HookFeeRecipientUpdated`.
 - This is accepted owner-key risk; mitigation is operational in current scope.
 - Production owner must be multisig; EOA owner is acceptable only for local/dev/test.
 - Hot-wallet owner usage is unacceptable for production.
 - Owner key custody should be cold/hardware.
+
+Controller safety note:
+- `emergencyFloorCloseVolUsd6` must remain strictly greater than zero.
 
 ## Monitoring and response
 

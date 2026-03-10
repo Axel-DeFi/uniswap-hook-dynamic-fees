@@ -56,6 +56,9 @@ All values are loaded from environment variables (defaults + scenario overlay + 
 - `EMERGENCY_FLOOR_CLOSEVOL_USD6`
 - `EMERGENCY_CONFIRM_PERIODS`
 
+Controller constraint notes:
+- `EMERGENCY_FLOOR_CLOSEVOL_USD6` must be strictly greater than zero.
+
 ## Budget safety keys
 
 - `BUDGET_MIN_ETH_WEI`

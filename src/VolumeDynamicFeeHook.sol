@@ -116,7 +116,7 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
     struct ControllerParams {
         uint64 minCloseVolToCashUsd6;
         uint16 upRToCashBps;
-        // Configured hold length N; effective fully protected periods are N - 1 (decrement happens at period close start).
+        // Configured hold length N; effective fully protected periods are N - 1 (N = 1 gives zero extra hold protection).
         uint8 cashHoldPeriods;
         uint64 minCloseVolToExtremeUsd6;
         uint16 upRToExtremeBps;
@@ -316,7 +316,6 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
     Currency public immutable stableCurrency;
 
     bool internal immutable _stableIsCurrency0;
-    bool internal immutable _scaleIsMul;
     uint64 internal immutable _stableScale;
 
     // -----------------------------------------------------------------------
@@ -342,7 +341,7 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
     /// @param _cashTier Tier value assigned to cash regime.
     /// @param _minCloseVolToCashUsd6 Minimum close volume for floor->cash transition.
     /// @param _upRToCashBps Ratio threshold for floor->cash transition.
-    /// @param _cashHoldPeriods Configured cash hold length `N` (effective fully protected periods are `N - 1`).
+    /// @param _cashHoldPeriods Configured cash hold length `N` (effective fully protected periods are `N - 1`; `N = 1` gives zero extra hold protection).
     /// @param _extremeTier Tier value assigned to extreme regime.
     /// @param _minCloseVolToExtremeUsd6 Minimum close volume for cash->extreme transition.
     /// @param _upRToExtremeBps Ratio threshold for cash->extreme transition.
@@ -352,7 +351,7 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
     /// @param _downExtremeConfirmPeriods Confirmation periods for extreme->cash transition.
     /// @param _downRFromCashBps Ratio threshold for cash->floor transition.
     /// @param _downCashConfirmPeriods Confirmation periods for cash->floor transition.
-    /// @param _emergencyFloorCloseVolUsd6 Emergency floor trigger threshold.
+    /// @param _emergencyFloorCloseVolUsd6 Emergency floor trigger threshold (must be strictly greater than zero).
     /// @param _emergencyConfirmPeriods Consecutive confirmations for emergency floor trigger.
     constructor(
         IPoolManager _poolManager,
@@ -406,13 +405,8 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
             revert InvalidStableDecimals(stableDecimals);
         }
 
-        if (stableDecimals == 6) {
-            _scaleIsMul = true;
-            _stableScale = 1;
-        } else {
-            _scaleIsMul = false;
-            _stableScale = 1_000_000_000_000;
-        }
+        if (stableDecimals == 6) _stableScale = 1;
+        else _stableScale = 1_000_000_000_000;
 
         _setTimingParamsInternal(_periodSeconds, _emaPeriods, _lullResetSeconds, _deadbandBps);
         _setOwnerInternal(ownerAddr);
@@ -608,7 +602,7 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
 
                 uint8 fromFeeIdx = f;
                 uint24 fromFee = _feeTier(fromFeeIdx);
-                (uint8 nf, uint8 nh, uint8 nu, uint8 nd, uint8 ne,, uint8 reasonCode) =
+                (uint8 nf, uint8 nh, uint8 nu, uint8 nd, uint8 ne, uint8 reasonCode) =
                     _computeNextFeeIdxV2(f, closeVol, ema, bootstrapV2, hold, upStreak, down, emergency);
                 f = nf;
                 hold = nh;
@@ -637,9 +631,6 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
             feeChanged = feeIdx != oldFeeIdx;
 
             periodStart = periodStart + periods * uint64(_config.periodSeconds);
-            if (periodStart > nowTs) {
-                periodStart = nowTs;
-            }
 
             periodVol = 0;
             _activatePendingMinCountedSwapUsd6();
@@ -956,8 +947,10 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
     /// @notice Updates HookFee recipient.
     /// @dev Recipient may be zero only when HookFee percent is zero.
     /// @dev Change is immediate by design (no timelock).
+    /// @dev No-op updates are ignored and do not emit `HookFeeRecipientUpdated`.
     function setHookFeeRecipient(address newRecipient) external onlyOwner {
         address oldRecipient = _hookFeeRecipient;
+        if (oldRecipient == newRecipient) return;
         _setHookFeeRecipientInternal(newRecipient);
         emit HookFeeRecipientUpdated(oldRecipient, newRecipient);
     }
@@ -1073,7 +1066,7 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
 
     /// @notice Updates controller transition parameters while paused.
     /// @dev Hold counters are decremented at the start of each closed period, so configured hold `N` yields `N - 1`
-    /// fully protected periods.
+    /// fully protected periods (`N = 1` means zero extra hold protection).
     function setControllerParams(ControllerParams calldata p) external onlyOwner whenPaused {
         _setControllerParamsInternal(p);
         emit ControllerParamsUpdated(
@@ -1204,13 +1197,6 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
         _claimHookFeesInternal(_hookFeeRecipient, _hookFees0, _hookFees1);
     }
 
-    /// @notice Claims all accrued HookFees to explicit recipient.
-    /// @dev `to` must equal currently configured `hookFeeRecipient`.
-    /// @dev Uses PoolManager accounting withdrawal flow (`unlock` -> `burn` -> `take`) to transfer funds to recipient.
-    function claimAllHookFees(address to) external onlyOwner {
-        _claimHookFeesInternal(to, _hookFees0, _hookFees1);
-    }
-
     /// @inheritdoc IUnlockCallback
     /// @dev Restricted to PoolManager and used only for HookFee claim settlement.
     function unlockCallback(bytes calldata data) external override onlyPoolManager returns (bytes memory) {
@@ -1313,6 +1299,8 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
         if (p.emergencyConfirmPeriods == 0 || p.emergencyConfirmPeriods > MAX_EMERGENCY_STREAK) {
             revert InvalidConfirmPeriods();
         }
+        // Emergency floor threshold at zero would force permanent trigger semantics.
+        if (p.emergencyFloorCloseVolUsd6 == 0) revert InvalidConfig();
         // Cross-parameter consistency guards.
         if (p.minCloseVolToCashUsd6 > p.minCloseVolToExtremeUsd6) revert InvalidConfig();
         if (p.upRToCashBps > p.upRToExtremeBps) revert InvalidConfig();
@@ -1563,10 +1551,6 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
 
     function _toUsd6(uint256 stableAmount) internal view returns (uint256) {
         if (_stableScale == 1) return stableAmount;
-        if (_scaleIsMul) {
-            if (stableAmount > type(uint256).max / _stableScale) return type(uint256).max;
-            return stableAmount * _stableScale;
-        }
         return stableAmount / _stableScale;
     }
 
@@ -1612,7 +1596,6 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
             uint8 newUpExtremeStreak,
             uint8 newDownStreak,
             uint8 newEmergencyStreak,
-            bool changed,
             uint8 reasonCode
         )
     {
@@ -1647,7 +1630,6 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
                 newUpExtremeStreak,
                 newDownStreak,
                 newEmergencyStreak,
-                true,
                 REASON_EMERGENCY_FLOOR
             );
         }
@@ -1679,7 +1661,6 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
                     newUpExtremeStreak,
                     newDownStreak,
                     newEmergencyStreak,
-                    true,
                     REASON_JUMP_CASH
                 );
             }
@@ -1718,7 +1699,6 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
                     newUpExtremeStreak,
                     newDownStreak,
                     newEmergencyStreak,
-                    true,
                     REASON_JUMP_EXTREME
                 );
             }
@@ -1734,7 +1714,6 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
                 newUpExtremeStreak,
                 newDownStreak,
                 newEmergencyStreak,
-                false,
                 REASON_HOLD
             );
         }
@@ -1767,7 +1746,6 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
                         newUpExtremeStreak,
                         newDownStreak,
                         newEmergencyStreak,
-                        true,
                         REASON_DOWN_TO_CASH
                     );
                 }
@@ -1799,7 +1777,6 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
                         newUpExtremeStreak,
                         newDownStreak,
                         newEmergencyStreak,
-                        true,
                         REASON_DOWN_TO_FLOOR
                     );
                 }
