@@ -1,5 +1,15 @@
 # CHANGELOG
 
+## v2.0.1 - 2026-03-10
+
+### Packaging cleanup
+- Kept gas artifacts only inside the final audit archive bundle.
+
+## v2.0.0 - 2026-03-10
+
+### Final hardening baseline
+- Synced dust-threshold defaults, controller checks, documentation, and audit bundle state for the hardened baseline.
+
 ## v1.1.0 - 2026-02-17
 
 ### Immediate pause/unpause fee application

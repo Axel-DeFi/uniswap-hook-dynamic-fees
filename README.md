@@ -44,6 +44,7 @@
 
 - Specification: `docs/SPEC.md`
 - FAQ: `docs/FAQ.md`
+- Release process: `docs/RELEASE.md`
 - Scripts and deployment flow: `scripts/README.md`
 - Local ops runbook: `ops/local/RUNBOOK.md`
 - Sepolia ops runbook: `ops/sepolia/RUNBOOK.md`
@@ -73,6 +74,15 @@ forge test --offline --match-path 'ops/tests/invariant/*.sol' --match-contract V
 forge test --offline --match-path 'ops/tests/invariant/*.sol' --match-contract VolumeDynamicFeeHookInvariant_Stable0_Tick60
 forge test --offline --match-path 'ops/tests/invariant/*.sol' --match-contract VolumeDynamicFeeHookInvariant_Stable1_Tick60
 ```
+
+## Release versioning
+
+```bash
+scripts/release/check.sh
+scripts/release/cut.sh --bump patch --push
+```
+
+`VERSION`, git tag `vX.Y.Z`, and `CHANGELOG.md` heading are enforced as a single source of truth.
 
 ## License
 

@@ -44,6 +44,13 @@ Uses:
 ./scripts/hook_status.sh --chain <chain> --watch-seconds 15
 ```
 
+### Release helpers
+
+```bash
+scripts/release/check.sh
+scripts/release/cut.sh --bump patch --push
+```
+
 ## Operational notes
 
 - `pause()`/`unpause()` are freeze/resume semantics (not swap stop, not HookFee stop).
