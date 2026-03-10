@@ -13,6 +13,7 @@ import {VolumeDynamicFeeHook} from "src/VolumeDynamicFeeHook.sol";
 import {ConfigLoader} from "../../shared/lib/ConfigLoader.sol";
 import {BudgetLib} from "../../shared/lib/BudgetLib.sol";
 import {HookValidationLib} from "../../shared/lib/HookValidationLib.sol";
+import {NativeRecipientValidationLib} from "../../shared/lib/NativeRecipientValidationLib.sol";
 import {JsonReportLib} from "../../shared/lib/JsonReportLib.sol";
 import {LoggingLib} from "../../shared/lib/LoggingLib.sol";
 import {OpsTypes} from "../../shared/types/OpsTypes.sol";
@@ -27,12 +28,19 @@ contract EnsureHookSepolia is Script {
         ConfigLoader.validateChainId(cfg.chainIdExpected);
 
         string memory statePath = vm.envOr(
-            "OPS_SEPOLIA_STATE_PATH", string.concat(vm.projectRoot(), "/ops/sepolia/out/state/sepolia.addresses.json")
+            "OPS_SEPOLIA_STATE_PATH",
+            string.concat(vm.projectRoot(), "/ops/sepolia/out/state/sepolia.addresses.json")
         );
 
         if (cfg.hookAddress != address(0) && cfg.hookAddress.code.length > 0) {
             OpsTypes.HookValidation memory existing = HookValidationLib.validateHook(cfg);
             if (existing.ok) {
+                address currentRecipient = VolumeDynamicFeeHook(payable(cfg.hookAddress)).hookFeeRecipient();
+                (bool nativeRecipientOk, string memory nativeRecipientReason) = NativeRecipientValidationLib.validateHookFeeRecipientForNativePool(
+                    cfg.token0, cfg.token1, currentRecipient, cfg.hookAddress
+                );
+                require(nativeRecipientOk, nativeRecipientReason);
+
                 JsonReportLib.writeAddressState(
                     statePath, cfg.poolManager, cfg.hookAddress, cfg.volatileToken, cfg.stableToken
                 );
@@ -54,7 +62,10 @@ contract EnsureHookSepolia is Script {
         uint8 floorIdx = uint8(vm.envUint("FLOOR_IDX"));
         uint8 cashIdx = uint8(vm.envUint("CASH_IDX"));
         uint8 extremeIdx = uint8(vm.envUint("EXTREME_IDX"));
-        require(floorIdx < feeTiers.length && cashIdx < feeTiers.length && extremeIdx < feeTiers.length, "tier index out of range");
+        require(
+            floorIdx < feeTiers.length && cashIdx < feeTiers.length && extremeIdx < feeTiers.length,
+            "tier index out of range"
+        );
         require(floorIdx < cashIdx && cashIdx < extremeIdx, "invalid tier order");
 
         uint24 cashTier = feeTiers[cashIdx];
@@ -98,14 +109,21 @@ contract EnsureHookSepolia is Script {
             uint8(vm.envUint("EMERGENCY_CONFIRM_PERIODS"))
         );
 
-        uint160 flags =
-            uint160(Hooks.AFTER_INITIALIZE_FLAG | Hooks.AFTER_SWAP_FLAG | Hooks.AFTER_SWAP_RETURNS_DELTA_FLAG);
+        uint160 flags = uint160(
+            Hooks.AFTER_INITIALIZE_FLAG | Hooks.AFTER_SWAP_FLAG | Hooks.AFTER_SWAP_RETURNS_DELTA_FLAG
+        );
 
         (address mined, bytes32 salt) =
             HookMiner.find(CREATE2_DEPLOYER, flags, type(VolumeDynamicFeeHook).creationCode, constructorArgs);
 
+        (bool nativeRecipientOk, string memory nativeRecipientReason) = NativeRecipientValidationLib.validateHookFeeRecipientForNativePool(
+            cfg.token0, cfg.token1, hookFeeRecipient, mined
+        );
+        require(nativeRecipientOk, nativeRecipientReason);
+
         vm.startBroadcast(pk);
-        bytes memory creationCodeWithArgs = abi.encodePacked(type(VolumeDynamicFeeHook).creationCode, constructorArgs);
+        bytes memory creationCodeWithArgs =
+            abi.encodePacked(type(VolumeDynamicFeeHook).creationCode, constructorArgs);
         (bool ok,) = CREATE2_DEPLOYER.call(abi.encodePacked(salt, creationCodeWithArgs));
         vm.stopBroadcast();
 

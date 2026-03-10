@@ -47,6 +47,13 @@ Hold counter is decremented at the start of each closed period.
 Configured hold `N` gives `N - 1` fully protected periods.
 `cashHoldPeriods = 1` means zero effective extra hold protection.
 
+## Can one swap close multiple overdue periods?
+
+Yes. If `elapsed / periodSeconds > 1`, one swap can close multiple overdue periods.
+Only the first closed period uses accumulated close volume; later closes in the same transaction use zero close volume.
+This can produce multi-step downward transitions and is accepted as an architectural/economic trade-off in current scope.
+Treat repeated multi-close downward `PeriodClosed` sequences as notable monitoring signals.
+
 ## When should emergency reset be used?
 
 Only when paused and explicit reset is required:
@@ -83,6 +90,12 @@ Production guidance:
 - owner key custody should be cold/hardware,
 - hot-wallet owner usage is unacceptable for production,
 - recipient-change event monitoring is mandatory.
+
+## Do native-asset pools require a native-compatible `hookFeeRecipient`?
+
+Yes. If one pool currency is native (`address(0)`), claim payout can include native transfer from the hook.
+Deployment/ensure/preflight flows validate recipient native-payout compatibility; zero-address checks alone are not enough.
+If governance changes `hookFeeRecipient` later, this compatibility requirement must still be preserved.
 
 ## Is `approxLpFeesUsd6` accounting-accurate?
 

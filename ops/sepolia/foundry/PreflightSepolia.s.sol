@@ -3,11 +3,14 @@ pragma solidity ^0.8.26;
 
 import {Script} from "forge-std/Script.sol";
 
+import {VolumeDynamicFeeHook} from "src/VolumeDynamicFeeHook.sol";
+
 import {ConfigLoader} from "../../shared/lib/ConfigLoader.sol";
 import {TokenValidationLib} from "../../shared/lib/TokenValidationLib.sol";
 import {BudgetLib} from "../../shared/lib/BudgetLib.sol";
 import {RangeSafetyLib} from "../../shared/lib/RangeSafetyLib.sol";
 import {HookValidationLib} from "../../shared/lib/HookValidationLib.sol";
+import {NativeRecipientValidationLib} from "../../shared/lib/NativeRecipientValidationLib.sol";
 import {PoolStateLib} from "../../shared/lib/PoolStateLib.sol";
 import {JsonReportLib} from "../../shared/lib/JsonReportLib.sol";
 import {LoggingLib} from "../../shared/lib/LoggingLib.sol";
@@ -42,6 +45,29 @@ contract PreflightSepolia is Script {
             hookValidation.reason = "hook not set";
         }
 
+        if (hookValidation.ok) {
+            address hookFeeRecipient;
+            address payoutSender;
+            bool hookDeployed = cfg.hookAddress != address(0) && cfg.hookAddress.code.length > 0;
+
+            if (hookDeployed) {
+                hookFeeRecipient = VolumeDynamicFeeHook(payable(cfg.hookAddress)).hookFeeRecipient();
+                payoutSender = cfg.hookAddress;
+            } else {
+                address owner = vm.envOr("OWNER", cfg.deployer);
+                hookFeeRecipient = vm.envOr("HOOK_FEE_ADDRESS", owner);
+                payoutSender = address(this);
+            }
+
+            (bool nativeRecipientOk, string memory nativeRecipientReason) = NativeRecipientValidationLib.validateHookFeeRecipientForNativePool(
+                cfg.token0, cfg.token1, hookFeeRecipient, payoutSender
+            );
+            if (!nativeRecipientOk) {
+                hookValidation.ok = false;
+                hookValidation.reason = nativeRecipientReason;
+            }
+        }
+
         bool ok = tokenValidation.ok && budget.ok && range.ok && hookValidation.ok;
 
         string memory reportPath = vm.envOr(
@@ -50,15 +76,7 @@ contract PreflightSepolia is Script {
         );
 
         JsonReportLib.writePreflightReport(
-            reportPath,
-            "sepolia-preflight",
-            cfg,
-            tokenValidation,
-            budget,
-            range,
-            hookValidation,
-            snapshot,
-            ok
+            reportPath, "sepolia-preflight", cfg, tokenValidation, budget, range, hookValidation, snapshot, ok
         );
 
         if (!ok) {

@@ -51,6 +51,9 @@ Timelock visibility is intentional. The main exposed effect is HookFee timing; L
 - `claimAllHookFees(...)` has no recipient overload; full claim always pays to current `hookFeeRecipient`.
 - Payout path is PoolManager accounting withdrawal: `unlock` -> `burn` -> `take`.
 - Recipient must match current `hookFeeRecipient`.
+- If pool includes native currency, recipient must be compatible with native payout from hook sender context.
+- Sepolia preflight/ensure flow validates this compatibility before deploy/reuse success.
+- If governance later changes recipient in a native-asset pool, preserve this compatibility invariant.
 
 ## Runtime semantics reminder
 
@@ -72,6 +75,8 @@ Timelock visibility is intentional. The main exposed effect is HookFee timing; L
 - No timelock for threshold updates (project decision).
 - Recalibration target cadence: every 5 days from offchain analytics.
 - This is mitigation, not a formal proof against all fragmentation patterns on cheap L2.
+- Overdue catch-up can close multiple periods in one swap; only the first close uses accumulated close volume and later closes use zero close volume.
+- Multi-close downward sequences are accepted architectural/economic behavior in this scope and should be monitored as notable routing/yield events.
 
 ## Accepted governance risks
 

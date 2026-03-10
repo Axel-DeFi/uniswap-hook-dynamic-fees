@@ -61,7 +61,11 @@ scripts/release/cut.sh --bump patch --push
 - Threshold updates intentionally have no timelock; recalibration target cadence is 5 days offchain.
 - Claim payout path uses PoolManager accounting withdrawal (`unlock` -> `burn` -> `take`).
 - Full claim path is `claimAllHookFees()` only; recipient override is intentionally unavailable.
+- For native-asset pools (`token0 == address(0)` or `token1 == address(0)`), deploy/ensure/preflight validates that `HOOK_FEE_ADDRESS` can receive native payout from hook sender context.
+- Zero-address recipient checks alone are insufficient in native-asset pools; if governance changes recipient later, native compatibility must still hold.
 - `approxLpFeesUsd6` is approximate analytics, not accounting output.
 - Pool key uses strict dynamic fee flag matching (`key.fee == LPFeeLibrary.DYNAMIC_FEE_FLAG`).
 - `emergencyFloorCloseVolUsd6` must be configured as strictly positive.
 - Production owner baseline: multisig + cold/hardware key custody; hot-wallet ownership is not acceptable.
+- Overdue catch-up can close multiple periods in one swap; only the first close uses accumulated close volume while later closes use zero close volume.
+- Multi-close downward sequences are accepted architectural/economic behavior in current scope and should be monitored.

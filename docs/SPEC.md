@@ -87,6 +87,15 @@ Events:
 - Equality (`lullResetSeconds == periodSeconds`) is rejected.
 - Upper bound remains `lullResetSeconds <= periodSeconds * MAX_LULL_PERIODS`.
 
+## Overdue catch-up semantics (accepted behavior)
+
+- A single swap can close multiple overdue periods when `elapsed / periodSeconds > 1`.
+- In this catch-up path, only the first closed period uses accumulated close volume from the open period.
+- Subsequent closed periods in the same transaction use `closeVol = 0`.
+- Under these semantics, one transaction can move fee state down by multiple steps (`REASON_DOWN_TO_CASH` / `REASON_DOWN_TO_FLOOR`) depending on current counters and thresholds.
+- This is accepted in current scope as an architectural/economic trade-off, primarily affecting LP yield/routing behavior rather than LP principal ownership.
+- Operations should monitor repeated multi-close downward sequences in `PeriodClosed` as notable behavior.
+
 ## Hold semantics
 
 - Hold counter is decremented at the start of each closed period, before hold protection checks.
@@ -234,6 +243,11 @@ Claim settlement path:
 2. callback burns hook ERC6909 claims (`burn`),
 3. callback withdraws underlying currency (`take`) to `HookFeeRecipient`.
 
+Native recipient compatibility:
+- For pools with native currency in `token0` or `token1`, claim payout can include native transfer from the hook.
+- Deployment/ensure/preflight flows validate that configured `hookFeeRecipient` can receive native payout from hook sender context.
+- Zero-address recipient checks alone are insufficient for native-asset pools.
+
 Rescue surface:
 - `rescueToken(Currency,uint256)` (non-pool currencies only)
 - `rescueETH(uint256)`
@@ -254,6 +268,7 @@ All admin state transitions emit events, including:
 - `setHookFeeRecipient(...)` remains immediate (no timelock), accepted as owner governance/key risk.
 - Mitigation is operational (key management + monitoring), not contract-level in this patch scope.
 - wash-trading / extreme-tier manipulation remains a residual economic risk (more realistic as competitor-funded distortion/DoS in adversarial routing contexts, especially on cheap environments).
+- multi-period catch-up with first-period volume + subsequent zero-volume closes remains accepted as architectural/economic behavior in this scope.
 
 ## Operational requirements
 
@@ -262,6 +277,7 @@ All admin state transitions emit events, including:
 - owner key custody should use cold/hardware wallet standards.
 - monitor `PeriodClosed` and alert on repeated abnormal regime escalations.
 - monitor recipient-change events (`HookFeeRecipientUpdated`) as a mandatory operational control.
+- for native-asset pools, any governance update to `hookFeeRecipient` must preserve native payout compatibility.
 - EMA preservation across `setFeeTiersAndRoles(...)` is intentional for minor fee-ladder maintenance updates.
 - for material fee-ladder or controller reconfiguration, keep paused, apply maintenance updates, run explicit emergency reset-to-floor, then unpause.
 

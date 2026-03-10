@@ -13,6 +13,7 @@ import {VolumeDynamicFeeHook} from "src/VolumeDynamicFeeHook.sol";
 
 import {ConfigLoader} from "../../shared/lib/ConfigLoader.sol";
 import {HookValidationLib} from "../../shared/lib/HookValidationLib.sol";
+import {NativeRecipientValidationLib} from "../../shared/lib/NativeRecipientValidationLib.sol";
 import {JsonReportLib} from "../../shared/lib/JsonReportLib.sol";
 import {OpsTypes} from "../../shared/types/OpsTypes.sol";
 
@@ -24,7 +25,8 @@ contract DeployHookLocal is Script {
         ConfigLoader.validateChainId(cfg.chainIdExpected);
 
         string memory statePath = vm.envOr(
-            "OPS_LOCAL_STATE_PATH", string.concat(vm.projectRoot(), "/ops/local/out/state/local.addresses.json")
+            "OPS_LOCAL_STATE_PATH",
+            string.concat(vm.projectRoot(), "/ops/local/out/state/local.addresses.json")
         );
 
         address hookAddress = cfg.hookAddress;
@@ -32,6 +34,12 @@ contract DeployHookLocal is Script {
             cfg.hookAddress = hookAddress;
             OpsTypes.HookValidation memory existing = HookValidationLib.validateHook(cfg);
             if (existing.ok) {
+                address currentRecipient = VolumeDynamicFeeHook(payable(hookAddress)).hookFeeRecipient();
+                (bool nativeRecipientOk, string memory nativeRecipientReason) = NativeRecipientValidationLib.validateHookFeeRecipientForNativePool(
+                    cfg.token0, cfg.token1, currentRecipient, hookAddress
+                );
+                require(nativeRecipientOk, nativeRecipientReason);
+
                 JsonReportLib.writeAddressState(
                     statePath, cfg.poolManager, hookAddress, cfg.volatileToken, cfg.stableToken
                 );
@@ -50,7 +58,10 @@ contract DeployHookLocal is Script {
         uint8 cashIdx = uint8(vm.envUint("CASH_IDX"));
         uint8 extremeIdx = uint8(vm.envUint("EXTREME_IDX"));
 
-        require(floorIdx < feeTiers.length && cashIdx < feeTiers.length && extremeIdx < feeTiers.length, "tier index out of range");
+        require(
+            floorIdx < feeTiers.length && cashIdx < feeTiers.length && extremeIdx < feeTiers.length,
+            "tier index out of range"
+        );
         require(floorIdx < cashIdx && cashIdx < extremeIdx, "invalid tier order");
 
         uint24 cashTier = feeTiers[cashIdx];
@@ -94,14 +105,21 @@ contract DeployHookLocal is Script {
             uint8(vm.envUint("EMERGENCY_CONFIRM_PERIODS"))
         );
 
-        uint160 flags =
-            uint160(Hooks.AFTER_INITIALIZE_FLAG | Hooks.AFTER_SWAP_FLAG | Hooks.AFTER_SWAP_RETURNS_DELTA_FLAG);
+        uint160 flags = uint160(
+            Hooks.AFTER_INITIALIZE_FLAG | Hooks.AFTER_SWAP_FLAG | Hooks.AFTER_SWAP_RETURNS_DELTA_FLAG
+        );
 
         (address mined, bytes32 salt) =
             HookMiner.find(CREATE2_DEPLOYER, flags, type(VolumeDynamicFeeHook).creationCode, constructorArgs);
 
+        (bool nativeRecipientOk, string memory nativeRecipientReason) = NativeRecipientValidationLib.validateHookFeeRecipientForNativePool(
+            cfg.token0, cfg.token1, hookFeeRecipient, mined
+        );
+        require(nativeRecipientOk, nativeRecipientReason);
+
         vm.startBroadcast(pk);
-        bytes memory creationCodeWithArgs = abi.encodePacked(type(VolumeDynamicFeeHook).creationCode, constructorArgs);
+        bytes memory creationCodeWithArgs =
+            abi.encodePacked(type(VolumeDynamicFeeHook).creationCode, constructorArgs);
         (bool ok,) = CREATE2_DEPLOYER.call(abi.encodePacked(salt, creationCodeWithArgs));
         vm.stopBroadcast();
 

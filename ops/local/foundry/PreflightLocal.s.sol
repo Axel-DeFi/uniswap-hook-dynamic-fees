@@ -3,11 +3,14 @@ pragma solidity ^0.8.26;
 
 import {Script} from "forge-std/Script.sol";
 
+import {VolumeDynamicFeeHook} from "src/VolumeDynamicFeeHook.sol";
+
 import {ConfigLoader} from "../../shared/lib/ConfigLoader.sol";
 import {TokenValidationLib} from "../../shared/lib/TokenValidationLib.sol";
 import {BudgetLib} from "../../shared/lib/BudgetLib.sol";
 import {RangeSafetyLib} from "../../shared/lib/RangeSafetyLib.sol";
 import {HookValidationLib} from "../../shared/lib/HookValidationLib.sol";
+import {NativeRecipientValidationLib} from "../../shared/lib/NativeRecipientValidationLib.sol";
 import {PoolStateLib} from "../../shared/lib/PoolStateLib.sol";
 import {JsonReportLib} from "../../shared/lib/JsonReportLib.sol";
 import {LoggingLib} from "../../shared/lib/LoggingLib.sol";
@@ -60,6 +63,28 @@ contract PreflightLocal is Script {
             hookValidation.reason = hookConfigured ? "stale hook address (no code)" : "HOOK_ADDRESS missing";
         }
 
+        if (hookValidation.ok) {
+            address hookFeeRecipient;
+            address payoutSender;
+
+            if (hookDeployed) {
+                hookFeeRecipient = VolumeDynamicFeeHook(payable(cfg.hookAddress)).hookFeeRecipient();
+                payoutSender = cfg.hookAddress;
+            } else {
+                address owner = vm.envOr("OWNER", cfg.deployer);
+                hookFeeRecipient = vm.envOr("HOOK_FEE_ADDRESS", owner);
+                payoutSender = address(this);
+            }
+
+            (bool nativeRecipientOk, string memory nativeRecipientReason) = NativeRecipientValidationLib.validateHookFeeRecipientForNativePool(
+                cfg.token0, cfg.token1, hookFeeRecipient, payoutSender
+            );
+            if (!nativeRecipientOk) {
+                hookValidation.ok = false;
+                hookValidation.reason = nativeRecipientReason;
+            }
+        }
+
         bool ok = tokenValidation.ok && budget.ok && range.ok && hookValidation.ok;
 
         string memory reportPath = vm.envOr(
@@ -68,15 +93,7 @@ contract PreflightLocal is Script {
         );
 
         JsonReportLib.writePreflightReport(
-            reportPath,
-            "local-preflight",
-            cfg,
-            tokenValidation,
-            budget,
-            range,
-            hookValidation,
-            snapshot,
-            ok
+            reportPath, "local-preflight", cfg, tokenValidation, budget, range, hookValidation, snapshot, ok
         );
 
         if (!ok) {

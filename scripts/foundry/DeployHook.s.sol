@@ -7,6 +7,7 @@ import {Hooks} from "@uniswap/v4-core/src/libraries/Hooks.sol";
 import {HookMiner} from "@uniswap/v4-hooks-public/src/utils/HookMiner.sol";
 
 import {VolumeDynamicFeeHook} from "src/VolumeDynamicFeeHook.sol";
+import {NativeRecipientValidationLib} from "ops/shared/lib/NativeRecipientValidationLib.sol";
 
 /// @notice Mines the hook address flags and deploys VolumeDynamicFeeHook via CREATE2.
 /// @dev Constructor args (including v2 controller params) are pre-encoded off-chain and passed via CONSTRUCTOR_ARGS_HEX.
@@ -18,12 +19,54 @@ contract DeployHook is Script {
         bytes memory constructorArgs = vm.envBytes("CONSTRUCTOR_ARGS_HEX");
         require(constructorArgs.length > 0, "DeployHook: CONSTRUCTOR_ARGS_HEX missing");
 
+        (, address poolCurrency0, address poolCurrency1,,,,,,,,,,, address hookFeeRecipient,,,,,,,,,,,,,,) = abi.decode(
+            constructorArgs,
+            (
+                address,
+                address,
+                address,
+                int24,
+                address,
+                uint8,
+                uint8,
+                uint24[],
+                uint32,
+                uint8,
+                uint16,
+                uint32,
+                address,
+                address,
+                uint16,
+                uint24,
+                uint64,
+                uint16,
+                uint8,
+                uint24,
+                uint64,
+                uint16,
+                uint8,
+                uint8,
+                uint16,
+                uint8,
+                uint16,
+                uint8,
+                uint64,
+                uint8
+            )
+        );
+
         // Hook must have flags encoded in its address.
-        uint160 flags =
-            uint160(Hooks.AFTER_INITIALIZE_FLAG | Hooks.AFTER_SWAP_FLAG | Hooks.AFTER_SWAP_RETURNS_DELTA_FLAG);
+        uint160 flags = uint160(
+            Hooks.AFTER_INITIALIZE_FLAG | Hooks.AFTER_SWAP_FLAG | Hooks.AFTER_SWAP_RETURNS_DELTA_FLAG
+        );
 
         (address minedHookAddress, bytes32 salt) =
             HookMiner.find(CREATE2_DEPLOYER, flags, type(VolumeDynamicFeeHook).creationCode, constructorArgs);
+
+        (bool nativeRecipientOk, string memory nativeRecipientReason) = NativeRecipientValidationLib.validateHookFeeRecipientForNativePool(
+            poolCurrency0, poolCurrency1, hookFeeRecipient, minedHookAddress
+        );
+        require(nativeRecipientOk, nativeRecipientReason);
 
         bytes memory creationCodeWithArgs =
             abi.encodePacked(type(VolumeDynamicFeeHook).creationCode, constructorArgs);
