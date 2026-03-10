@@ -18,6 +18,11 @@ Yes, Owner can update runtime config onchain:
 No.
 - LP fee belongs to pool accounting.
 - HookFee is an extra trader-facing fee returned from `afterSwap` delta.
+- HookFee uses an approximate LP-fee estimate from the unspecified side, so exact-input vs exact-output can diverge by design.
+
+## Is `proposeNewOwner(currentOwner)` allowed?
+
+No. `proposeNewOwner(...)` rejects both zero address and current owner.
 
 ## Does HookFee use `poolManager.take()` in swap path?
 
@@ -33,6 +38,13 @@ Actual payout happens later in claim flow via `unlock` -> `burn` -> `take`.
 `pause()` freezes controller evolution but does not reset to floor by default.
 It preserves fee regime and EMA, clears only open period volume, and restarts period clock.
 It does not stop swaps and does not stop HookFee accrual.
+The active LP fee tier stays frozen until `unpause()` or explicit paused-mode emergency reset.
+
+## How do hold periods work?
+
+Hold counter is decremented at the start of each closed period.
+Configured hold `N` gives `N - 1` fully protected periods.
+`cashHoldPeriods = 1` means zero effective extra hold protection.
 
 ## When should emergency reset be used?
 

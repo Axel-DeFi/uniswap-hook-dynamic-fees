@@ -14,13 +14,17 @@
   - `afterSwapReturnDelta`
 - Administrative role is `Owner`.
 - `HookFeeRecipient` is a separate accounting entity from `Owner`.
+- Ownership transfer is two-step; `proposeNewOwner(...)` rejects zero address and current owner.
 - `setHookFeeRecipient(...)` is immediate (no timelock) by design.
 - `HookFeePercent` is timelocked for 48 hours and capped at 10% (hard constant).
+- HookFee is based on an approximate LP-fee estimate from the unspecified side; exact-input vs exact-output can diverge by design.
 - HookFee accrual is persisted as PoolManager ERC6909 claims and claimed via `unlock` + `burn` + `take`.
-- `pause()/unpause()` are freeze/resume only (no automatic floor reset, no swap stop, no HookFee stop).
+- `pause()/unpause()` freeze/resume regulator transitions at the current LP fee tier (no automatic floor reset, no swap stop, no HookFee stop).
 - Emergency resets are explicit and available only while paused:
   - `emergencyResetToFloor()`
   - `emergencyResetToCash()`
+- Timing guardrail: `lullResetSeconds` must be strictly greater than `periodSeconds`.
+- Hold semantics: configured `cashHoldPeriods = N` gives `N - 1` fully protected periods (`N = 1` means zero effective hold protection).
 - Telemetry fields are explicit:
   - counted volume threshold `minCountedSwapUsd6` (default `4e6`, bounded to `1e6..10e6`)
   - threshold update is pending-state only and activates from next period boundary (no timelock by design)

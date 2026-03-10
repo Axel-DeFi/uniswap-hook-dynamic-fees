@@ -234,6 +234,14 @@ contract VolumeDynamicFeeHookConfigAndEdgesTest is Test, VolumeDynamicFeeHookV2D
         );
     }
 
+    function test_constructor_reverts_when_lullReset_equals_period() public {
+        DeployCfg memory cfg = _defaultCfg();
+        cfg.lullResetSeconds = cfg.periodSeconds;
+
+        vm.expectRevert(VolumeDynamicFeeHook.InvalidConfig.selector);
+        _deploy(cfg);
+    }
+
     function test_constructor_reverts_when_stable_not_in_pool() public {
         DeployCfg memory cfg = _defaultCfg();
         cfg.stable = address(0x0000000000000000000000000000000000003333);

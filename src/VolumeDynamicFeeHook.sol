@@ -116,10 +116,12 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
     struct ControllerParams {
         uint64 minCloseVolToCashUsd6;
         uint16 upRToCashBps;
+        // Configured hold length N; effective fully protected periods are N - 1 (decrement happens at period close start).
         uint8 cashHoldPeriods;
         uint64 minCloseVolToExtremeUsd6;
         uint16 upRToExtremeBps;
         uint8 upExtremeConfirmPeriods;
+        // Same semantics as cash hold: configured N gives N - 1 fully protected periods.
         uint8 extremeHoldPeriods;
         uint16 downRFromExtremeBps;
         uint8 downExtremeConfirmPeriods;
@@ -333,14 +335,14 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
     /// @param _periodSeconds Period length in seconds.
     /// @param _emaPeriods EMA denominator.
     /// @param _deadbandBps Deadband threshold in bps.
-    /// @param _lullResetSeconds Lull-reset inactivity threshold in seconds.
+    /// @param _lullResetSeconds Lull-reset inactivity threshold in seconds. Must be strictly greater than `_periodSeconds`.
     /// @param ownerAddr Initial owner address.
     /// @param hookFeeRecipientAddr Recipient for claimed HookFees.
     /// @param hookFeePercent_ Initial HookFee percent of LP fee.
     /// @param _cashTier Tier value assigned to cash regime.
     /// @param _minCloseVolToCashUsd6 Minimum close volume for floor->cash transition.
     /// @param _upRToCashBps Ratio threshold for floor->cash transition.
-    /// @param _cashHoldPeriods Hold periods after entering cash.
+    /// @param _cashHoldPeriods Configured cash hold length `N` (effective fully protected periods are `N - 1`).
     /// @param _extremeTier Tier value assigned to extreme regime.
     /// @param _minCloseVolToExtremeUsd6 Minimum close volume for cash->extreme transition.
     /// @param _upRToExtremeBps Ratio threshold for cash->extreme transition.
@@ -670,6 +672,7 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
     // -----------------------------------------------------------------------
 
     /// @notice Returns whether controller is paused.
+    /// @dev Paused mode freezes regulator transitions only; swaps and HookFee accrual remain active.
     function isPaused() public view returns (bool) {
         return ((_state >> PAUSED_BIT) & 1) == 1;
     }
@@ -719,7 +722,8 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
         return _config.upRToCashBps;
     }
 
-    /// @notice Returns hold periods after entering cash regime.
+    /// @notice Returns configured cash hold length `N` after entering cash regime.
+    /// @dev Effective fully protected hold periods are `N - 1` because hold is decremented at period-close start.
     function cashHoldPeriods() public view returns (uint8) {
         return _config.cashHoldPeriods;
     }
@@ -790,6 +794,7 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
     }
 
     /// @notice Returns lull reset threshold in seconds.
+    /// @dev This value is always strictly greater than `periodSeconds`.
     function lullResetSeconds() public view returns (uint32) {
         return _config.lullResetSeconds;
     }
@@ -919,8 +924,9 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
     // -----------------------------------------------------------------------
 
     /// @notice Proposes a new owner address. Acceptance must be performed by pending owner.
+    /// @dev Rejects zero address and current owner to avoid self-pending-owner traps.
     function proposeNewOwner(address newOwner) external onlyOwner {
-        if (newOwner == address(0)) revert InvalidOwner();
+        if (newOwner == address(0) || newOwner == _owner) revert InvalidOwner();
         if (_pendingOwner != address(0)) revert PendingOwnerExists();
         _pendingOwner = newOwner;
         emit OwnerTransferStarted(_owner, newOwner);
@@ -1066,6 +1072,8 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
     }
 
     /// @notice Updates controller transition parameters while paused.
+    /// @dev Hold counters are decremented at the start of each closed period, so configured hold `N` yields `N - 1`
+    /// fully protected periods.
     function setControllerParams(ControllerParams calldata p) external onlyOwner whenPaused {
         _setControllerParamsInternal(p);
         emit ControllerParamsUpdated(
@@ -1086,6 +1094,7 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
     }
 
     /// @notice Updates timing and smoothing parameters while paused.
+    /// @dev Requires `lullResetSeconds_ > periodSeconds_`; equality is rejected.
     /// @dev Does not reset fee regime, EMA, or streak counters; only starts a fresh open period.
     function setTimingParams(
         uint32 periodSeconds_,
@@ -1100,6 +1109,7 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
 
     /// @notice Enters paused freeze mode.
     /// @dev Keeps feeIdx, EMA and streak counters unchanged. Clears only open-period volume and restarts period clock.
+    /// @dev Freezes regulator transitions at the last active LP fee tier.
     /// @dev Does not disable swaps and does not disable HookFee accrual/claim accounting.
     function pause() external onlyOwner {
         if (isPaused()) return;
@@ -1134,6 +1144,7 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
 
     /// @notice Exits paused freeze mode.
     /// @dev Continues from the same fee regime and counters, with a fresh open period.
+    /// @dev LP fee tier stays at the frozen value until normal transitions run after unpause.
     /// @dev Resuming does not retroactively alter HookFee accrual that happened while paused.
     function unpause() external onlyOwner {
         if (!isPaused()) return;
@@ -1277,7 +1288,7 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
         if (periodSeconds_ == 0) revert InvalidConfig();
         if (emaPeriods_ < 2 || emaPeriods_ > MAX_EMA_PERIODS) revert InvalidConfig();
         if (deadbandBps_ > 5_000) revert InvalidConfig();
-        if (lullResetSeconds_ < periodSeconds_) revert InvalidConfig();
+        if (lullResetSeconds_ <= periodSeconds_) revert InvalidConfig();
         if (uint256(lullResetSeconds_) > uint256(periodSeconds_) * MAX_LULL_PERIODS) revert InvalidConfig();
 
         _config.periodSeconds = periodSeconds_;
@@ -1489,6 +1500,9 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
         (, emaVolScaled,,,,,,,) = _unpackState(_state);
     }
 
+    /// @notice Accrues per-swap HookFee from an approximate LP-fee estimate.
+    /// @dev Estimation uses the unspecified side selected by the current exact-input/exact-output execution path.
+    /// @dev Small systematic deviations between exact-input and exact-output paths are expected by design.
     function _accrueHookFeeAfterSwap(
         PoolKey calldata key,
         SwapParams calldata params,
@@ -1604,6 +1618,7 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
         newEmergencyStreak = emergencyStreak;
         reasonCode = closeVol == 0 ? REASON_NO_SWAPS : REASON_NO_CHANGE;
 
+        // Hold counter is decremented before protection check; configured hold N gives N - 1 fully protected periods.
         if (newHoldRemaining > 0) {
             unchecked {
                 newHoldRemaining -= 1;

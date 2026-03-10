@@ -1,108 +1,118 @@
-# VolumeDynamicFeeHook v2 — Audit Bundle Update
+# VolumeDynamicFeeHook — Audit Bundle Update (Polishing Patch)
 
 Документ обновлён: 10 марта 2026.
 
 ## Scope
 
-Патч покрывает только согласованный объём:
-- исправления аудиторских замечаний: **Н-04, Н-05, Н-06, Н-09**;
-- обновление default dust threshold: **`minCountedSwapUsd6 = 4e6`**;
-- актуализацию audit bundle по фактическому покрытию локальных и Sepolia-проверок.
+Патч покрывает только согласованный объём после свежего аудита:
+- misconfiguration trap: `lullResetSeconds == periodSeconds`;
+- defensive guard для ownership flow: запрет `proposeNewOwner(currentOwner)`;
+- документирование by-design семантик:
+  - effective hold: `cashHoldPeriods = N` даёт `N - 1` fully protected periods;
+  - HookFee approximation (exact-input / exact-output);
+  - pause mode behavior.
 
-Пункты вне scope этого патча:
-- **Н-01 не изменялся**;
-- timelock для `setHookFeeRecipient(...)` не добавлялся;
-- `_computeNextFeeIdxV2` не переписывался;
-- бизнес-логика вне перечисленных фиксов не расширялась.
+Вне scope и сознательно не менялось:
+- H-01 / timelock для `setHookFeeRecipient(...)`;
+- экономика HookFee;
+- широкая переработка fee-tier state machine;
+- storage layout / `_state` packing.
 
-## Fixed Findings
+## Code Hardening
 
-### Н-04 — non-role `feeIdx` после `setFeeTiersAndRoles(...)`
+### 1) Misconfiguration trap fix (`lullResetSeconds > periodSeconds`)
 
-Исправлено в `src/VolumeDynamicFeeHook.sol`:
-- после `_findTierIdx(...)` добавлена явная проверка, что найденный индекс является одной из ролей (`floorIdx` / `cashIdx` / `extremeIdx`);
-- если индекс найден, но не role-index, `nextFeeIdx` принудительно переводится в `floorIdx`;
-- одновременно сбрасываются `holdRemaining`, `upExtremeStreak`, `downStreak`, `emergencyStreak`.
+Изменено в `src/VolumeDynamicFeeHook.sol`:
+- в `_setTimingParamsInternal(...)` проверка ужесточена до strict inequality:
+  - было: `lullResetSeconds_ < periodSeconds_`;
+  - стало: `lullResetSeconds_ <= periodSeconds_` (revert `InvalidConfig()`).
 
-Результат: инвариант "active fee index всегда role-index" соблюдается после перестройки tiers/roles.
+Результат:
+- конфигурация `lullResetSeconds == periodSeconds` теперь запрещена;
+- исключён режим, где ветка lull-reset может постоянно перехватывать period-close и удерживать контроллер на floor.
 
-### Н-05 — floor-режим не должен сохранять hold/streak baggage
+### 2) Ownership defensive guard (`proposeNewOwner(currentOwner)`)
 
-Исправлено в `src/VolumeDynamicFeeHook.sol`:
-- после вычисления финального `nextFeeIdx` добавлено правило: если `nextFeeIdx == floorIdx`, то `holdRemaining` и все streak counters принудительно обнуляются.
+Изменено в `src/VolumeDynamicFeeHook.sol`:
+- в `proposeNewOwner(address newOwner)` добавлен запрет self-pending-owner:
+  - `if (newOwner == address(0) || newOwner == _owner) revert InvalidOwner();`
 
-Результат: floor-режим всегда стартует в чистом состоянии, независимо от того, был ли старый tier найден.
+Результат:
+- владелец больше не может создать self-pending-owner trap;
+- двухшаговая модель transfer ownership сохранена без изменений.
 
-### Н-06 — активация pending threshold в ветке lull reset
+## Documented-By-Design Semantics
 
-Исправлено в `_afterSwap(...)` (`src/VolumeDynamicFeeHook.sol`):
-- `_activatePendingMinCountedSwapUsd6()` вызывается в ветке `elapsed >= lullResetSeconds`;
-- вызов расположен **до** `periodVol = _addSwapVolumeUsd6(0, delta)`.
+### 3) Hold semantics (`N - 1`)
 
-Результат: первый swap нового периода после lull reset учитывается уже с новым threshold.
+Зафиксировано в NatSpec + docs:
+- hold counter уменьшается в начале каждого closed period;
+- из-за порядка выполнения `cashHoldPeriods = N` даёт `N - 1` fully protected periods;
+- `cashHoldPeriods = 1` даёт нулевую effective hold protection.
 
-### Н-09 — единый source of truth для количества tiers
+### 4) HookFee approximation (exact-input / exact-output)
 
-Исправлено в `src/VolumeDynamicFeeHook.sol`:
-- удалён storage-поле `uint16 public feeTierCount`;
-- добавлен ABI-совместимый getter:
-  - `function feeTierCount() public view returns (uint16)`
-  - возвращает `uint16(_feeTiersByIdx.length)`;
-- bounds check в `feeTiers(uint256 idx)` переведён на `_feeTiersByIdx.length`;
-- `_setFeeTiersAndRolesInternal(...)` больше не пишет отдельный cached count.
+Зафиксировано в NatSpec + docs:
+- HookFee считается по approximate LP-fee estimate;
+- estimate привязан к unspecified side текущего execution path;
+- небольшое систематическое расхождение между exact-input и exact-output является ожидаемым by design;
+- значение подходит для текущей protocol fee logic, но не является accounting-grade replica LP fee.
 
-Результат: устранён риск рассинхронизации двух источников истины.
+### 5) Pause semantics
 
-## Dust Threshold Update
+Зафиксировано в NatSpec + docs:
+- `pause()` замораживает regulator transitions и фиксирует active LP fee tier;
+- swaps не отключаются;
+- HookFee accrual продолжает работать в paused mode;
+- emergency reset функции доступны только в paused mode.
 
-Default значение обновлено до **`4_000_000` (`4e6`, USD6)**:
-- `src/VolumeDynamicFeeHook.sol` (`DEFAULT_MIN_COUNTED_SWAP_USD6`);
-- тесты (`ops/tests/unit`, `ops/tests/integration`);
-- документация: `README.md`, `docs/SPEC.md`, `docs/FAQ.md`, `ops/local/RUNBOOK.md`, `ops/sepolia/RUNBOOK.md`;
-- оффчейн replay-утилита: `scripts/analyze_threshold_replay_v4.py` (baseline default).
+## Tests (Added / Updated)
 
-## Testing Scope
+### Added
 
-### Local / Mock Coverage
+- `ops/tests/unit/VolumeDynamicFeeHook.Admin.t.sol`
+  - `test_setTimingParams_reverts_when_lullReset_equals_period`
+  - `test_owner_transfer_rejects_propose_current_owner`
+  - `test_cashHoldPeriods_one_results_in_zero_effective_hold_protection`
+  - `test_hookFee_approximation_exactInput_vs_exactOutput_paths`
 
-Подтверждённые запуски в этом патче:
+- `ops/tests/unit/VolumeDynamicFeeHook.ConfigAndEdges.t.sol`
+  - `test_constructor_reverts_when_lullReset_equals_period`
+
+### Updated
+
+- `ops/tests/unit/VolumeDynamicFeeHook.Admin.t.sol`
+  - `test_pause_unpause_freeze_resume_semantics`
+    - дополнительно фиксирует, что в paused mode не происходят state-machine transitions (`feeIdx`/`periodStart` freeze, `updateDynamicLPFee` не вызывается), при этом HookFee accrual остаётся активным.
+
+## Documentation Changes
+
+Обновлено и синхронизировано с реализацией:
+- `src/VolumeDynamicFeeHook.sol` (NatSpec);
+- `docs/SPEC.md`;
+- `README.md`;
+- `docs/FAQ.md`.
+
+Ключевые уточнения в документации:
+- strict timing guard: `lullResetSeconds > periodSeconds`;
+- self-pending-owner reject;
+- hold semantics `N - 1`;
+- HookFee approximation semantics;
+- pause mode behavior.
+
+## Validation (Local)
+
+Подтверждённые команды:
 - `forge build` — **ok**;
-- `forge test --offline --match-path 'ops/tests/unit/VolumeDynamicFeeHook.Admin.t.sol'` — **15 passed, 0 failed**;
-- `forge test --offline --match-path 'ops/tests/unit/VolumeDynamicFeeHook.ConfigAndEdges.t.sol'` — **17 passed, 0 failed**;
-- `forge test --offline --match-path 'ops/tests/integration/VolumeDynamicFeeHook.ClaimAccounting.t.sol'` — **4 passed, 0 failed**;
-- `forge test --offline --match-path 'ops/tests/fuzz/VolumeDynamicFeeHook.Fuzz.t.sol'` — **2 passed, 0 failed**.
+- `forge test --offline --match-path 'ops/tests/unit/VolumeDynamicFeeHook.Admin.t.sol'` — **19 passed, 0 failed**;
+- `forge test --offline --match-path 'ops/tests/unit/VolumeDynamicFeeHook.ConfigAndEdges.t.sol'` — **18 passed, 0 failed**;
+- `forge test --offline --match-path 'ops/tests/integration/VolumeDynamicFeeHook.ClaimAccounting.t.sol'` — **4 passed, 0 failed**.
 
-Добавлены/обновлены регрессии:
-- Н-04: found tier at non-role index => forced floor reset + counters reset;
-- Н-05: floor role after re-tiering => no hold/streak carry-over;
-- Н-06: pending threshold activation order on lull reset;
-- Н-09: `feeTierCount()` getter and `feeTiers(idx)` bounds;
-- default dust threshold == `4e6`.
+## Residual / Accepted Risks (Unchanged)
 
-### Sepolia Validation
-
-В репозитории присутствуют конкретные Sepolia-артефакты:
-- `ops/sepolia/out/reports/preflight.sepolia.json`
-- `ops/sepolia/out/reports/full.sepolia.json`
-- `ops/sepolia/out/state/inspect.sepolia.json`
-- `ops/sepolia/out/state/sepolia.addresses.json`
-- `ops/sepolia/out/state/sepolia.drivers.json`
-
-Что подтверждается этими артефактами:
-- preflight прошёл на chainId `11155111` (`ok: true`, expected=actual);
-- зафиксированы конкретные адреса `poolManager`, `hookAddress`, helper drivers;
-- в state/report snapshot hook инициализирован, не paused, и наблюдаемая fee-режим/state телеметрия читаются с Sepolia deployment.
-
-Чем это отличается от purely local Mock coverage:
-- local/mock тесты проверяют детерминированную логику и инварианты в изолированной среде;
-- Sepolia-артефакты подтверждают работу operational pipeline (`preflight/inspect/full`) и корректность on-chain wiring/адресов на публичном testnet.
-
-### Remaining Gaps / Limitations
-
-- В рамках этого патча Sepolia-сценарии не запускались повторно из CI/sandbox; использованы существующие артефакты из репозитория.
-- Артефакты в `ops/sepolia/out/*` — snapshot-подтверждение состояния и опер-проверок, но не полный e2e coverage всех edge-cases.
-- Полный `ops/tests/invariant/VolumeDynamicFeeHook.Invariant.t.sol` в этой среде не завершён за практичное время; фикс-пункты Н-04/05/06/09 закрыты unit/integration/fuzz регрессиями выше.
+- `setHookFeeRecipient(...)` остаётся immediate (без timelock) как ранее принятый governance/key risk.
+- Этот риск не закрывался в данном patch set по согласованному scope.
 
 ## Conclusion
 
-Патч адресует **Н-04, Н-05, Н-06, Н-09** точечно и без расширения бизнес-логики вне согласованного объёма. Default dust threshold синхронизирован на **`4e6`** в коде, тестах и документации, а audit bundle теперь явно разделяет локальное и Sepolia-покрытие с проверяемыми артефактами и честно обозначенными ограничениями.
+Патч минимальный и production-oriented: добавлены только необходимые guardrails и документирование by-design семантик без изменения экономики HookFee и без расширения governance-механик. Изменения подтверждены целевыми unit/integration regressions и согласованы между кодом, тестами и документацией.

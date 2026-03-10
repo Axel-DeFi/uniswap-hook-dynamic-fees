@@ -43,6 +43,9 @@ LP fee remains dynamic and is updated through the existing regime logic.
 
 - HookFee is a separate trader charge returned from `afterSwap` delta path.
 - HookFee is numerically tied to currently applied LP fee tier.
+- HookFee is derived from an approximate LP-fee estimate, not from an exact LP-fee accounting replica.
+- Estimation base is the unspecified side selected by current execution path (exact-input vs exact-output).
+- Small systematic deviation between exact-input and exact-output paths is expected by design.
 - Per swap approximation:
   1. infer unspecified-side absolute swap amount,
   2. estimate LP fee on that amount,
@@ -67,11 +70,28 @@ Two-step transfer is mandatory:
 - `cancelOwnerTransfer()`
 - `acceptOwner()` by pending owner
 
+Guardrails:
+- `proposeNewOwner(address(0))` reverts.
+- `proposeNewOwner(currentOwner)` reverts (self-pending-owner is disallowed).
+
 Events:
 - `OwnerTransferStarted`
 - `OwnerTransferCancelled`
 - `OwnerTransferAccepted`
 - `OwnerUpdated`
+
+## Timing guardrails
+
+- `lullResetSeconds` must be strictly greater than `periodSeconds`.
+- Equality (`lullResetSeconds == periodSeconds`) is rejected.
+- Upper bound remains `lullResetSeconds <= periodSeconds * MAX_LULL_PERIODS`.
+
+## Hold semantics
+
+- Hold counter is decremented at the start of each closed period, before hold protection checks.
+- Configured hold `N` therefore provides `N - 1` fully protected periods.
+- `cashHoldPeriods = 1` provides zero effective extra hold protection.
+- This behavior is intentional in the current design and is regression-tested.
 
 ## Pause and emergency semantics
 
@@ -82,6 +102,7 @@ Freeze semantics only:
 - keeps EMA,
 - clears only open-period volume,
 - restarts period boundary (`periodStart`) for clean resume.
+- freezes regulator transitions at the last active LP fee tier until `unpause()` or explicit paused-mode emergency reset.
 - does not disable swaps,
 - does not disable HookFee accrual,
 - does not zero HookFee.

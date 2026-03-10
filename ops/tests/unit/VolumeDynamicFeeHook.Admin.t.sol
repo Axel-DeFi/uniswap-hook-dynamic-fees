@@ -204,6 +204,29 @@ contract VolumeDynamicFeeHookAdminTest is Test, VolumeDynamicFeeHookV2DeployHelp
         assertEq(fees1, 36_000);
     }
 
+    function test_hookFee_approximation_exactInput_vs_exactOutput_paths() public {
+        // Exact-input: unspecified side is token1 in zeroForOne flow.
+        _swap(true, -90_000_000, -100_000_000, 90_000_000);
+
+        (uint256 fees0, uint256 fees1) = hook.hookFeesAccrued();
+        uint256 exactInputAccrual = fees1;
+        assertEq(fees0, 0);
+        assertGt(exactInputAccrual, 0, "exact-input path should accrue non-zero HookFee");
+
+        // Exact-output: unspecified side is token0 in zeroForOne flow.
+        _swap(true, 90_000_000, -100_000_000, 90_000_000);
+
+        (fees0, fees1) = hook.hookFeesAccrued();
+        uint256 exactOutputAccrual = fees0;
+        assertGt(exactOutputAccrual, 0, "exact-output path should accrue non-zero HookFee");
+        assertEq(fees1, exactInputAccrual, "exact-input token1 accrual should not be overwritten");
+        assertGt(
+            exactOutputAccrual,
+            exactInputAccrual,
+            "exact-output path can deviate because approximation uses unspecified-side amount"
+        );
+    }
+
     function test_hookFee_cap_enforced_at_10_percent() public {
         vm.expectRevert(
             abi.encodeWithSelector(
@@ -261,6 +284,56 @@ contract VolumeDynamicFeeHookAdminTest is Test, VolumeDynamicFeeHookV2DeployHelp
         assertEq(hook.pendingOwner(), address(0));
     }
 
+    function test_owner_transfer_rejects_propose_current_owner() public {
+        vm.expectRevert(VolumeDynamicFeeHook.InvalidOwner.selector);
+        hook.proposeNewOwner(owner);
+    }
+
+    function test_setTimingParams_reverts_when_lullReset_equals_period() public {
+        hook.pause();
+
+        vm.expectRevert(VolumeDynamicFeeHook.InvalidConfig.selector);
+        hook.setTimingParams(PERIOD_SECONDS, EMA_PERIODS, PERIOD_SECONDS, DEADBAND_BPS);
+    }
+
+    function test_cashHoldPeriods_one_results_in_zero_effective_hold_protection() public {
+        hook.pause();
+
+        VolumeDynamicFeeHook.ControllerParams memory p = VolumeDynamicFeeHook.ControllerParams({
+            minCloseVolToCashUsd6: V2_MIN_CLOSEVOL_TO_CASH_USD6,
+            upRToCashBps: V2_UP_R_TO_CASH_BPS,
+            cashHoldPeriods: 1,
+            minCloseVolToExtremeUsd6: V2_MIN_CLOSEVOL_TO_EXTREME_USD6,
+            upRToExtremeBps: V2_UP_R_TO_EXTREME_BPS,
+            upExtremeConfirmPeriods: V2_UP_EXTREME_CONFIRM_PERIODS,
+            extremeHoldPeriods: V2_EXTREME_HOLD_PERIODS,
+            downRFromExtremeBps: V2_DOWN_R_FROM_EXTREME_BPS,
+            downExtremeConfirmPeriods: V2_DOWN_EXTREME_CONFIRM_PERIODS,
+            downRFromCashBps: V2_DOWN_R_FROM_CASH_BPS,
+            downCashConfirmPeriods: 1,
+            emergencyFloorCloseVolUsd6: V2_EMERGENCY_FLOOR_CLOSEVOL_USD6,
+            emergencyConfirmPeriods: V2_EMERGENCY_CONFIRM_PERIODS
+        });
+        hook.setControllerParams(p);
+        hook.unpause();
+
+        _moveToCashRegimeWithHold();
+        (uint8 feeIdxAfterJump, uint8 holdAfterJump,,,,,,,) = hook.getStateDebug();
+        assertEq(feeIdxAfterJump, hook.cashIdx(), "precondition: active tier must be cash");
+        assertEq(holdAfterJump, 1, "configured hold must initialize to one");
+
+        vm.warp(block.timestamp + PERIOD_SECONDS);
+        _swap(true, -1, 0, 0);
+
+        (uint8 feeIdxAfterNextClose, uint8 holdAfterNextClose,,,,,,,) = hook.getStateDebug();
+        assertEq(
+            feeIdxAfterNextClose,
+            hook.floorIdx(),
+            "cashHoldPeriods=1 should not provide an extra fully protected period"
+        );
+        assertEq(holdAfterNextClose, 0, "hold must be consumed at the next close");
+    }
+
     function test_pause_unpause_freeze_resume_semantics() public {
         _swap(true, -1, -10_000_000, 9_000_000);
         vm.warp(block.timestamp + PERIOD_SECONDS);
@@ -278,6 +351,7 @@ contract VolumeDynamicFeeHookAdminTest is Test, VolumeDynamicFeeHookV2DeployHelp
 
         ) = hook.getStateDebug();
 
+        uint256 updateCountBeforePause = manager.updateCount();
         hook.pause();
         assertTrue(hook.isPaused());
 
@@ -305,8 +379,20 @@ contract VolumeDynamicFeeHookAdminTest is Test, VolumeDynamicFeeHookV2DeployHelp
         _swap(true, -1, -6_000_000, 5_700_000);
         assertEq(manager.lastAfterSwapDelta() > 0, true, "HookFee should still be charged while paused");
 
-        (,,, ,,, uint64 periodVolAfterSwapWhilePaused,,) = hook.getStateDebug();
+        (
+            uint8 feeIdxAfterSwapWhilePaused,
+            ,
+            ,
+            ,
+            ,
+            uint64 periodStartAfterSwapWhilePaused,
+            uint64 periodVolAfterSwapWhilePaused,
+            ,
+        ) = hook.getStateDebug();
+        assertEq(feeIdxAfterSwapWhilePaused, feeIdxBefore);
+        assertEq(periodStartAfterSwapWhilePaused, periodStartPaused);
         assertEq(periodVolAfterSwapWhilePaused, 0);
+        assertEq(manager.updateCount(), updateCountBeforePause, "paused swaps must not trigger fee tier updates");
 
         hook.unpause();
         assertFalse(hook.isPaused());
