@@ -5,6 +5,13 @@
 - charges an additional trader-facing `HookFee` in `afterSwap` via return delta,
 - keeps state compact and operational controls explicit.
 
+## License / Usage Notice
+
+This repository is source-available strictly for public audit, security review, technical research, and bug reporting.
+It is not open source, and no commercial or general non-commercial usage rights are granted.
+Without prior written permission, you may not deploy, operate, reuse, redistribute, sublicense, or create derivative works from this code.
+See `LICENSE.md` for full terms.
+
 ## Key design points
 
 - Single pool binding (no `PoolId => state` mapping).
@@ -83,7 +90,3 @@ scripts/release/cut.sh --bump patch --push
 ```
 
 `VERSION`, git tag `vX.Y.Z`, and `CHANGELOG.md` heading are enforced as a single source of truth.
-
-## License
-
-Apache-2.0. See `LICENSE`.
