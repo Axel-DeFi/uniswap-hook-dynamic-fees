@@ -25,8 +25,8 @@ set -euo pipefail
 #   DOWN_R_FROM_EXTREME_BPS, DOWN_EXTREME_CONFIRM_PERIODS, DOWN_R_FROM_CASH_BPS, DOWN_CASH_CONFIRM_PERIODS
 #   EMERGENCY_FLOOR_CLOSEVOL_USD6, EMERGENCY_CONFIRM_PERIODS
 # Optional:
-#   OWNER             (defaults to deployer address)
-#   HOOK_FEE_ADDRESS (required when HOOK_FEE_PERCENT > 0)
+#   OWNER            (defaults to deployer address)
+#   HOOK_FEE_ADDRESS (defaults to OWNER when unset)
 #
 # Owner behavior:
 #   - OWNER defines privileged admin account.
@@ -127,7 +127,7 @@ if [[ "$BROADCAST" -ne 1 ]]; then
 fi
 
 if [[ -z "${PRIVATE_KEY:-}" ]]; then
-  echo "ERROR: PRIVATE_KEY missing (config, .env DEFAULT_PRIVATE_KEY, or --private-key)" >&2
+  echo "ERROR: PRIVATE_KEY missing (config, chain-specific *_PRIVATE_KEY/.env fallback, or --private-key)" >&2
   exit 1
 fi
 
@@ -320,12 +320,8 @@ fi
 export OWNER
 
 if [[ -z "${HOOK_FEE_ADDRESS:-}" ]]; then
-  if (( HOOK_FEE_PERCENT > 0 )); then
-    echo "ERROR: HOOK_FEE_ADDRESS is required when HOOK_FEE_PERCENT > 0" >&2
-    exit 1
-  fi
-  HOOK_FEE_ADDRESS="0x0000000000000000000000000000000000000000"
-  echo "==> HOOK_FEE_ADDRESS not set and HOOK_FEE_PERCENT=0; using zero recipient"
+  HOOK_FEE_ADDRESS="${OWNER}"
+  echo "==> HOOK_FEE_ADDRESS not set; defaulting to OWNER: ${HOOK_FEE_ADDRESS}"
 fi
 export HOOK_FEE_ADDRESS
 

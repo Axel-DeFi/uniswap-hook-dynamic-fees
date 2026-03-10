@@ -684,17 +684,17 @@ for (( i = 0; i < HOOK_FEE_TIER_COUNT; i++ )); do
   HOOK_FEE_TIER_VALUES[$i]="${tier_value}"
 done
 
-if [[ -n "${FLOOR_TIER:-}" && -n "${CAP_TIER:-}" ]]; then
+if [[ -n "${FLOOR_TIER:-}" && -n "${EXTREME_TIER:-}" ]]; then
   cfg_floor_pips="$(percent_to_pips "$(printf '%s' "${FLOOR_TIER}" | tr -d '[:space:]')" || true)"
-  cfg_cap_pips="$(percent_to_pips "$(printf '%s' "${CAP_TIER}" | tr -d '[:space:]')" || true)"
-  if [[ -z "${cfg_floor_pips}" || -z "${cfg_cap_pips}" ]]; then
-    echo "ERROR: invalid FLOOR_TIER/CAP_TIER in config. Use decimal percent values (for example 0.04 and 0.45)."
+  cfg_extreme_pips="$(percent_to_pips "$(printf '%s' "${EXTREME_TIER}" | tr -d '[:space:]')" || true)"
+  if [[ -z "${cfg_floor_pips}" || -z "${cfg_extreme_pips}" ]]; then
+    echo "ERROR: invalid FLOOR_TIER/EXTREME_TIER in config. Use decimal percent values (for example 0.04 and 0.45)."
     exit 1
   fi
   hook_floor_pips="${HOOK_FEE_TIER_VALUES[$HOOK_FLOOR_IDX]-}"
-  hook_cap_pips="${HOOK_FEE_TIER_VALUES[$HOOK_EXTREME_IDX]-}"
-  if [[ -z "${hook_floor_pips}" || -z "${hook_cap_pips}" ]]; then
-    echo "ERROR: failed to map on-chain floor/cap indices to fee tiers."
+  hook_extreme_pips="${HOOK_FEE_TIER_VALUES[$HOOK_EXTREME_IDX]-}"
+  if [[ -z "${hook_floor_pips}" || -z "${hook_extreme_pips}" ]]; then
+    echo "ERROR: failed to map on-chain floor/extreme indices to fee tiers."
     exit 1
   fi
 
@@ -702,10 +702,10 @@ if [[ -n "${FLOOR_TIER:-}" && -n "${CAP_TIER:-}" ]]; then
   if [[ "${DEADBAND_BPS:-}" =~ ^[0-9]+$ ]] && (( HOOK_DEADBAND_BPS != DEADBAND_BPS )); then
     deadband_mismatch=1
   fi
-  if [[ "${hook_floor_pips}" != "${cfg_floor_pips}" || "${hook_cap_pips}" != "${cfg_cap_pips}" || "${deadband_mismatch}" -eq 1 ]]; then
+  if [[ "${hook_floor_pips}" != "${cfg_floor_pips}" || "${hook_extreme_pips}" != "${cfg_extreme_pips}" || "${deadband_mismatch}" -eq 1 ]]; then
     echo "ERROR: hook params mismatch with config."
-    echo "       on-chain: floor=i${HOOK_FLOOR_IDX}/f${hook_floor_pips} cap=i${HOOK_EXTREME_IDX}/f${hook_cap_pips} deadband=${HOOK_DEADBAND_BPS}"
-    echo "       config:   floor=${FLOOR_TIER}% (f${cfg_floor_pips}) cap=${CAP_TIER}% (f${cfg_cap_pips}) deadband=${DEADBAND_BPS:-?}"
+    echo "       on-chain: floor=i${HOOK_FLOOR_IDX}/f${hook_floor_pips} extreme=i${HOOK_EXTREME_IDX}/f${hook_extreme_pips} deadband=${HOOK_DEADBAND_BPS}"
+    echo "       config:   floor=${FLOOR_TIER}% (f${cfg_floor_pips}) extreme=${EXTREME_TIER}% (f${cfg_extreme_pips}) deadband=${DEADBAND_BPS:-?}"
     echo "       Deploy a new hook/pool with current config, then rerun simulate_fee_cycle."
     exit 1
   fi

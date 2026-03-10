@@ -5,16 +5,16 @@ set -euo pipefail
 # Aggregate current net LP liquidity by wallet in USD for a Uniswap v4 pool.
 #
 # Examples:
-#   ./scripts/private_lp_deposits.sh --chain optimism
-#   ./scripts/private_lp_deposits.sh --chain optimism --pool-id 0x... --from-block 0x8d8245c
-#   ./scripts/private_lp_deposits.sh --chain optimism --csv /tmp/lp_liquidity_usd.csv
+#   ./scripts/show_deposits.sh --chain optimism
+#   ./scripts/show_deposits.sh --chain optimism --pool-id 0x... --from-block 0x8d8245c
+#   ./scripts/show_deposits.sh --chain optimism --csv /tmp/lp_liquidity_usd.csv
 
 lower() { printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]'; }
 
 usage() {
   cat <<'EOF'
 Usage:
-  ./scripts/private_lp_deposits.sh --chain <chain> [options]
+  ./scripts/show_deposits.sh --chain <chain> [options]
 
 Options:
   --chain <name>               Chain config name (e.g. optimism, sepolia, arbitrum).
@@ -143,7 +143,7 @@ STABLE_DECIMALS="${STABLE_DECIMALS_CLI:-${STABLE_DECIMALS:-6}}"
 VOLATILE_DECIMALS="${VOLATILE_DECIMALS:-18}"
 ETH_USD="${ETH_USD_CLI:-}"
 POOL_ID="${POOL_ID_CLI:-}"
-CACHE_PATH="${CACHE_PATH_CLI:-tmp/private_lp_txfrom_${CHAIN}.json}"
+CACHE_PATH="${CACHE_PATH_CLI:-tmp/show_deposits_txfrom_${CHAIN}.json}"
 
 if [[ -z "${RPC_URL}" ]]; then
   echo "ERROR: RPC_URL missing (config or --rpc-url)" >&2

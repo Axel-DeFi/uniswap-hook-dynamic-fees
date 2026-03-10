@@ -10,7 +10,7 @@
 This repository is source-available strictly for public audit, security review, technical research, and bug reporting.
 It is not open source, and no commercial or general non-commercial usage rights are granted.
 Without prior written permission, you may not deploy, operate, reuse, redistribute, sublicense, or create derivative works from this code.
-See `LICENSE.md` for full terms.
+See `LICENSE` for full terms.
 
 ## Key design points
 

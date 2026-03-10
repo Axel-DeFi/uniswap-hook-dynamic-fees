@@ -296,10 +296,10 @@ Any non-exact dynamic-flag encoding is rejected (`NotDynamicFeePool`).
 - gas observations in this repository are engineering measurements, environment-dependent.
 - this is not presented as a formal, exhaustive gas audit.
 - latest local observation artifacts:
-  - `ops/local/out/reports/gas.anvil.measurements.json`
-  - `ops/local/out/reports/gas.anvil.measurements.md`
-  - `audit/gas/gas.anvil.measurements.json` (inside audit bundle package)
-  - `audit/gas/gas.anvil.measurements.md` (inside audit bundle package)
+  - `ops/local/out/reports/*.json`
+  - `ops/local/out/reports/*.md`
+  - `audit/gas/*.json` (inside audit bundle package)
+  - `audit/gas/*.md` (inside audit bundle package)
 
 ## Audit boundary
 

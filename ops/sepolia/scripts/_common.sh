@@ -69,9 +69,13 @@ load_sepolia_config() {
   [[ -f "$scenario_env" ]] && load_env_file "$scenario_env"
   [[ -f "${ROOT_DIR}/.env" ]] && load_env_file "${ROOT_DIR}/.env"
 
-  # defaults.env may derive PRIVATE_KEY from DEFAULT_PRIVATE_KEY before .env is loaded.
-  if [[ -z "${PRIVATE_KEY:-}" && -n "${DEFAULT_PRIVATE_KEY:-}" ]]; then
-    export PRIVATE_KEY="$DEFAULT_PRIVATE_KEY"
+  # Preserve fallback priority: SEPOLIA_PRIVATE_KEY -> DEFAULT_PRIVATE_KEY.
+  if [[ -z "${PRIVATE_KEY:-}" ]]; then
+    if [[ -n "${SEPOLIA_PRIVATE_KEY:-}" ]]; then
+      export PRIVATE_KEY="$SEPOLIA_PRIVATE_KEY"
+    elif [[ -n "${DEFAULT_PRIVATE_KEY:-}" ]]; then
+      export PRIVATE_KEY="$DEFAULT_PRIVATE_KEY"
+    fi
   fi
 
   export OPS_RUNTIME="sepolia"

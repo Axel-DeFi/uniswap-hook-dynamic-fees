@@ -43,7 +43,7 @@
   - lull reset behavior
 
 ### Script and tooling hardening
-- Improved `deploy_hook.sh`, `create_pool.sh`, `deploy.sh`, and `apply_pending_pause.sh`:
+- Improved deployment and operations scripts:
   - robust config fallback (`<chain>.conf` -> default conf)
   - safer RPC resolution (CLI overrides config)
   - stricter required variable checks

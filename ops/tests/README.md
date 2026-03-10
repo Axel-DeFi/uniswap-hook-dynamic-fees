@@ -1,6 +1,6 @@
 # Contract Tests (Ops Profile)
 
-Contract tests were migrated from `test/VolumeDynamicFeeHook` to `ops/tests`.
+Contract tests live in `ops/tests`.
 
 ## Structure
 

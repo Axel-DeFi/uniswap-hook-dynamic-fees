@@ -32,7 +32,6 @@ All values are loaded from environment variables (defaults + scenario overlay + 
 - `FLOOR_IDX`
 - `CASH_IDX`
 - `EXTREME_IDX`
-- `EXTREME_IDX`
 
 ## Timing / controller
 
@@ -40,7 +39,6 @@ All values are loaded from environment variables (defaults + scenario overlay + 
 - `EMA_PERIODS`
 - `DEADBAND_BPS`
 - `LULL_RESET_SECONDS`
-- `HOOK_FEE_LIMIT_PERCENT`
 - `HOOK_FEE_PERCENT`
 - `MIN_CLOSEVOL_TO_CASH_USD6`
 - `UP_R_TO_CASH_BPS`

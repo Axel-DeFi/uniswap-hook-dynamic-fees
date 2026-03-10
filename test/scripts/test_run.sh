@@ -156,11 +156,11 @@ if [ "$CONTOUR" = "local" ]; then
   run_deploy_scripts "local" "$rpc" "$pk"
 elif [ "$CONTOUR" = "sepolia" ]; then
   [ -n "${RPC_URL:-}" ] || die "Missing RPC_URL in $CFG"
-  [ -n "${PRIVATE_KEY:-}" ] || die "Missing PRIVATE_KEY in $CFG (can be set via DEFAULT_PRIVATE_KEY)"
+  [ -n "${PRIVATE_KEY:-}" ] || die "Missing PRIVATE_KEY in $CFG (set chain-specific *_PRIVATE_KEY or DEFAULT_PRIVATE_KEY in .env)"
   run_deploy_scripts "sepolia" "$RPC_URL" "$PRIVATE_KEY"
 else
   [ -n "${RPC_URL:-}" ] || die "Missing RPC_URL in $CFG"
-  [ -n "${PRIVATE_KEY:-}" ] || die "Missing PRIVATE_KEY in $CFG (can be set via DEFAULT_PRIVATE_KEY)"
+  [ -n "${PRIVATE_KEY:-}" ] || die "Missing PRIVATE_KEY in $CFG (set chain-specific *_PRIVATE_KEY or DEFAULT_PRIVATE_KEY in .env)"
   run_deploy_scripts "$CHAIN" "$RPC_URL" "$PRIVATE_KEY"
 fi
 

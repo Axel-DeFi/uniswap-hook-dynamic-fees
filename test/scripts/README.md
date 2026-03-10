@@ -35,8 +35,6 @@ Default run profile:
   6) anomaly matrix checks
 - If run starts already at cap, `up_to_cap` is skipped and run starts from `cap_probe`.
 
-Detailed matrix: `docs/sepolia_simulate_fee_cycle_test_matrix.md`.
-
 Run control:
 - `--cases-runs <N>`: run deterministic suite `N` times.
 - `--duration-seconds <N>`: stop by wall-clock time (`0` = unlimited).
