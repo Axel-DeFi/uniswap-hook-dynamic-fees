@@ -62,11 +62,22 @@ ops/sepolia/scripts/emergency.sh
 - `minCountedSwapUsd6` filters dust from telemetry only.
 - Swap execution and fee charging are unchanged for filtered trades.
 - Scheduled threshold changes activate only at next period boundary.
-- Allowed threshold update range is `1e6..10e6` (default `4e6`).
+- Allowed threshold update range is `1e6..10e6` (default `$4 / 4e6`, selected from observed v1 telemetry).
 - No timelock for threshold updates (project decision).
 - Recalibration target cadence: every 5 days from offchain analytics.
+- This is mitigation, not a formal proof against all fragmentation patterns on cheap L2.
 
 ## Accepted governance risks
 
 - `setHookFeeRecipient(...)` remains immediate by design.
 - This is accepted owner-key risk; mitigation is operational in current scope.
+- Production owner must be multisig; EOA owner is acceptable only for local/dev/test.
+- Hot-wallet owner usage is unacceptable for production.
+- Owner key custody should be cold/hardware.
+
+## Monitoring and response
+
+- Monitor `PeriodClosed` for repeated abnormal regime escalations.
+- Monitor `HookFeeRecipientUpdated` and emergency reset events.
+- Treat wash-trading / fee-poisoning as residual economic manipulation risk, especially on low-cost networks.
+- For material controller/topology reconfiguration: keep paused, apply maintenance changes, execute explicit emergency reset-to-floor, then resume.

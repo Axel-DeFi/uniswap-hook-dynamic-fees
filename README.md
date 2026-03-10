@@ -25,8 +25,13 @@
   - `emergencyResetToCash()`
 - Timing guardrail: `lullResetSeconds` must be strictly greater than `periodSeconds`.
 - Hold semantics: configured `cashHoldPeriods = N` gives `N - 1` fully protected periods (`N = 1` means zero effective hold protection).
+- Controller parameter cross-checks are enforced:
+  - `minCloseVolToCashUsd6 <= minCloseVolToExtremeUsd6`
+  - `upRToCashBps <= upRToExtremeBps`
+  - `downRFromCashBps >= downRFromExtremeBps`
+- Pool key validation requires exact dynamic-fee flag: `key.fee == LPFeeLibrary.DYNAMIC_FEE_FLAG`.
 - Telemetry fields are explicit:
-  - counted volume threshold `minCountedSwapUsd6` (default `4e6`, bounded to `1e6..10e6`)
+  - counted volume threshold `minCountedSwapUsd6` (default `$4 / 4e6`, bounded to `1e6..10e6`)
   - threshold update is pending-state only and activates from next period boundary (no timelock by design)
   - offchain threshold recalibration cadence target is 5 days
   - approximate LP fee metric `approxLpFeesUsd6`
@@ -42,8 +47,17 @@
 
 ## Accepted risks (current scope)
 
+- Dust-splitting remains a residual architectural/model risk. The configurable dust filter mitigates it, and the default `$4 / 4e6` was selected from observed v1 telemetry. This is not a formal proof against all fragmentation patterns on cheap L2.
+- Wash-trading / regime-poisoning remains a residual economic manipulation risk (more realistic as competitor-funded distortion/DoS in adversarial routing environments).
 - `setHookFeeRecipient(...)` remains immediate (owner governance/key risk, operational mitigation only).
 - `scheduleMinCountedSwapUsd6Change(...)` has no timelock by design (pending + next-period activation only).
+
+## Ops baseline
+
+- Production owner must be a multisig. EOA owner is acceptable only for local/dev/test.
+- Hot-wallet owner usage is unacceptable for production.
+- Owner key material should be held in cold/hardware custody.
+- Monitor `PeriodClosed`, `HookFeeRecipientUpdated`, and emergency-reset events; alert on repeated abnormal regime escalations.
 
 ## Build and test
 

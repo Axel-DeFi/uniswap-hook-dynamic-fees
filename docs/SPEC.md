@@ -93,6 +93,15 @@ Events:
 - `cashHoldPeriods = 1` provides zero effective extra hold protection.
 - This behavior is intentional in the current design and is regression-tested.
 
+## Controller parameter consistency
+
+Controller params are validated with cross-invariants:
+- `minCloseVolToCashUsd6 <= minCloseVolToExtremeUsd6`
+- `upRToCashBps <= upRToExtremeBps`
+- `downRFromCashBps >= downRFromExtremeBps`
+
+Invalid combinations revert with `InvalidConfig`.
+
 ## Pause and emergency semantics
 
 ### pause()
@@ -132,7 +141,7 @@ Monitoring must consume `EmergencyResetToFloorApplied` / `EmergencyResetToCashAp
 
 ## Volume telemetry and dust filtering
 
-- `minCountedSwapUsd6` default is `4e6`.
+- `minCountedSwapUsd6` default is `$4 / 4e6`.
 - Allowed update range is `[1e6, 10e6]`.
 - If swap stable-side notional is below threshold:
   - swap still executes,
@@ -150,6 +159,8 @@ Calibration policy:
 - onchain auto-recalibration is intentionally out of scope,
 - threshold tuning is expected from offchain historical analysis,
 - operational target cadence for recalibration is 5 days.
+- default `$4 / 4e6` was selected from observed v1 telemetry.
+- this is mitigation, not a formal proof against all dust-fragmentation patterns on cheap L2.
 
 ## Stable decimals and scaling
 
@@ -169,6 +180,14 @@ Stored EMA is scaled:
 
 This reduces integer precision loss versus unscaled EMA.
 
+Bootstrap behavior:
+- EMA is seeded by the first non-zero close period.
+- first periods after init/reset should be treated as a calibration window.
+
+Saturation behavior:
+- `periodVol` saturates at `uint64.max` by design under theoretical/extreme flow.
+- this is bounded behavior and not expected under ordinary trading conditions.
+
 ## State model cleanup
 
 Removed legacy entities:
@@ -178,6 +197,10 @@ Removed legacy entities:
 
 Controller invariant remains:
 - `floorIdx < cashIdx < extremeIdx`
+
+Bit-packing note:
+- packed `_state` layout is retained intentionally for gas/storage efficiency.
+- correctness is covered by unit/fuzz/invariant tests (field bounds and transitions).
 
 ## Approximate LP fee metric
 
@@ -224,3 +247,55 @@ All admin state transitions emit events, including:
 
 - `setHookFeeRecipient(...)` remains immediate (no timelock), accepted as owner governance/key risk.
 - Mitigation is operational (key management + monitoring), not contract-level in this patch scope.
+- wash-trading / extreme-tier manipulation remains a residual economic risk (more realistic as competitor-funded distortion/DoS in adversarial routing contexts, especially on cheap environments).
+
+## Operational requirements
+
+- production owner must be a multisig; EOA owner is acceptable only for local/dev/test.
+- hot-wallet owner usage is unacceptable for production.
+- owner key custody should use cold/hardware wallet standards.
+- monitor `PeriodClosed` and alert on repeated abnormal regime escalations.
+- monitor recipient-change events (`HookFeeRecipientUpdated`) as a mandatory operational control.
+- EMA preservation across `setFeeTiersAndRoles(...)` is intentional and acceptable for minor fee-ladder maintenance.
+- for material controller/topology reconfiguration, run paused maintenance and explicit emergency reset-to-floor before returning live.
+
+## Hook key validation
+
+Pool callback key validation requires:
+- exact currencies, tick spacing, and hook address,
+- exact fee flag match: `key.fee == LPFeeLibrary.DYNAMIC_FEE_FLAG`.
+
+Any non-exact dynamic-flag encoding is rejected (`NotDynamicFeePool`).
+
+## Gas interpretation note
+
+- inactivity catch-up overhead in period-closing logic is bounded by construction (`periods = elapsed / periodSeconds` with explicit loop semantics).
+- gas observations in this repository are engineering measurements, environment-dependent.
+- this is not presented as a formal, exhaustive gas audit.
+- latest local observation artifacts:
+  - `ops/local/out/reports/gas.anvil.measurements.json`
+  - `ops/local/out/reports/gas.anvil.measurements.md`
+  - `audit_bundle/gas_artifacts/gas.anvil.measurements.json`
+  - `audit_bundle/gas_artifacts/gas.anvil.measurements.md`
+
+## Audit boundary
+
+### Audit Scope
+
+- hardening and behavior verification for `src/VolumeDynamicFeeHook.sol` and directly related operational docs/tests.
+
+### Out of Scope
+
+- independent review of external Uniswap dependency internals.
+- independent review of PoolManager internals beyond call-site assumptions.
+- independent review of hook address mining procedure correctness as a cryptographic/system proof.
+
+### Assumptions
+
+- `BaseHook`, `LPFeeLibrary`, and related Uniswap dependencies are treated as trusted dependencies for this review scope.
+- hook deployment process verifies mined hook flags at deployment time.
+
+### Operational Measurements
+
+- local gas values are engineering measurements and environment-dependent.
+- if live-network measurements are not reproduced in a run, reports must state that explicitly.

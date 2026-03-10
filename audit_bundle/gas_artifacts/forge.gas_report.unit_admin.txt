@@ -1,0 +1,31 @@
+No files changed, compilation skipped
+
+Ran 24 tests for ops/tests/unit/VolumeDynamicFeeHook.Admin.t.sol:VolumeDynamicFeeHookAdminTest
+[PASS] test_cashHoldPeriods_one_results_in_zero_effective_hold_protection() (gas: 695309)
+[PASS] test_claimHookFees_and_pause_admin_unpause_integration() (gas: 619259)
+[PASS] test_emergency_resets_require_paused_and_apply_semantics() (gas: 228932)
+[PASS] test_feeTierCount_getter_tracks_tier_length_and_bounds() (gas: 154475)
+[PASS] test_hookFee_approximation_exactInput_vs_exactOutput_paths() (gas: 329687)
+[PASS] test_hookFee_cap_enforced_at_10_percent() (gas: 35930)
+[PASS] test_hookFee_is_returned_via_afterSwap_delta_path() (gas: 295278)
+[PASS] test_lullReset_activates_pendingMinCountedSwap_before_first_new_period_swap() (gas: 281177)
+[PASS] test_minCountedSwapUsd6_filters_only_telemetry_and_applies_next_period() (gas: 651637)
+[PASS] test_owner_transfer_propose_cancel_accept_flow() (gas: 254272)
+[PASS] test_owner_transfer_rejects_propose_current_owner() (gas: 35608)
+[PASS] test_pause_unpause_freeze_resume_semantics() (gas: 569774)
+[PASS] test_periodVol_saturates_at_uint64_max_under_extreme_volume() (gas: 118562)
+[PASS] test_receive_reverts() (gas: 40914)
+[PASS] test_scaledEma_updates_with_precision() (gas: 442175)
+[PASS] test_setControllerParams_reverts_when_cash_down_ratio_is_below_extreme_down_ratio() (gas: 76513)
+[PASS] test_setControllerParams_reverts_when_cash_up_ratio_exceeds_extreme_up_ratio() (gas: 76437)
+[PASS] test_setControllerParams_reverts_when_cash_volume_threshold_exceeds_extreme_threshold() (gas: 76779)
+[PASS] test_setFeeTiersAndRoles_floor_role_never_keeps_hold_or_streaks() (gas: 567186)
+[PASS] test_setFeeTiersAndRoles_found_old_tier_at_non_role_index_resets_to_floor() (gas: 614261)
+[PASS] test_setFeeTiersAndRoles_preserves_ema_for_maintenance_updates() (gas: 366227)
+[PASS] test_setTimingParams_reverts_when_lullReset_equals_period() (gas: 71587)
+[PASS] test_stable_decimals_only_6_or_18() (gas: 10328331)
+[PASS] test_timelock_schedule_cancel_execute() (gas: 191144)
+Suite result: ok. 24 passed; 0 failed; 0 skipped; finished in 9.14ms (24.86ms CPU time)
+
+
+Ran 1 test suite in 19.09ms (9.14ms CPU time): 24 tests passed, 0 failed, 0 skipped (24 total tests)

@@ -61,8 +61,10 @@ A telemetry dust filter:
 - swaps below threshold are excluded from period volume statistics,
 - swaps still execute and still pay LP fee/HookFee.
 
-Default is `4e6` (USD6).
+Default is `$4 / 4e6` (USD6), chosen from observed v1 telemetry.
 Allowed update range is `1e6..10e6`.
+
+This mitigates dust-splitting pressure but is not a formal proof against every fragmentation pattern on cheap L2.
 
 ## Can threshold changes apply mid-period?
 
@@ -73,9 +75,38 @@ This path intentionally has no timelock.
 
 No. Recipient change is immediate by design and treated as accepted owner-key governance risk.
 
+Production guidance:
+- owner must be multisig,
+- owner key custody should be cold/hardware,
+- hot-wallet owner usage is unacceptable for production,
+- recipient-change event monitoring is mandatory.
+
 ## Is `approxLpFeesUsd6` accounting-accurate?
 
 No. It is approximate telemetry for regime analytics.
+
+## Is wash-trading fully prevented onchain?
+
+No. Residual manipulation risk remains (especially competitor-funded distortion / fee-poisoning in low-cost, adversarial routing environments).
+Operational mitigations are conservative defaults plus monitoring of `PeriodClosed` and alerting on repeated abnormal regime escalations.
+
+## Does `setFeeTiersAndRoles(...)` reset EMA?
+
+No. EMA preservation is intentional for minor fee-ladder maintenance.
+For material controller/topology reconfiguration, run paused maintenance and an explicit emergency reset-to-floor before returning live.
+
+## How does EMA bootstrap work after init/reset?
+
+EMA is seeded by the first non-zero close period.
+Early periods after init/reset should be treated as a calibration window.
+
+## Can `periodVol` overflow?
+
+It is intentionally bounded: `periodVol` saturates at `uint64.max` under theoretical/extreme flow.
+
+## Is any dynamic fee encoding accepted in callbacks?
+
+No. The key check is strict: `key.fee` must equal `LPFeeLibrary.DYNAMIC_FEE_FLAG` exactly.
 
 ## Why does `receive()` revert?
 

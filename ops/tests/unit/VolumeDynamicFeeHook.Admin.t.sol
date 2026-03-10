@@ -185,6 +185,24 @@ contract VolumeDynamicFeeHookAdminTest is Test, VolumeDynamicFeeHookV2DeployHelp
         assertGt(holdRemaining, 0, "precondition: cash hold must be active");
     }
 
+    function _defaultControllerParams() internal pure returns (VolumeDynamicFeeHook.ControllerParams memory p) {
+        p = VolumeDynamicFeeHook.ControllerParams({
+            minCloseVolToCashUsd6: V2_MIN_CLOSEVOL_TO_CASH_USD6,
+            upRToCashBps: V2_UP_R_TO_CASH_BPS,
+            cashHoldPeriods: V2_CASH_HOLD_PERIODS,
+            minCloseVolToExtremeUsd6: V2_MIN_CLOSEVOL_TO_EXTREME_USD6,
+            upRToExtremeBps: V2_UP_R_TO_EXTREME_BPS,
+            upExtremeConfirmPeriods: V2_UP_EXTREME_CONFIRM_PERIODS,
+            extremeHoldPeriods: V2_EXTREME_HOLD_PERIODS,
+            downRFromExtremeBps: V2_DOWN_R_FROM_EXTREME_BPS,
+            downExtremeConfirmPeriods: V2_DOWN_EXTREME_CONFIRM_PERIODS,
+            downRFromCashBps: V2_DOWN_R_FROM_CASH_BPS,
+            downCashConfirmPeriods: V2_DOWN_CASH_CONFIRM_PERIODS,
+            emergencyFloorCloseVolUsd6: V2_EMERGENCY_FLOOR_CLOSEVOL_USD6,
+            emergencyConfirmPeriods: V2_EMERGENCY_CONFIRM_PERIODS
+        });
+    }
+
     function test_hookFee_is_returned_via_afterSwap_delta_path() public {
         hook.scheduleHookFeePercentChange(10);
         vm.warp(block.timestamp + 48 hours);
@@ -294,6 +312,36 @@ contract VolumeDynamicFeeHookAdminTest is Test, VolumeDynamicFeeHookV2DeployHelp
 
         vm.expectRevert(VolumeDynamicFeeHook.InvalidConfig.selector);
         hook.setTimingParams(PERIOD_SECONDS, EMA_PERIODS, PERIOD_SECONDS, DEADBAND_BPS);
+    }
+
+    function test_setControllerParams_reverts_when_cash_volume_threshold_exceeds_extreme_threshold() public {
+        hook.pause();
+
+        VolumeDynamicFeeHook.ControllerParams memory p = _defaultControllerParams();
+        p.minCloseVolToCashUsd6 = p.minCloseVolToExtremeUsd6 + 1;
+
+        vm.expectRevert(VolumeDynamicFeeHook.InvalidConfig.selector);
+        hook.setControllerParams(p);
+    }
+
+    function test_setControllerParams_reverts_when_cash_up_ratio_exceeds_extreme_up_ratio() public {
+        hook.pause();
+
+        VolumeDynamicFeeHook.ControllerParams memory p = _defaultControllerParams();
+        p.upRToCashBps = p.upRToExtremeBps + 1;
+
+        vm.expectRevert(VolumeDynamicFeeHook.InvalidConfig.selector);
+        hook.setControllerParams(p);
+    }
+
+    function test_setControllerParams_reverts_when_cash_down_ratio_is_below_extreme_down_ratio() public {
+        hook.pause();
+
+        VolumeDynamicFeeHook.ControllerParams memory p = _defaultControllerParams();
+        p.downRFromCashBps = p.downRFromExtremeBps - 1;
+
+        vm.expectRevert(VolumeDynamicFeeHook.InvalidConfig.selector);
+        hook.setControllerParams(p);
     }
 
     function test_cashHoldPeriods_one_results_in_zero_effective_hold_protection() public {
@@ -481,6 +529,27 @@ contract VolumeDynamicFeeHookAdminTest is Test, VolumeDynamicFeeHookV2DeployHelp
         assertEq(emergency, 0);
     }
 
+    function test_setFeeTiersAndRoles_preserves_ema_for_maintenance_updates() public {
+        _swap(true, -1, -10_000_000, 9_500_000);
+        vm.warp(block.timestamp + PERIOD_SECONDS);
+        _swap(true, -1, 0, 0);
+
+        (, uint96 emaBefore,,) = hook.unpackedState();
+        assertGt(emaBefore, 0, "precondition: EMA should be seeded");
+
+        hook.pause();
+
+        uint24[] memory tiers = new uint24[](4);
+        tiers[0] = 400;
+        tiers[1] = 1200;
+        tiers[2] = 2500;
+        tiers[3] = 9000;
+        hook.setFeeTiersAndRoles(tiers, 0, 2, 3);
+
+        (, uint96 emaAfter,,) = hook.unpackedState();
+        assertEq(emaAfter, emaBefore, "EMA must be preserved across tier-role maintenance updates");
+    }
+
     function test_lullReset_activates_pendingMinCountedSwap_before_first_new_period_swap() public {
         assertEq(hook.minCountedSwapUsd6(), 4_000_000);
         hook.scheduleMinCountedSwapUsd6Change(10_000_000);
@@ -542,6 +611,13 @@ contract VolumeDynamicFeeHookAdminTest is Test, VolumeDynamicFeeHookV2DeployHelp
         _swap(true, -1, -6_000_000, 5_700_000);
         (periodVol,,,) = hook.unpackedState();
         assertEq(periodVol, 0, "new threshold must apply after next period boundary");
+    }
+
+    function test_periodVol_saturates_at_uint64_max_under_extreme_volume() public {
+        _swap(true, -1, -type(int128).max, 0);
+
+        (uint64 periodVol,,,) = hook.unpackedState();
+        assertEq(periodVol, type(uint64).max);
     }
 
     function test_scaledEma_updates_with_precision() public {

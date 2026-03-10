@@ -2534,7 +2534,7 @@ random_target_down_volume_raw() {
   local down_r="$2"
   local target cap
   if ! [[ "${ema}" =~ ^[0-9]+$ ]]; then ema=0; fi
-  if ! [[ "${down_r}" =~ ^[0-9]+$ ]]; then down_r=10500; fi
+  if ! [[ "${down_r}" =~ ^[0-9]+$ ]]; then down_r=13000; fi
   if (( ema <= 0 )); then
     echo "${HOOK_DUST_CLOSE_VOL_USD6}"
     return
@@ -4226,7 +4226,7 @@ cases_target_down_volume() {
   if [[ "${CASES_STAGE}" == "reversal_seed" || "${CASES_STAGE}" == "reversal_mid" ]]; then
     rbps="${HOOK_DOWN_R_FROM_EXTREME_BPS}"
   fi
-  if ! [[ "${rbps}" =~ ^[0-9]+$ ]]; then rbps=10500; fi
+  if ! [[ "${rbps}" =~ ^[0-9]+$ ]]; then rbps=13000; fi
   if (( ema <= 0 )); then
     echo "${HOOK_DUST_CLOSE_VOL_USD6}"
     return

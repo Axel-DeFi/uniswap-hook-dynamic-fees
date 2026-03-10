@@ -61,7 +61,7 @@ Monitoring must consume `EmergencyResetToFloorApplied` / `EmergencyResetToCashAp
 ## Dust threshold operations
 
 `minCountedSwapUsd6` is telemetry-only filtering and never blocks swaps.
-Range for updates is `1e6..10e6`; default is `4e6`.
+Range for updates is `1e6..10e6`; default is `$4 / 4e6` (selected from observed v1 telemetry).
 
 Flow:
 1. `scheduleMinCountedSwapUsd6Change(value)`
@@ -71,8 +71,17 @@ Flow:
 Notes:
 - No timelock for threshold updates (project decision).
 - Recalibration target cadence: every 5 days from offchain analytics.
+- Dust filtering is mitigation, not a formal proof against all fragmentation patterns on cheap L2.
 
 ## Accepted governance risks
 
 - `setHookFeeRecipient(...)` is immediate (no timelock) by design.
 - Mitigation is operational: owner key controls + monitoring/alerting.
+- Production owner must be multisig; local EOA owner is acceptable only for dev/test.
+- Hot-wallet owner usage is unacceptable for production; use cold/hardware custody.
+
+## Monitoring minimums
+
+- Track `PeriodClosed` and alert on repeated abnormal regime escalations.
+- Track `HookFeeRecipientUpdated` and emergency-reset events.
+- Treat wash-trading and fee-poisoning as residual economic risks in adversarial routing environments.

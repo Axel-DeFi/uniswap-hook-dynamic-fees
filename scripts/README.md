@@ -49,7 +49,10 @@ Uses:
 - `pause()`/`unpause()` are freeze/resume semantics (not swap stop, not HookFee stop).
 - Emergency resets are paused-only and explicit (`toFloor` / `toCash`).
 - `minCountedSwapUsd6` is telemetry-only dust filtering, not a swap gate.
+- Default telemetry dust threshold is `$4 / 4e6` (selected from observed v1 telemetry).
 - Threshold updates are pending-state only, bounded to `1e6..10e6`, and activate at next period boundary.
 - Threshold updates intentionally have no timelock; recalibration target cadence is 5 days offchain.
 - Claim payout path uses PoolManager accounting withdrawal (`unlock` -> `burn` -> `take`).
 - `approxLpFeesUsd6` is approximate analytics, not accounting output.
+- Pool key uses strict dynamic fee flag matching (`key.fee == LPFeeLibrary.DYNAMIC_FEE_FLAG`).
+- Production owner baseline: multisig + cold/hardware key custody; hot-wallet ownership is not acceptable.

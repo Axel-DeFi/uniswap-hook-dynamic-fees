@@ -1313,6 +1313,10 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
         if (p.emergencyConfirmPeriods == 0 || p.emergencyConfirmPeriods > MAX_EMERGENCY_STREAK) {
             revert InvalidConfirmPeriods();
         }
+        // Cross-parameter consistency guards.
+        if (p.minCloseVolToCashUsd6 > p.minCloseVolToExtremeUsd6) revert InvalidConfig();
+        if (p.upRToCashBps > p.upRToExtremeBps) revert InvalidConfig();
+        if (p.downRFromCashBps < p.downRFromExtremeBps) revert InvalidConfig();
 
         _config.minCloseVolToCashUsd6 = p.minCloseVolToCashUsd6;
         _config.upRToCashBps = p.upRToCashBps;
@@ -1484,7 +1488,8 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
         ) {
             revert InvalidPoolKey();
         }
-        if (!LPFeeLibrary.isDynamicFee(key.fee)) revert NotDynamicFeePool();
+        // Require exact dynamic-fee marker for the bound pool key.
+        if (key.fee != LPFeeLibrary.DYNAMIC_FEE_FLAG) revert NotDynamicFeePool();
         if (address(key.hooks) != address(this)) revert InvalidPoolKey();
     }
 

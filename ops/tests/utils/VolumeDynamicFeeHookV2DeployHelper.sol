@@ -18,7 +18,7 @@ abstract contract VolumeDynamicFeeHookV2DeployHelper {
 
     uint16 internal constant V2_DOWN_R_FROM_EXTREME_BPS = 13_000;
     uint8 internal constant V2_DOWN_EXTREME_CONFIRM_PERIODS = 2;
-    uint16 internal constant V2_DOWN_R_FROM_CASH_BPS = 10_500;
+    uint16 internal constant V2_DOWN_R_FROM_CASH_BPS = 13_000;
     uint8 internal constant V2_DOWN_CASH_CONFIRM_PERIODS = 3;
 
     uint64 internal constant V2_EMERGENCY_FLOOR_CLOSEVOL_USD6 = 600 * 1e6;

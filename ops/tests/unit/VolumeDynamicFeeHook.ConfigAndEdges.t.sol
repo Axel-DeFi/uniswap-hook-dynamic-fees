@@ -298,6 +298,16 @@ contract VolumeDynamicFeeHookConfigAndEdgesTest is Test, VolumeDynamicFeeHookV2D
         assertFalse(perms.beforeSwapReturnDelta);
     }
 
+    function test_afterInitialize_reverts_when_dynamic_fee_flag_is_not_exact_constant() public {
+        DeployCfg memory cfg = _defaultCfg();
+        VolumeDynamicFeeHookConfigHarness fresh = _deploy(cfg);
+        PoolKey memory badKey = _keyFor(cfg, address(fresh));
+        badKey.fee = LPFeeLibrary.DYNAMIC_FEE_FLAG | uint24(1);
+
+        vm.expectRevert(VolumeDynamicFeeHook.NotDynamicFeePool.selector);
+        manager.callAfterInitialize(fresh, badKey);
+    }
+
     function test_owner_and_hookFeeRecipient_are_distinct_entities() public {
         assertEq(hook.owner(), address(this));
         assertEq(hook.hookFeeRecipient(), address(this));
