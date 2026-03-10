@@ -166,7 +166,8 @@ contract VolumeDynamicFeeHookAdminTest is Test, VolumeDynamicFeeHookV2DeployHelp
     }
 
     function _swap(bool zeroForOne, int256 amountSpecified, int128 amount0, int128 amount1) internal {
-        SwapParams memory params = SwapParams({zeroForOne: zeroForOne, amountSpecified: amountSpecified, sqrtPriceLimitX96: 0});
+        SwapParams memory params =
+            SwapParams({zeroForOne: zeroForOne, amountSpecified: amountSpecified, sqrtPriceLimitX96: 0});
         BalanceDelta delta = toBalanceDelta(amount0, amount1);
         manager.callAfterSwapWithParams(hook, key, params, delta);
     }
@@ -185,7 +186,11 @@ contract VolumeDynamicFeeHookAdminTest is Test, VolumeDynamicFeeHookV2DeployHelp
         assertGt(holdRemaining, 0, "precondition: cash hold must be active");
     }
 
-    function _defaultControllerParams() internal pure returns (VolumeDynamicFeeHook.ControllerParams memory p) {
+    function _defaultControllerParams()
+        internal
+        pure
+        returns (VolumeDynamicFeeHook.ControllerParams memory p)
+    {
         p = VolumeDynamicFeeHook.ControllerParams({
             minCloseVolToCashUsd6: V2_MIN_CLOSEVOL_TO_CASH_USD6,
             upRToCashBps: V2_UP_R_TO_CASH_BPS,
@@ -248,9 +253,7 @@ contract VolumeDynamicFeeHookAdminTest is Test, VolumeDynamicFeeHookV2DeployHelp
     function test_hookFee_cap_enforced_at_10_percent() public {
         vm.expectRevert(
             abi.encodeWithSelector(
-                VolumeDynamicFeeHook.HookFeePercentLimitExceeded.selector,
-                uint16(11),
-                uint16(10)
+                VolumeDynamicFeeHook.HookFeePercentLimitExceeded.selector, uint16(11), uint16(10)
             )
         );
         hook.scheduleHookFeePercentChange(11);
@@ -277,6 +280,29 @@ contract VolumeDynamicFeeHookAdminTest is Test, VolumeDynamicFeeHookV2DeployHelp
         vm.warp(block.timestamp + 48 hours);
         hook.executeHookFeePercentChange();
         assertEq(hook.hookFeePercent(), 5);
+    }
+
+    function test_executeHookFeePercentChange_reverts_if_recipient_becomes_zero_before_execution() public {
+        hook.scheduleHookFeePercentChange(0);
+        vm.warp(block.timestamp + 48 hours);
+        hook.executeHookFeePercentChange();
+        assertEq(hook.hookFeePercent(), 0, "precondition: hook fee must be zero");
+
+        hook.scheduleHookFeePercentChange(4);
+        hook.setHookFeeRecipient(address(0));
+        (,, uint64 executeAfter) = hook.pendingHookFeePercentChange();
+        vm.warp(executeAfter);
+
+        vm.expectRevert(VolumeDynamicFeeHook.HookFeeRecipientRequired.selector);
+        hook.executeHookFeePercentChange();
+
+        (bool exists, uint16 pendingValue, uint64 pendingExecuteAfter) = hook.pendingHookFeePercentChange();
+        assertTrue(exists, "pending change must remain queued after failed execute");
+        assertEq(pendingValue, 4, "pending hook fee value must remain intact");
+        assertEq(pendingExecuteAfter, uint64(block.timestamp), "executeAfter should still be mature");
+
+        assertEq(hook.hookFeePercent(), 0, "active config must remain valid after failed execute");
+        assertEq(hook.hookFeeRecipient(), address(0), "recipient update is valid while active fee is zero");
     }
 
     function test_owner_transfer_propose_cancel_accept_flow() public {
@@ -421,10 +447,8 @@ contract VolumeDynamicFeeHookAdminTest is Test, VolumeDynamicFeeHookV2DeployHelp
             uint8 upBefore,
             uint8 downBefore,
             uint8 emergencyBefore,
-            uint64 periodStartBefore,
-            ,
+            uint64 periodStartBefore,,
             uint96 emaBefore,
-
         ) = hook.getStateDebug();
 
         uint256 updateCountBeforePause = manager.updateCount();
@@ -440,7 +464,6 @@ contract VolumeDynamicFeeHookAdminTest is Test, VolumeDynamicFeeHookV2DeployHelp
             uint64 periodStartPaused,
             uint64 periodVolPaused,
             uint96 emaPaused,
-
         ) = hook.getStateDebug();
 
         assertEq(feeIdxPaused, feeIdxBefore);
@@ -456,25 +479,22 @@ contract VolumeDynamicFeeHookAdminTest is Test, VolumeDynamicFeeHookV2DeployHelp
         assertEq(manager.lastAfterSwapDelta() > 0, true, "HookFee should still be charged while paused");
 
         (
-            uint8 feeIdxAfterSwapWhilePaused,
-            ,
-            ,
-            ,
-            ,
+            uint8 feeIdxAfterSwapWhilePaused,,,,,
             uint64 periodStartAfterSwapWhilePaused,
-            uint64 periodVolAfterSwapWhilePaused,
-            ,
+            uint64 periodVolAfterSwapWhilePaused,,
         ) = hook.getStateDebug();
         assertEq(feeIdxAfterSwapWhilePaused, feeIdxBefore);
         assertEq(periodStartAfterSwapWhilePaused, periodStartPaused);
         assertEq(periodVolAfterSwapWhilePaused, 0);
-        assertEq(manager.updateCount(), updateCountBeforePause, "paused swaps must not trigger fee tier updates");
+        assertEq(
+            manager.updateCount(), updateCountBeforePause, "paused swaps must not trigger fee tier updates"
+        );
 
         hook.unpause();
         assertFalse(hook.isPaused());
 
         _swap(true, -1, -6_000_000, 5_700_000);
-        (,,, ,,, uint64 periodVolAfterUnpause,,) = hook.getStateDebug();
+        (,,,,,, uint64 periodVolAfterUnpause,,) = hook.getStateDebug();
         assertEq(periodVolAfterUnpause, 6_000_000);
     }
 
@@ -619,7 +639,7 @@ contract VolumeDynamicFeeHookAdminTest is Test, VolumeDynamicFeeHookV2DeployHelp
         assertEq(hook.minCountedSwapUsd6(), 4_000_000);
 
         _swap(true, -1, -1_000_000, 900_000);
-        (uint64 periodVol,,, ) = hook.unpackedState();
+        (uint64 periodVol,,,) = hook.unpackedState();
         assertEq(periodVol, 0, "dust swap must not be counted");
         assertEq(manager.lastAfterSwapDelta() > 0, true, "dust swap still pays HookFee");
 
@@ -674,7 +694,8 @@ contract VolumeDynamicFeeHookAdminTest is Test, VolumeDynamicFeeHookV2DeployHelp
         _swap(true, -1, 0, 0);
 
         (, uint96 ema2,,) = hook.unpackedState();
-        uint96 expected2 = uint96((uint256(expected1) * (EMA_PERIODS - 1) + uint256(20_000_000) * 1_000_000) / EMA_PERIODS);
+        uint96 expected2 =
+            uint96((uint256(expected1) * (EMA_PERIODS - 1) + uint256(20_000_000) * 1_000_000) / EMA_PERIODS);
         assertEq(ema2, expected2);
     }
 

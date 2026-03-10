@@ -43,6 +43,8 @@ ops/sepolia/scripts/emergency.sh
 - optional `cancelHookFeePercentChange()`
 - `executeHookFeePercentChange()` after 48h
 
+Timelock visibility is intentional. The main exposed effect is HookFee timing; LP fee ownership/accrual is unchanged.
+
 ### HookFee claim settlement
 
 - Use `claimHookFees(...)` / `claimAllHookFees(...)` as owner.

@@ -29,6 +29,7 @@ See `LICENSE.md` for full terms.
 - HookFee accrual is persisted as PoolManager ERC6909 claims and claimed via `unlock` + `burn` + `take`.
 - Claim-all path is single and explicit: `claimAllHookFees()` always pays to current `hookFeeRecipient`.
 - `pause()/unpause()` freeze/resume regulator transitions at the current LP fee tier (no automatic floor reset, no swap stop, no HookFee stop).
+- `setFeeTiersAndRoles(...)` intentionally preserves EMA for minor fee-ladder maintenance; material fee-ladder/controller reconfiguration should follow paused maintenance + explicit `emergencyResetToFloor()` before `unpause()`.
 - Emergency resets are explicit and available only while paused:
   - `emergencyResetToFloor()`
   - `emergencyResetToCash()`
@@ -61,6 +62,7 @@ See `LICENSE.md` for full terms.
 - Dust-splitting remains a residual architectural/model risk. The configurable dust filter mitigates it, and the default `$4 / 4e6` was selected from observed v1 telemetry. This is not a formal proof against all fragmentation patterns on cheap L2.
 - Wash-trading / regime-poisoning remains a residual economic manipulation risk (more realistic as competitor-funded distortion/DoS in adversarial routing environments).
 - `setHookFeeRecipient(...)` remains immediate (owner governance/key risk, operational mitigation only).
+- HookFee percent timelock is intentionally transparent; observable pending changes mainly affect HookFee timing while LP fee ownership/accrual remains unchanged.
 - `scheduleMinCountedSwapUsd6Change(...)` has no timelock by design (pending + next-period activation only).
 
 ## Ops baseline

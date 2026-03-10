@@ -62,6 +62,7 @@ Swap accrual path uses `poolManager.mint(...)` (claim accounting), not direct to
   - `cancelHookFeePercentChange()`
   - `executeHookFeePercentChange()`
 - Only one pending HookFee change can exist.
+- Timelock transparency is intentional; the main exposed effect is HookFee timing. LP fee ownership/accrual for LPs is unchanged.
 
 ## Owner transfer flow
 
@@ -214,7 +215,7 @@ This metric is approximate telemetry only, not accounting-grade LP revenue.
 
 - `receive()` always reverts.
 - ETH can be moved only through explicit admin rescue:
-  - `rescueETH(address,uint256)`
+  - `rescueETH(uint256)`
 
 ## Claim and rescue
 
@@ -235,7 +236,7 @@ Claim settlement path:
 
 Rescue surface:
 - `rescueToken(Currency,uint256)` (non-pool currencies only)
-- `rescueETH(address,uint256)`
+- `rescueETH(uint256)`
 
 ## Event coverage
 
@@ -261,8 +262,8 @@ All admin state transitions emit events, including:
 - owner key custody should use cold/hardware wallet standards.
 - monitor `PeriodClosed` and alert on repeated abnormal regime escalations.
 - monitor recipient-change events (`HookFeeRecipientUpdated`) as a mandatory operational control.
-- EMA preservation across `setFeeTiersAndRoles(...)` is intentional and acceptable for minor fee-ladder maintenance.
-- for material controller/topology reconfiguration, run paused maintenance and explicit emergency reset-to-floor before returning live.
+- EMA preservation across `setFeeTiersAndRoles(...)` is intentional for minor fee-ladder maintenance updates.
+- for material fee-ladder or controller reconfiguration, keep paused, apply maintenance updates, run explicit emergency reset-to-floor, then unpause.
 
 ## Hook key validation
 
@@ -275,6 +276,7 @@ Any non-exact dynamic-flag encoding is rejected (`NotDynamicFeePool`).
 ## Gas interpretation note
 
 - inactivity catch-up overhead in period-closing logic is bounded by construction (`periods = elapsed / periodSeconds` with explicit loop semantics).
+- measurement flow includes: normal swap, single-period close, lull reset, and worst-case catch-up (`MAX_LULL_PERIODS - 1` closed periods with inactivity just below lull reset).
 - gas observations in this repository are engineering measurements, environment-dependent.
 - this is not presented as a formal, exhaustive gas audit.
 - latest local observation artifacts:

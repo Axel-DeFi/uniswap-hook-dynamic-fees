@@ -32,6 +32,7 @@ Actual payout happens later in claim flow via `unlock` -> `burn` -> `take`.
 ## How is HookFee bounded?
 
 `hookFeePercent` is hard-capped at 10% and can only change through 48-hour timelock.
+Timelock transparency is intentional; the main exposed effect is HookFee timing. LP fee ownership/accrual is unchanged.
 
 ## What does pause do now?
 
@@ -95,7 +96,7 @@ Operational mitigations are conservative defaults plus monitoring of `PeriodClos
 ## Does `setFeeTiersAndRoles(...)` reset EMA?
 
 No. EMA preservation is intentional for minor fee-ladder maintenance.
-For material controller/topology reconfiguration, run paused maintenance and an explicit emergency reset-to-floor before returning live.
+For material fee-ladder/controller changes, keep paused, apply maintenance updates, run explicit emergency reset-to-floor, then unpause.
 
 ## How does EMA bootstrap work after init/reset?
 
@@ -112,7 +113,7 @@ No. The key check is strict: `key.fee` must equal `LPFeeLibrary.DYNAMIC_FEE_FLAG
 
 ## Why does `receive()` revert?
 
-To avoid accidental ETH transfers into hook accounting. ETH movement is explicit through `rescueETH(...)`.
+To avoid accidental ETH transfers into hook accounting. ETH movement is explicit through `rescueETH(uint256)`.
 
 ## Can emergency floor threshold be zero?
 

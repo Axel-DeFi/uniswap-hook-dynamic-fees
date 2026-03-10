@@ -33,6 +33,8 @@ ops/local/scripts/emergency.sh
 2. optional `cancelHookFeePercentChange()`
 3. after delay: `executeHookFeePercentChange()`
 
+Timelock visibility is intentional. The main exposed effect is HookFee timing; LP fee ownership/accrual is unchanged.
+
 ### HookFee claim settlement
 
 - Use `claimHookFees(...)` / `claimAllHookFees(...)` as owner.

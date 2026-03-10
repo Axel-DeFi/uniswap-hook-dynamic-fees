@@ -16,6 +16,8 @@ import {ConfigLoader} from "../../shared/lib/ConfigLoader.sol";
 import {OpsTypes} from "../../shared/types/OpsTypes.sol";
 
 contract CollectGasObservationsLocal is Script {
+    uint32 internal constant MAX_LULL_PERIODS = 24;
+
     function run() external {
         OpsTypes.CoreConfig memory cfg = ConfigLoader.loadCoreConfig();
         require(cfg.hookAddress != address(0) && cfg.hookAddress.code.length > 0, "HOOK_ADDRESS missing");
@@ -24,8 +26,6 @@ contract CollectGasObservationsLocal is Script {
         require(pk != 0, "PRIVATE_KEY missing");
 
         uint256 swapAmountRaw = vm.envOr("GAS_SWAP_STABLE_RAW", uint256(6_000_000));
-        uint256 periodSeconds = vm.envOr("PERIOD_SECONDS", uint256(60));
-        uint256 lullResetSeconds = vm.envOr("LULL_RESET_SECONDS", uint256(600));
 
         PoolKey memory key = PoolKey({
             currency0: Currency.wrap(cfg.token0),
@@ -37,21 +37,39 @@ contract CollectGasObservationsLocal is Script {
 
         VolumeDynamicFeeHook hook = VolumeDynamicFeeHook(payable(cfg.hookAddress));
         MockPoolManager manager = MockPoolManager(payable(cfg.poolManager));
+        uint32 periodSeconds = hook.periodSeconds();
+        uint8 emaPeriods = hook.emaPeriods();
+        uint16 deadbandBps = hook.deadbandBps();
+        uint32 lullResetSeconds = hook.lullResetSeconds();
+        uint256 worstCaseLullResetRaw = uint256(periodSeconds) * uint256(MAX_LULL_PERIODS);
+        require(worstCaseLullResetRaw <= type(uint32).max, "periodSeconds too large");
+        uint32 worstCaseLullResetSeconds = uint32(worstCaseLullResetRaw);
+        uint256 worstCaseCatchUpWarpSeconds = worstCaseLullResetRaw - 1;
 
         vm.startBroadcast(pk);
         if (hook.isPaused()) {
             hook.unpause();
+        }
+        if (lullResetSeconds != worstCaseLullResetSeconds) {
+            hook.pause();
+            hook.setTimingParams(periodSeconds, emaPeriods, worstCaseLullResetSeconds, deadbandBps);
+            hook.unpause();
+            lullResetSeconds = worstCaseLullResetSeconds;
         }
 
         // Normal swap without rollover.
         manager.callAfterSwap(hook, key, _stableDelta(cfg, swapAmountRaw));
 
         // Swap that closes period.
-        vm.warp(block.timestamp + periodSeconds + 1);
+        vm.warp(block.timestamp + uint256(periodSeconds));
+        manager.callAfterSwap(hook, key, toBalanceDelta(0, 0));
+
+        // Worst-case catch-up: close MAX_LULL_PERIODS - 1 periods just below lull reset.
+        vm.warp(block.timestamp + worstCaseCatchUpWarpSeconds);
         manager.callAfterSwap(hook, key, toBalanceDelta(0, 0));
 
         // First swap after lull-reset threshold.
-        vm.warp(block.timestamp + lullResetSeconds + 1);
+        vm.warp(block.timestamp + uint256(lullResetSeconds) + 1);
         manager.callAfterSwap(hook, key, _stableDelta(cfg, swapAmountRaw));
 
         // Pause and resume operations.

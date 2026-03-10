@@ -87,11 +87,15 @@ contract VolumeDynamicFeeHookScriptHarness is VolumeDynamicFeeHook {
 contract MeasureGasLocal is Script {
     address internal constant TOKEN0 = address(0x0000000000000000000000000000000000001111);
     address internal constant TOKEN1 = address(0x0000000000000000000000000000000000002222);
+    uint32 internal constant PERIOD_SECONDS = 300;
+    uint32 internal constant MAX_LULL_PERIODS = 24;
 
     function run() external {
         uint256 defaultPk = uint256(0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80);
         uint256 pk = vm.envOr("PRIVATE_KEY", defaultPk);
         address owner = vm.addr(pk);
+        uint32 lullResetSeconds = PERIOD_SECONDS * MAX_LULL_PERIODS;
+        uint256 worstCaseCatchUpWarpSeconds = uint256(lullResetSeconds) - 1;
 
         uint24[] memory tiers = new uint24[](3);
         tiers[0] = 400;
@@ -111,10 +115,10 @@ contract MeasureGasLocal is Script {
             6,
             0,
             tiers,
-            300,
+            PERIOD_SECONDS,
             8,
             500,
-            3600,
+            lullResetSeconds,
             owner,
             owner,
             3,
@@ -149,12 +153,16 @@ contract MeasureGasLocal is Script {
         // normal swap without rollover
         manager.callAfterSwap(hook, key, _deltaStable(10_000_000));
 
-        // swap that closes period
-        vm.warp(block.timestamp + 301);
+        // swap that closes exactly one period
+        vm.warp(block.timestamp + PERIOD_SECONDS);
+        manager.callAfterSwap(hook, key, toBalanceDelta(0, 0));
+
+        // worst-case catch-up just below lull reset; closes MAX_LULL_PERIODS - 1 periods
+        vm.warp(block.timestamp + worstCaseCatchUpWarpSeconds);
         manager.callAfterSwap(hook, key, toBalanceDelta(0, 0));
 
         // swap after lull reset threshold
-        vm.warp(block.timestamp + 3601);
+        vm.warp(block.timestamp + uint256(lullResetSeconds) + 1);
         manager.callAfterSwap(hook, key, _deltaStable(10_000_000));
 
         // pause / unpause path

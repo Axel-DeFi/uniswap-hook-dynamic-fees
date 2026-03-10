@@ -14,6 +14,7 @@ import {Hooks} from "@uniswap/v4-core/src/libraries/Hooks.sol";
 
 import {VolumeDynamicFeeHook} from "src/VolumeDynamicFeeHook.sol";
 import {MockPoolManager} from "../mocks/MockPoolManager.sol";
+import {MockERC20} from "../mocks/MockERC20.sol";
 import {VolumeDynamicFeeHookV2DeployHelper} from "../utils/VolumeDynamicFeeHookV2DeployHelper.sol";
 
 contract VolumeDynamicFeeHookConfigHarness is VolumeDynamicFeeHook {
@@ -96,6 +97,7 @@ contract VolumeDynamicFeeHookConfigAndEdgesTest is Test, VolumeDynamicFeeHookV2D
 
     uint32 internal constant PERIOD_SECONDS = 300;
     uint32 internal constant LULL_RESET_SECONDS = 3600;
+    address internal constant OUTSIDER = address(0xCAFE);
 
     struct DeployCfg {
         address token0;
@@ -302,9 +304,7 @@ contract VolumeDynamicFeeHookConfigAndEdgesTest is Test, VolumeDynamicFeeHookV2D
 
         vm.expectRevert(
             abi.encodeWithSelector(
-                VolumeDynamicFeeHook.HookFeePercentLimitExceeded.selector,
-                uint16(11),
-                uint16(10)
+                VolumeDynamicFeeHook.HookFeePercentLimitExceeded.selector, uint16(11), uint16(10)
             )
         );
         _deploy(cfg);
@@ -401,7 +401,48 @@ contract VolumeDynamicFeeHookConfigAndEdgesTest is Test, VolumeDynamicFeeHookV2D
         vm.expectRevert(VolumeDynamicFeeHook.InvalidRescueCurrency.selector);
         hook.rescueToken(Currency.wrap(TOKEN0), 1);
 
-        vm.expectRevert(VolumeDynamicFeeHook.InvalidRecipient.selector);
-        hook.rescueETH(address(0), 1);
+        vm.expectRevert(VolumeDynamicFeeHook.ClaimTooLarge.selector);
+        hook.rescueETH(1);
+
+        vm.prank(OUTSIDER);
+        vm.expectRevert(VolumeDynamicFeeHook.NotOwner.selector);
+        hook.rescueETH(0);
+    }
+
+    function test_rescueETH_transfers_to_owner() public {
+        address ownerAddr = address(0xA11CE);
+        DeployCfg memory cfg = _defaultCfg();
+        cfg.owner = ownerAddr;
+        cfg.hookFeeRecipient = ownerAddr;
+
+        VolumeDynamicFeeHookConfigHarness ownerHook = _deploy(cfg);
+
+        uint256 amount = 1 ether;
+        vm.deal(address(ownerHook), amount);
+        uint256 ownerBalanceBefore = ownerAddr.balance;
+
+        vm.prank(ownerAddr);
+        ownerHook.rescueETH(amount);
+
+        assertEq(ownerAddr.balance, ownerBalanceBefore + amount);
+        assertEq(address(ownerHook).balance, 0);
+    }
+
+    function test_rescueETH_legacy_signature_is_unavailable() public {
+        (bool ok,) =
+            address(hook).call(abi.encodeWithSignature("rescueETH(address,uint256)", address(this), 0));
+        assertFalse(ok, "legacy rescueETH(address,uint256) signature must not be callable");
+    }
+
+    function test_rescueToken_transfers_nonPool_token_to_owner() public {
+        MockERC20 token = new MockERC20("Rescue Token", "RSC", 18);
+        uint256 amount = 7 ether;
+        token.mint(address(hook), amount);
+
+        uint256 ownerBefore = token.balanceOf(address(this));
+        hook.rescueToken(Currency.wrap(address(token)), amount);
+
+        assertEq(token.balanceOf(address(hook)), 0);
+        assertEq(token.balanceOf(address(this)), ownerBefore + amount);
     }
 }

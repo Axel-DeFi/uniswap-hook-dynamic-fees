@@ -2369,8 +2369,8 @@ test_t13_rescue_token() {
   assert_true "T13 hook balance decreased" "[[ ${hook_after} -lt ${hook_before} ]]" || return 1
   assert_true "T13 owner balance increased" "[[ ${owner_after} -gt ${owner_before} ]]" || return 1
 
-  cover_function "rescueETH(address,uint256)"
-  cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" "rescueETH(address,uint256)" "${OWNER_ADDR}" 0 >/dev/null || return 1
+  cover_function "rescueETH(uint256)"
+  cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" "rescueETH(uint256)" 0 >/dev/null || return 1
 
   tc_checkpoint "rescue_done" || return 1
   TC_REASON="Rescue path подтверждён: unauthorized blocked, allowed transfer выполняется, pool-currency rescue запрещён"

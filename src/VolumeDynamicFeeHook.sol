@@ -160,7 +160,9 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
     event LullReset(uint24 newFee, uint8 newFeeIdx);
 
     /// @notice Emitted when HookFee is accrued from a swap.
-    event HookFeeAccrued(address indexed currency, uint256 amount, uint24 appliedLpFeeBips, uint16 hookFeePercent);
+    event HookFeeAccrued(
+        address indexed currency, uint256 amount, uint24 appliedLpFeeBips, uint16 hookFeePercent
+    );
 
     /// @notice Emitted when accrued HookFees are claimed.
     event HookFeesClaimed(address indexed to, uint256 amount0, uint256 amount1);
@@ -489,7 +491,11 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
     // Hook implementations
     // -----------------------------------------------------------------------
 
-    function _afterInitialize(address, PoolKey calldata key, uint160, int24) internal override returns (bytes4) {
+    function _afterInitialize(address, PoolKey calldata key, uint160, int24)
+        internal
+        override
+        returns (bytes4)
+    {
         _validateKey(key);
 
         (,, uint64 periodStart,,,,,,) = _unpackState(_state);
@@ -816,12 +822,12 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
     }
 
     /// @notice Returns pending HookFee percent timelock data.
-    function pendingHookFeePercentChange() external view returns (bool exists, uint16 nextValue, uint64 executeAfter) {
-        return (
-            _hasPendingHookFeePercentChange,
-            _pendingHookFeePercent,
-            _pendingHookFeePercentExecuteAfter
-        );
+    function pendingHookFeePercentChange()
+        external
+        view
+        returns (bool exists, uint16 nextValue, uint64 executeAfter)
+    {
+        return (_hasPendingHookFeePercentChange, _pendingHookFeePercent, _pendingHookFeePercentExecuteAfter);
     }
 
     /// @notice Returns pending min-counted-swap threshold update.
@@ -1025,13 +1031,24 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
     }
 
     /// @notice Updates fee tiers and role indices while paused.
+    /// @dev EMA preservation is intentional for minor fee-ladder maintenance updates.
+    /// @dev For material fee-ladder or controller changes, keep paused, apply maintenance updates,
+    /// then run `emergencyResetToFloor()` before `unpause()`.
     function setFeeTiersAndRoles(uint24[] calldata tiers, uint8 floorIdx_, uint8 cashIdx_, uint8 extremeIdx_)
         external
         onlyOwner
         whenPaused
     {
-        (,, uint64 periodStart, uint8 feeIdx, bool paused_, uint8 holdRemaining, uint8 upExtremeStreak, uint8 downStreak, uint8 emergencyStreak) =
-            _unpackState(_state);
+        (
+            ,,
+            uint64 periodStart,
+            uint8 feeIdx,
+            bool paused_,
+            uint8 holdRemaining,
+            uint8 upExtremeStreak,
+            uint8 downStreak,
+            uint8 emergencyStreak
+        ) = _unpackState(_state);
         uint24 oldFee = _feeTier(feeIdx);
 
         _setFeeTiersAndRolesInternal(tiers, floorIdx_, cashIdx_, extremeIdx_);
@@ -1040,7 +1057,8 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
         if (periodStart == 0) return;
 
         (uint8 nextFeeIdx, bool found) = _findTierIdx(tiers, oldFee);
-        bool validRoleIdx = nextFeeIdx == _config.floorIdx || nextFeeIdx == _config.cashIdx || nextFeeIdx == _config.extremeIdx;
+        bool validRoleIdx = nextFeeIdx == _config.floorIdx || nextFeeIdx == _config.cashIdx
+            || nextFeeIdx == _config.extremeIdx;
         if (!found || !validRoleIdx) {
             nextFeeIdx = _config.floorIdx;
             holdRemaining = 0;
@@ -1056,7 +1074,17 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
         }
 
         uint64 nextPeriodStart = _now64();
-        _state = _packState(0, _emaFromState(), nextPeriodStart, nextFeeIdx, paused_, holdRemaining, upExtremeStreak, downStreak, emergencyStreak);
+        _state = _packState(
+            0,
+            _emaFromState(),
+            nextPeriodStart,
+            nextFeeIdx,
+            paused_,
+            holdRemaining,
+            upExtremeStreak,
+            downStreak,
+            emergencyStreak
+        );
 
         if (nextFeeIdx != feeIdx) {
             poolManager.updateDynamicLPFee(_poolKey(), _feeTier(nextFeeIdx));
@@ -1111,8 +1139,7 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
             ,
             uint96 emaVolScaled,
             uint64 periodStart,
-            uint8 feeIdx,
-            ,
+            uint8 feeIdx,,
             uint8 holdRemaining,
             uint8 upExtremeStreak,
             uint8 downStreak,
@@ -1146,8 +1173,7 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
             ,
             uint96 emaVolScaled,
             uint64 periodStart,
-            uint8 feeIdx,
-            ,
+            uint8 feeIdx,,
             uint8 holdRemaining,
             uint8 upExtremeStreak,
             uint8 downStreak,
@@ -1214,15 +1240,14 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
         emit RescueTransfer(Currency.unwrap(currency), amount, _owner);
     }
 
-    /// @notice Rescues ETH balance from the hook contract.
-    function rescueETH(address to, uint256 amount) external onlyOwner {
-        if (to == address(0)) revert InvalidRecipient();
+    /// @notice Rescues ETH balance from the hook contract to owner.
+    function rescueETH(uint256 amount) external onlyOwner {
         if (amount > address(this).balance) revert ClaimTooLarge();
 
-        (bool ok,) = payable(to).call{value: amount}("");
+        (bool ok,) = payable(_owner).call{value: amount}("");
         if (!ok) revert EthTransferFailed();
 
-        emit RescueTransfer(address(0), amount, to);
+        emit RescueTransfer(address(0), amount, _owner);
     }
 
     /// @notice Rejects direct ETH transfers.
@@ -1259,8 +1284,10 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
     /// @notice Validates telemetry dust-threshold bounds.
     /// @dev Allowed range is `[1e6, 10e6]` in USD6 units.
     function _validateMinCountedSwapUsd6(uint64 newMinCountedSwapUsd6) internal pure {
-        if (newMinCountedSwapUsd6 < MIN_MIN_COUNTED_SWAP_USD6 || newMinCountedSwapUsd6 > MAX_MIN_COUNTED_SWAP_USD6)
-        {
+        if (
+            newMinCountedSwapUsd6 < MIN_MIN_COUNTED_SWAP_USD6
+                || newMinCountedSwapUsd6 > MAX_MIN_COUNTED_SWAP_USD6
+        ) {
             revert InvalidMinCountedSwapUsd6();
         }
     }
@@ -1285,7 +1312,9 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
 
     function _setControllerParamsInternal(ControllerParams memory p) internal {
         if (p.cashHoldPeriods == 0 || p.cashHoldPeriods > MAX_HOLD_PERIODS) revert InvalidHoldPeriods();
-        if (p.extremeHoldPeriods == 0 || p.extremeHoldPeriods > MAX_HOLD_PERIODS) revert InvalidHoldPeriods();
+        if (p.extremeHoldPeriods == 0 || p.extremeHoldPeriods > MAX_HOLD_PERIODS) {
+            revert InvalidHoldPeriods();
+        }
 
         if (p.upExtremeConfirmPeriods == 0 || p.upExtremeConfirmPeriods > MAX_UP_EXTREME_STREAK) {
             revert InvalidConfirmPeriods();
@@ -1341,9 +1370,12 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
         return (0, false);
     }
 
-    function _setFeeTiersAndRolesInternal(uint24[] memory tiers, uint8 floorIdx_, uint8 cashIdx_, uint8 extremeIdx_)
-        internal
-    {
+    function _setFeeTiersAndRolesInternal(
+        uint24[] memory tiers,
+        uint8 floorIdx_,
+        uint8 cashIdx_,
+        uint8 extremeIdx_
+    ) internal {
         uint256 len = tiers.length;
         if (len == 0 || len > MAX_FEE_TIER_COUNT) revert InvalidConfig();
         if (len <= uint256(floorIdx_) || len <= uint256(cashIdx_) || len <= uint256(extremeIdx_)) {
@@ -1438,7 +1470,9 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
         _hookFees0 -= amount0;
         _hookFees1 -= amount1;
 
-        poolManager.unlock(abi.encode(HookFeeClaimUnlockData({recipient: to, amount0: amount0, amount1: amount1})));
+        poolManager.unlock(
+            abi.encode(HookFeeClaimUnlockData({recipient: to, amount0: amount0, amount1: amount1}))
+        );
         emit HookFeesClaimed(to, amount0, amount1);
     }
 
@@ -1509,8 +1543,9 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
         Currency unspecifiedCurrency = specifiedTokenIs0 ? key.currency1 : key.currency0;
         int128 unspecifiedAmountSigned = specifiedTokenIs0 ? delta.amount1() : delta.amount0();
 
-        uint256 absUnspecified =
-            unspecifiedAmountSigned < 0 ? uint256(-int256(unspecifiedAmountSigned)) : uint256(uint128(unspecifiedAmountSigned));
+        uint256 absUnspecified = unspecifiedAmountSigned < 0
+            ? uint256(-int256(unspecifiedAmountSigned))
+            : uint256(uint128(unspecifiedAmountSigned));
         if (absUnspecified == 0) return 0;
 
         uint256 lpFeeAmount = (absUnspecified * uint256(appliedFeeBips)) / FEE_SCALE;
@@ -1634,7 +1669,8 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
             );
         }
 
-        uint256 rBps = emaVolScaled == 0 ? 0 : (uint256(closeVol) * EMA_SCALE * BPS_SCALE) / uint256(emaVolScaled);
+        uint256 rBps =
+            emaVolScaled == 0 ? 0 : (uint256(closeVol) * EMA_SCALE * BPS_SCALE) / uint256(emaVolScaled);
         uint256 deadband = uint256(_config.deadbandBps);
         bool deadbandBlocked;
 
@@ -1708,14 +1744,15 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
 
         if (newHoldRemaining > 0) {
             newDownStreak = 0;
-            return (
-                newFeeIdx,
-                newHoldRemaining,
-                newUpExtremeStreak,
-                newDownStreak,
-                newEmergencyStreak,
-                REASON_HOLD
-            );
+            return
+                (
+                    newFeeIdx,
+                    newHoldRemaining,
+                    newUpExtremeStreak,
+                    newDownStreak,
+                    newEmergencyStreak,
+                    REASON_HOLD
+                );
         }
 
         if (newFeeIdx == _config.extremeIdx) {
