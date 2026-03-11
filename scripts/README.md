@@ -88,9 +88,11 @@ Primary artifacts:
 - `MIN_COUNTED_SWAP_USD6` is the expected current telemetry threshold used for deploy/ensure/preflight reuse validation
   (defaults to `4_000_000` if omitted).
 - For native-asset pools (`token0 == address(0)` or `token1 == address(0)`), deploy/ensure/preflight validates that current `owner()` can receive native payout from PoolManager sender context in the claim path.
-- Existing hook reuse is pinned to the canonical CREATE2 address for the current release and current constructor args,
-  requires the exact minimal callback surface (`afterInitialize`, `afterSwap`, `afterSwapReturnDelta` only), and
-  requires full config identity match plus exact PoolManager binding and zero pending state:
+- Existing hook reuse is pinned to the canonical CREATE2 address derived from the current release and the frozen
+  `ops/<network>/config/deploy.env` constructor snapshot, while current runtime/admin expectations come from
+  `ops/<network>/config/defaults.env`. Reuse requires the exact minimal callback surface (`afterInitialize`,
+  `afterSwap`, `afterSwapReturnDelta` only), and requires full config identity match plus exact PoolManager binding
+  and zero pending state:
   `owner()`, no `pendingOwner()`, stable decimals mode, current `minCountedSwapUsd6()`, fees, HookFee percent,
   timing params, controller params, and no pending HookFee / min-counted-swap changes.
 - Auxiliary scripts resolve network defaults from `ops/<network>/config/defaults.env` and live addresses from

@@ -14,7 +14,7 @@ import {MockPoolManager} from "../mocks/MockPoolManager.sol";
 import {VolumeDynamicFeeHookV2DeployHelper} from "../utils/VolumeDynamicFeeHookV2DeployHelper.sol";
 
 contract HookIdentityHarness {
-    function expectedHookAddress(OpsTypes.CoreConfig memory cfg)
+    function expectedHookAddress(OpsTypes.DeploymentConfig memory cfg)
         external
         pure
         returns (address hookAddress, bytes32 salt, bytes memory args)
@@ -42,7 +42,7 @@ contract HookIdentityLibTest is Test, VolumeDynamicFeeHookV2DeployHelper {
     }
 
     function test_expectedHookAddress_is_stable_even_if_canonical_address_has_code() public {
-        OpsTypes.CoreConfig memory cfg = _cfg(address(this), 6, V2_INITIAL_HOOK_FEE_PERCENT);
+        OpsTypes.DeploymentConfig memory cfg = _cfg(address(this), 6, V2_INITIAL_HOOK_FEE_PERCENT);
 
         (address expectedHookAddress, bytes32 expectedSalt, bytes memory constructorArgs) =
             harness.expectedHookAddress(cfg);
@@ -71,8 +71,8 @@ contract HookIdentityLibTest is Test, VolumeDynamicFeeHookV2DeployHelper {
     }
 
     function test_expectedHookAddress_changes_when_constructor_identity_changes() public view {
-        OpsTypes.CoreConfig memory cfgA = _cfg(address(this), 6, V2_INITIAL_HOOK_FEE_PERCENT);
-        OpsTypes.CoreConfig memory cfgB = _cfg(address(0xBEEF), 6, V2_INITIAL_HOOK_FEE_PERCENT);
+        OpsTypes.DeploymentConfig memory cfgA = _cfg(address(this), 6, V2_INITIAL_HOOK_FEE_PERCENT);
+        OpsTypes.DeploymentConfig memory cfgB = _cfg(address(0xBEEF), 6, V2_INITIAL_HOOK_FEE_PERCENT);
 
         (address hookA,,) = harness.expectedHookAddress(cfgA);
         (address hookB,,) = harness.expectedHookAddress(cfgB);
@@ -83,22 +83,13 @@ contract HookIdentityLibTest is Test, VolumeDynamicFeeHookV2DeployHelper {
     function _cfg(address owner_, uint8 stableDecimals_, uint16 hookFeePercent_)
         internal
         view
-        returns (OpsTypes.CoreConfig memory cfg)
+        returns (OpsTypes.DeploymentConfig memory cfg)
     {
-        cfg.runtime = OpsTypes.Runtime.Local;
-        cfg.rpcUrl = "";
-        cfg.chainIdExpected = block.chainid;
-        cfg.broadcast = false;
-        cfg.privateKey = 0;
-        cfg.deployer = address(this);
         cfg.poolManager = address(manager);
-        cfg.hookAddress = address(0);
-        cfg.poolAddress = address(0);
         cfg.owner = owner_;
-        cfg.volatileToken = TOKEN1;
-        cfg.stableToken = TOKEN0;
         cfg.token0 = TOKEN0;
         cfg.token1 = TOKEN1;
+        cfg.stableToken = TOKEN0;
         cfg.stableDecimals = stableDecimals_;
         cfg.tickSpacing = TICK_SPACING;
         cfg.floorFeePips = V2_DEFAULT_FLOOR_FEE;
@@ -109,7 +100,6 @@ contract HookIdentityLibTest is Test, VolumeDynamicFeeHookV2DeployHelper {
         cfg.deadbandBps = DEADBAND_BPS;
         cfg.lullResetSeconds = LULL_RESET_SECONDS;
         cfg.hookFeePercent = hookFeePercent_;
-        cfg.minCountedSwapUsd6 = 4_000_000;
         cfg.minCloseVolToCashUsd6 = V2_MIN_CLOSEVOL_TO_CASH_USD6;
         cfg.upRToCashBps = V2_UP_R_TO_CASH_BPS;
         cfg.cashHoldPeriods = V2_CASH_HOLD_PERIODS;

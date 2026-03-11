@@ -21,6 +21,7 @@ contract PreflightLive is LiveOpsBase {
         LoggingLib.phase(_phase("preflight"));
 
         OpsTypes.CoreConfig memory cfg = ConfigLoader.loadCoreConfig();
+        OpsTypes.DeploymentConfig memory deployCfg = ConfigLoader.loadDeploymentConfig(cfg);
         ConfigLoader.validateChainId(cfg.chainIdExpected);
 
         require(cfg.poolManager.code.length > 0, "POOL_MANAGER has no code");
@@ -28,7 +29,7 @@ contract PreflightLive is LiveOpsBase {
         OpsTypes.TokenValidation memory tokenValidation = TokenValidationLib.validateTokens(cfg);
         OpsTypes.BudgetCheck memory budget = BudgetLib.checkBeforeBroadcast(cfg, cfg.deployer);
         OpsTypes.RangeCheck memory range = RangeSafetyLib.validateRange(cfg);
-        (address canonicalHookAddress,,) = HookIdentityLib.expectedHookAddress(cfg);
+        (address canonicalHookAddress,,) = HookIdentityLib.expectedHookAddress(deployCfg);
 
         OpsTypes.HookValidation memory hookValidation;
         OpsTypes.PoolSnapshot memory snapshot;
@@ -36,7 +37,7 @@ contract PreflightLive is LiveOpsBase {
         if (cfg.hookAddress != address(0)) {
             if (cfg.hookAddress != canonicalHookAddress) {
                 hookValidation.ok = false;
-                hookValidation.reason = "HOOK_ADDRESS not canonical for current release/config";
+                hookValidation.reason = "HOOK_ADDRESS not canonical for current release/deployment snapshot";
             } else if (canonicalHookAddress.code.length == 0) {
                 hookValidation.ok = false;
                 hookValidation.reason = "stale HOOK_ADDRESS (no code)";

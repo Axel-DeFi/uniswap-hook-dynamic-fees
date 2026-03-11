@@ -11,7 +11,8 @@ import {LiveOpsBase} from "./LiveOpsBase.s.sol";
 contract ValidatePoolLive is LiveOpsBase {
     function run() external view {
         OpsTypes.CoreConfig memory cfg = ConfigLoader.loadCoreConfig();
-        (cfg,) = CanonicalHookResolverLib.requireExistingCanonicalHook(cfg);
+        OpsTypes.DeploymentConfig memory deployCfg = ConfigLoader.loadDeploymentConfig(cfg);
+        (cfg,) = CanonicalHookResolverLib.requireExistingCanonicalHook(cfg, deployCfg);
 
         require(cfg.poolManager != address(0), "POOL_MANAGER missing");
         require(cfg.poolManager.code.length > 0, "POOL_MANAGER has no code");

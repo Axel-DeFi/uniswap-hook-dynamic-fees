@@ -21,7 +21,8 @@ contract EnsurePoolLive is LiveOpsBase {
         LoggingLib.phase(_phase("ensure-pool"));
 
         OpsTypes.CoreConfig memory cfg = ConfigLoader.loadCoreConfig();
-        (cfg,) = CanonicalHookResolverLib.requireExistingCanonicalHook(cfg);
+        OpsTypes.DeploymentConfig memory deployCfg = ConfigLoader.loadDeploymentConfig(cfg);
+        (cfg,) = CanonicalHookResolverLib.requireExistingCanonicalHook(cfg, deployCfg);
 
         OpsTypes.PoolSnapshot memory snapshot = PoolStateLib.snapshotHook(cfg.hookAddress);
         if (snapshot.initialized) {

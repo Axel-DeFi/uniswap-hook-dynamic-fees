@@ -4,9 +4,11 @@ pragma solidity ^0.8.26;
 import {OpsTypes} from "../types/OpsTypes.sol";
 
 library ConstructorArgsConfigLib {
-    uint64 internal constant DEFAULT_MIN_COUNTED_SWAP_USD6 = 4_000_000;
-
-    function toCoreConfig(bytes memory constructorArgs) internal pure returns (OpsTypes.CoreConfig memory cfg) {
+    function toDeploymentConfig(bytes memory constructorArgs)
+        internal
+        pure
+        returns (OpsTypes.DeploymentConfig memory cfg)
+    {
         (
             address poolManager,
             address poolCurrency0,
@@ -72,7 +74,6 @@ library ConstructorArgsConfigLib {
 
         cfg.poolManager = poolManager;
         cfg.owner = owner;
-        cfg.volatileToken = stableCurrency == poolCurrency0 ? poolCurrency1 : poolCurrency0;
         cfg.stableToken = stableCurrency;
         cfg.token0 = poolCurrency0;
         cfg.token1 = poolCurrency1;
@@ -86,7 +87,6 @@ library ConstructorArgsConfigLib {
         cfg.deadbandBps = deadbandBps;
         cfg.lullResetSeconds = lullResetSeconds;
         cfg.hookFeePercent = hookFeePercent;
-        cfg.minCountedSwapUsd6 = DEFAULT_MIN_COUNTED_SWAP_USD6;
         cfg.minCloseVolToCashUsd6 = minCloseVolToCashUsd6;
         cfg.upRToCashBps = upRToCashBps;
         cfg.cashHoldPeriods = cashHoldPeriods;

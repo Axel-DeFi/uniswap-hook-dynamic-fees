@@ -28,14 +28,17 @@ See `LICENSE` for full terms.
 - Claim-all path is single and explicit: `claimAllHookFees()` always pays to current `owner()`.
 - Claim settlement automatically chunks oversized payouts to fit PoolManager `int128` accounting bounds.
 - For native-asset pools (`token0 == address(0)` or `token1 == address(0)`), deploy/ensure/preflight flows validate that current `owner()` can accept native payout from the PoolManager claim path.
-- Deploy/ensure/preflight hook reuse is pinned to the canonical CREATE2 address for the current release and current
-  constructor args, requires the exact minimal callback surface (`afterInitialize`, `afterSwap`,
-  `afterSwapReturnDelta` only), expected PoolManager binding, current `minCountedSwapUsd6`, and zero pending owner /
-  pending config changes.
+- Deploy/ensure/preflight hook reuse is pinned to the canonical CREATE2 address derived from the current release and
+  the frozen constructor snapshot in `ops/<network>/config/deploy.env`; current runtime/admin expectations continue to
+  come from `ops/<network>/config/defaults.env`. Reuse also requires the exact minimal callback surface
+  (`afterInitialize`, `afterSwap`, `afterSwapReturnDelta` only), expected PoolManager binding, current
+  `minCountedSwapUsd6`, and zero pending owner / pending config changes.
 - Live deployment and validation now run only through the unified `ops/*` contours:
   - `ops/local` for deterministic Anvil lifecycle
   - `ops/sepolia` for public-testnet rehearsal
   - `ops/optimism` for production deployment and operations
+  - `ops/<network>/config/deploy.env` is loaded after scenario overlays and root `.env`, so `DEPLOY_*` keys remain the
+    winning frozen constructor snapshot for canonical identity
 - `pause()/unpause()` freeze/resume regulator transitions at the current LP fee regime (no automatic floor reset, no swap stop, no HookFee stop).
 - `setRegimeFees(...)` (paused-only) preserves EMA, resets hold/streak counters, starts a fresh open period, and updates current LP fee immediately if active regime fee changed.
 - `setControllerParams(...)` (paused-only) preserves active regime + EMA, clears hold/streak counters, and starts a fresh open period.

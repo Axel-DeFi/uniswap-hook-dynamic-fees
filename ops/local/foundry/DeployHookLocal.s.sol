@@ -19,17 +19,18 @@ contract DeployHookLocal is Script {
     address internal constant CREATE2_DEPLOYER = 0x4e59b44847b379578588920cA78FbF26c0B4956C;
 
     function run() external {
-        OpsTypes.CoreConfig memory cfg = ConfigLoader.loadCoreConfig();
-        ConfigLoader.validateChainId(cfg.chainIdExpected);
+        OpsTypes.CoreConfig memory runtimeCfg = ConfigLoader.loadCoreConfig();
+        OpsTypes.DeploymentConfig memory deployCfg = ConfigLoader.loadDeploymentConfig(runtimeCfg);
+        ConfigLoader.validateChainId(runtimeCfg.chainIdExpected);
 
         string memory statePath = vm.envOr(
             "OPS_LOCAL_STATE_PATH",
             string.concat(vm.projectRoot(), "/ops/local/out/state/local.addresses.json")
         );
 
-        address configuredHookAddress = cfg.hookAddress;
+        address configuredHookAddress = runtimeCfg.hookAddress;
         (address canonicalHookAddress, bytes32 canonicalSalt, bytes memory constructorArgs) =
-            HookIdentityLib.expectedHookAddress(cfg);
+            HookIdentityLib.expectedHookAddress(deployCfg);
 
         if (configuredHookAddress != address(0) && configuredHookAddress != canonicalHookAddress) {
             console2.log("ignoring non-canonical configured hook", configuredHookAddress);
@@ -37,17 +38,21 @@ contract DeployHookLocal is Script {
         }
 
         if (canonicalHookAddress.code.length > 0) {
-            cfg.hookAddress = canonicalHookAddress;
-            OpsTypes.HookValidation memory existing = HookValidationLib.validateHook(cfg);
+            runtimeCfg.hookAddress = canonicalHookAddress;
+            OpsTypes.HookValidation memory existing = HookValidationLib.validateHook(runtimeCfg);
             if (existing.ok) {
                 address currentOwner = VolumeDynamicFeeHook(payable(canonicalHookAddress)).owner();
                 (bool nativeRecipientOk, string memory nativeRecipientReason) = NativeRecipientValidationLib.validatePayoutRecipientForNativePool(
-                    cfg.token0, cfg.token1, currentOwner, cfg.poolManager
+                    runtimeCfg.token0, runtimeCfg.token1, currentOwner, runtimeCfg.poolManager
                 );
                 require(nativeRecipientOk, nativeRecipientReason);
 
                 JsonReportLib.writeAddressState(
-                    statePath, cfg.poolManager, canonicalHookAddress, cfg.volatileToken, cfg.stableToken
+                    statePath,
+                    runtimeCfg.poolManager,
+                    canonicalHookAddress,
+                    runtimeCfg.volatileToken,
+                    runtimeCfg.stableToken
                 );
                 console2.log("reuse hook", canonicalHookAddress);
                 return;
@@ -56,27 +61,26 @@ contract DeployHookLocal is Script {
             revert(string.concat("canonical existing hook invalid: ", existing.reason));
         }
 
-        uint256 pk = cfg.privateKey;
+        uint256 pk = runtimeCfg.privateKey;
         require(pk != 0, "PRIVATE_KEY missing");
 
-        uint24 floorFee = cfg.floorFeePips;
-        uint24 cashFee = cfg.cashFeePips;
-        uint24 extremeFee = cfg.extremeFeePips;
+        uint24 floorFee = deployCfg.floorFeePips;
+        uint24 cashFee = deployCfg.cashFeePips;
+        uint24 extremeFee = deployCfg.extremeFeePips;
         require(
             floorFee > 0 && floorFee < cashFee && cashFee < extremeFee && extremeFee <= LPFeeLibrary.MAX_LP_FEE,
             "invalid fee bounds"
         );
 
-        address owner = cfg.owner;
-        uint16 hookFeePercent = cfg.hookFeePercent;
-        uint16 deadbandBps = cfg.deadbandBps;
-        uint64 minCloseVolToCashUsd6 = cfg.minCloseVolToCashUsd6;
-        uint8 cashHoldPeriods = cfg.cashHoldPeriods;
-        uint64 minCloseVolToExtremeUsd6 = cfg.minCloseVolToExtremeUsd6;
-        uint8 extremeHoldPeriods = cfg.extremeHoldPeriods;
-        uint16 downRFromExtremeBps = cfg.downRFromExtremeBps;
-        uint16 downRFromCashBps = cfg.downRFromCashBps;
-        uint64 emergencyFloorCloseVolUsd6 = cfg.emergencyFloorCloseVolUsd6;
+        address owner = deployCfg.owner;
+        uint16 deadbandBps = deployCfg.deadbandBps;
+        uint64 minCloseVolToCashUsd6 = deployCfg.minCloseVolToCashUsd6;
+        uint8 cashHoldPeriods = deployCfg.cashHoldPeriods;
+        uint64 minCloseVolToExtremeUsd6 = deployCfg.minCloseVolToExtremeUsd6;
+        uint8 extremeHoldPeriods = deployCfg.extremeHoldPeriods;
+        uint16 downRFromExtremeBps = deployCfg.downRFromExtremeBps;
+        uint16 downRFromCashBps = deployCfg.downRFromCashBps;
+        uint64 emergencyFloorCloseVolUsd6 = deployCfg.emergencyFloorCloseVolUsd6;
         bool allowWeakHoldPeriods = vm.envOr("ALLOW_WEAK_HOLD_PERIODS", false);
         require(
             emergencyFloorCloseVolUsd6 > 0 && emergencyFloorCloseVolUsd6 < minCloseVolToCashUsd6,
@@ -90,7 +94,7 @@ contract DeployHookLocal is Script {
         }
 
         (bool nativeRecipientOk, string memory nativeRecipientReason) = NativeRecipientValidationLib.validatePayoutRecipientForNativePool(
-            cfg.token0, cfg.token1, owner, cfg.poolManager
+            runtimeCfg.token0, runtimeCfg.token1, owner, runtimeCfg.poolManager
         );
         require(nativeRecipientOk, nativeRecipientReason);
 
@@ -103,12 +107,16 @@ contract DeployHookLocal is Script {
         require(ok, "create2 deploy failed");
         require(canonicalHookAddress.code.length > 0, "hook code missing");
 
-        cfg.hookAddress = canonicalHookAddress;
-        OpsTypes.HookValidation memory validation = HookValidationLib.validateHook(cfg);
+        runtimeCfg.hookAddress = canonicalHookAddress;
+        OpsTypes.HookValidation memory validation = HookValidationLib.validateHook(runtimeCfg);
         require(validation.ok, validation.reason);
 
         JsonReportLib.writeAddressState(
-            statePath, cfg.poolManager, canonicalHookAddress, cfg.volatileToken, cfg.stableToken
+            statePath,
+            runtimeCfg.poolManager,
+            canonicalHookAddress,
+            runtimeCfg.volatileToken,
+            runtimeCfg.stableToken
         );
 
         console2.log("hook deployed", canonicalHookAddress);

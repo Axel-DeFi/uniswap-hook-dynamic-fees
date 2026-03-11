@@ -39,7 +39,8 @@ contract RunSmokeSwapsLive is LiveOpsBase {
         LoggingLib.phase(_phase("smoke"));
 
         OpsTypes.CoreConfig memory cfg = ConfigLoader.loadCoreConfig();
-        (cfg,) = CanonicalHookResolverLib.requireExistingCanonicalHook(cfg);
+        OpsTypes.DeploymentConfig memory deployCfg = ConfigLoader.loadDeploymentConfig(cfg);
+        (cfg,) = CanonicalHookResolverLib.requireExistingCanonicalHook(cfg, deployCfg);
         OpsTypes.BudgetCheck memory budget = BudgetLib.checkBeforeBroadcast(cfg, cfg.deployer);
         require(budget.ok, budget.reason);
 

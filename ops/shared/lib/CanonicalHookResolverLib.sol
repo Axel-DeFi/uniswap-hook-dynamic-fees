@@ -6,28 +6,31 @@ import {HookValidationLib} from "./HookValidationLib.sol";
 import {OpsTypes} from "../types/OpsTypes.sol";
 
 library CanonicalHookResolverLib {
-    function requireExistingCanonicalHook(OpsTypes.CoreConfig memory cfg)
+    function requireExistingCanonicalHook(
+        OpsTypes.CoreConfig memory runtimeCfg,
+        OpsTypes.DeploymentConfig memory deployCfg
+    )
         internal
         view
         returns (OpsTypes.CoreConfig memory resolvedCfg, address canonicalHookAddress)
     {
-        (canonicalHookAddress,,) = HookIdentityLib.expectedHookAddress(cfg);
+        (canonicalHookAddress,,) = HookIdentityLib.expectedHookAddress(deployCfg);
 
-        if (cfg.hookAddress != address(0) && cfg.hookAddress != canonicalHookAddress) {
-            revert("HOOK_ADDRESS not canonical for current release/config");
+        if (runtimeCfg.hookAddress != address(0) && runtimeCfg.hookAddress != canonicalHookAddress) {
+            revert("HOOK_ADDRESS not canonical for current release/deployment snapshot");
         }
 
-        cfg.hookAddress = canonicalHookAddress;
+        runtimeCfg.hookAddress = canonicalHookAddress;
 
         if (canonicalHookAddress.code.length == 0) {
             revert("canonical HOOK_ADDRESS missing");
         }
 
-        OpsTypes.HookValidation memory validation = HookValidationLib.validateHook(cfg);
+        OpsTypes.HookValidation memory validation = HookValidationLib.validateHook(runtimeCfg);
         if (!validation.ok) {
             revert(validation.reason);
         }
 
-        return (cfg, canonicalHookAddress);
+        return (runtimeCfg, canonicalHookAddress);
     }
 }

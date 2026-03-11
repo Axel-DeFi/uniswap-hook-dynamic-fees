@@ -4,6 +4,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 OPS_LOCAL_DIR="${ROOT_DIR}/ops/local"
 DEFAULTS_ENV="${OPS_LOCAL_DIR}/config/defaults.env"
+DEPLOY_ENV_DEFAULT="${OPS_LOCAL_DIR}/config/deploy.env"
 STATE_PATH_DEFAULT="${OPS_LOCAL_DIR}/out/state/local.addresses.json"
 
 require_cmd() {
@@ -50,8 +51,11 @@ load_local_config() {
   local scenario_env="${OPS_LOCAL_DIR}/config/scenarios/${scenario}.env"
   [[ -f "$scenario_env" ]] && load_env_file "$scenario_env"
   [[ -f "${ROOT_DIR}/.env" ]] && load_env_file "${ROOT_DIR}/.env"
+  local deploy_env="${OPS_DEPLOY_ENV:-$DEPLOY_ENV_DEFAULT}"
+  [[ -f "$deploy_env" ]] && load_env_file "$deploy_env"
 
   export OPS_RUNTIME="local"
+  export OPS_DEPLOY_ENV="${OPS_DEPLOY_ENV:-$deploy_env}"
   export OPS_LOCAL_STATE_PATH="${OPS_LOCAL_STATE_PATH:-$STATE_PATH_DEFAULT}"
   ensure_dirs
   load_state_env

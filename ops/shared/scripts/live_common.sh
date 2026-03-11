@@ -10,6 +10,7 @@ fi
 
 OPS_NETWORK_DIR="${ROOT_DIR}/ops/${OPS_NETWORK}"
 DEFAULTS_ENV="${OPS_NETWORK_DIR}/config/defaults.env"
+DEPLOY_ENV_DEFAULT="${OPS_NETWORK_DIR}/config/deploy.env"
 STATE_PATH_DEFAULT="${OPS_NETWORK_DIR}/out/state/${OPS_NETWORK}.addresses.json"
 DRIVER_STATE_PATH_DEFAULT="${OPS_NETWORK_DIR}/out/state/${OPS_NETWORK}.drivers.json"
 PREFLIGHT_REPORT_DEFAULT="${OPS_NETWORK_DIR}/out/reports/preflight.${OPS_NETWORK}.json"
@@ -77,6 +78,8 @@ load_live_config() {
   local scenario_env="${OPS_NETWORK_DIR}/config/scenarios/${scenario}.env"
   [[ -f "$scenario_env" ]] && load_env_file "$scenario_env"
   [[ -f "${ROOT_DIR}/.env" ]] && load_env_file "${ROOT_DIR}/.env"
+  local deploy_env="${OPS_DEPLOY_ENV:-$DEPLOY_ENV_DEFAULT}"
+  [[ -f "$deploy_env" ]] && load_env_file "$deploy_env"
 
   local network_prefix network_pk_var network_owner_var
   network_prefix="$(printf '%s' "${OPS_NETWORK}" | tr '[:lower:]' '[:upper:]')"
@@ -101,6 +104,7 @@ load_live_config() {
 
   export OPS_RUNTIME="live"
   export OPS_NETWORK_DIR
+  export OPS_DEPLOY_ENV="${OPS_DEPLOY_ENV:-$deploy_env}"
   export OPS_STATE_PATH="${OPS_STATE_PATH:-$STATE_PATH_DEFAULT}"
   export OPS_DRIVERS_STATE_PATH="${OPS_DRIVERS_STATE_PATH:-$DRIVER_STATE_PATH_DEFAULT}"
   export OPS_PREFLIGHT_REPORT="${OPS_PREFLIGHT_REPORT:-$PREFLIGHT_REPORT_DEFAULT}"

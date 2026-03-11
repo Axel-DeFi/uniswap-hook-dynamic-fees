@@ -11,10 +11,11 @@ import {LiveOpsBase} from "./LiveOpsBase.s.sol";
 contract ValidateHookLive is LiveOpsBase {
     function run() external view {
         OpsTypes.CoreConfig memory cfg = ConfigLoader.loadCoreConfig();
-        (address canonicalHookAddress,,) = HookIdentityLib.expectedHookAddress(cfg);
+        OpsTypes.DeploymentConfig memory deployCfg = ConfigLoader.loadDeploymentConfig(cfg);
+        (address canonicalHookAddress,,) = HookIdentityLib.expectedHookAddress(deployCfg);
 
         if (cfg.hookAddress != address(0) && cfg.hookAddress != canonicalHookAddress) {
-            revert("HOOK_ADDRESS not canonical for current release/config");
+            revert("HOOK_ADDRESS not canonical for current release/deployment snapshot");
         }
 
         cfg.hookAddress = canonicalHookAddress;

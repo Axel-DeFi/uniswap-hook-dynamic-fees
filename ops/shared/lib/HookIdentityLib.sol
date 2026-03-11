@@ -18,7 +18,7 @@ library HookIdentityLib {
         Hooks.AFTER_INITIALIZE_FLAG | Hooks.AFTER_SWAP_FLAG | Hooks.AFTER_SWAP_RETURNS_DELTA_FLAG
     );
 
-    function constructorArgs(OpsTypes.CoreConfig memory cfg) internal pure returns (bytes memory args) {
+    function constructorArgs(OpsTypes.DeploymentConfig memory cfg) internal pure returns (bytes memory args) {
         args = abi.encode(
             IPoolManager(cfg.poolManager),
             Currency.wrap(cfg.token0),
@@ -51,7 +51,7 @@ library HookIdentityLib {
         );
     }
 
-    function expectedHookAddress(OpsTypes.CoreConfig memory cfg)
+    function expectedHookAddress(OpsTypes.DeploymentConfig memory cfg)
         internal
         pure
         returns (address hookAddress, bytes32 salt, bytes memory args)

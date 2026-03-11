@@ -104,6 +104,88 @@ library ConfigLoader {
         }
     }
 
+    function loadDeploymentConfig(OpsTypes.CoreConfig memory runtimeCfg)
+        internal
+        view
+        returns (OpsTypes.DeploymentConfig memory cfg)
+    {
+        bool strict = runtimeCfg.runtime == OpsTypes.Runtime.Live;
+
+        cfg.poolManager = runtimeCfg.poolManager;
+        cfg.token0 = runtimeCfg.token0;
+        cfg.token1 = runtimeCfg.token1;
+        cfg.tickSpacing = runtimeCfg.tickSpacing;
+        cfg.stableToken = runtimeCfg.stableToken;
+        cfg.stableDecimals = runtimeCfg.stableDecimals;
+
+        cfg.owner = strict
+            ? EnvLib.requireAddress("DEPLOY_OWNER", false)
+            : EnvLib.envOrAddress("DEPLOY_OWNER", runtimeCfg.owner);
+        cfg.floorFeePips = strict
+            ? EnvLib.requireUint24("DEPLOY_FLOOR_FEE_PIPS")
+            : EnvLib.envOrUint24("DEPLOY_FLOOR_FEE_PIPS", runtimeCfg.floorFeePips);
+        cfg.cashFeePips = strict
+            ? EnvLib.requireUint24("DEPLOY_CASH_FEE_PIPS")
+            : EnvLib.envOrUint24("DEPLOY_CASH_FEE_PIPS", runtimeCfg.cashFeePips);
+        cfg.extremeFeePips = strict
+            ? EnvLib.requireUint24("DEPLOY_EXTREME_FEE_PIPS")
+            : EnvLib.envOrUint24("DEPLOY_EXTREME_FEE_PIPS", runtimeCfg.extremeFeePips);
+        cfg.periodSeconds = strict
+            ? EnvLib.requireUint32("DEPLOY_PERIOD_SECONDS")
+            : EnvLib.envOrUint32("DEPLOY_PERIOD_SECONDS", runtimeCfg.periodSeconds);
+        cfg.emaPeriods = strict
+            ? EnvLib.requireUint8("DEPLOY_EMA_PERIODS")
+            : EnvLib.envOrUint8("DEPLOY_EMA_PERIODS", runtimeCfg.emaPeriods);
+        cfg.deadbandBps = strict
+            ? EnvLib.requireUint16("DEPLOY_DEADBAND_BPS")
+            : EnvLib.envOrUint16("DEPLOY_DEADBAND_BPS", runtimeCfg.deadbandBps);
+        cfg.lullResetSeconds = strict
+            ? EnvLib.requireUint32("DEPLOY_LULL_RESET_SECONDS")
+            : EnvLib.envOrUint32("DEPLOY_LULL_RESET_SECONDS", runtimeCfg.lullResetSeconds);
+        cfg.hookFeePercent = strict
+            ? EnvLib.requireUint16("DEPLOY_HOOK_FEE_PERCENT")
+            : EnvLib.envOrUint16("DEPLOY_HOOK_FEE_PERCENT", runtimeCfg.hookFeePercent);
+        cfg.minCloseVolToCashUsd6 = strict
+            ? EnvLib.requireUint64("DEPLOY_MIN_CLOSEVOL_TO_CASH_USD6")
+            : EnvLib.envOrUint64("DEPLOY_MIN_CLOSEVOL_TO_CASH_USD6", runtimeCfg.minCloseVolToCashUsd6);
+        cfg.upRToCashBps = strict
+            ? EnvLib.requireUint16("DEPLOY_UP_R_TO_CASH_BPS")
+            : EnvLib.envOrUint16("DEPLOY_UP_R_TO_CASH_BPS", runtimeCfg.upRToCashBps);
+        cfg.cashHoldPeriods = strict
+            ? EnvLib.requireUint8("DEPLOY_CASH_HOLD_PERIODS")
+            : EnvLib.envOrUint8("DEPLOY_CASH_HOLD_PERIODS", runtimeCfg.cashHoldPeriods);
+        cfg.minCloseVolToExtremeUsd6 = strict
+            ? EnvLib.requireUint64("DEPLOY_MIN_CLOSEVOL_TO_EXTREME_USD6")
+            : EnvLib.envOrUint64("DEPLOY_MIN_CLOSEVOL_TO_EXTREME_USD6", runtimeCfg.minCloseVolToExtremeUsd6);
+        cfg.upRToExtremeBps = strict
+            ? EnvLib.requireUint16("DEPLOY_UP_R_TO_EXTREME_BPS")
+            : EnvLib.envOrUint16("DEPLOY_UP_R_TO_EXTREME_BPS", runtimeCfg.upRToExtremeBps);
+        cfg.upExtremeConfirmPeriods = strict
+            ? EnvLib.requireUint8("DEPLOY_UP_EXTREME_CONFIRM_PERIODS")
+            : EnvLib.envOrUint8("DEPLOY_UP_EXTREME_CONFIRM_PERIODS", runtimeCfg.upExtremeConfirmPeriods);
+        cfg.extremeHoldPeriods = strict
+            ? EnvLib.requireUint8("DEPLOY_EXTREME_HOLD_PERIODS")
+            : EnvLib.envOrUint8("DEPLOY_EXTREME_HOLD_PERIODS", runtimeCfg.extremeHoldPeriods);
+        cfg.downRFromExtremeBps = strict
+            ? EnvLib.requireUint16("DEPLOY_DOWN_R_FROM_EXTREME_BPS")
+            : EnvLib.envOrUint16("DEPLOY_DOWN_R_FROM_EXTREME_BPS", runtimeCfg.downRFromExtremeBps);
+        cfg.downExtremeConfirmPeriods = strict
+            ? EnvLib.requireUint8("DEPLOY_DOWN_EXTREME_CONFIRM_PERIODS")
+            : EnvLib.envOrUint8("DEPLOY_DOWN_EXTREME_CONFIRM_PERIODS", runtimeCfg.downExtremeConfirmPeriods);
+        cfg.downRFromCashBps = strict
+            ? EnvLib.requireUint16("DEPLOY_DOWN_R_FROM_CASH_BPS")
+            : EnvLib.envOrUint16("DEPLOY_DOWN_R_FROM_CASH_BPS", runtimeCfg.downRFromCashBps);
+        cfg.downCashConfirmPeriods = strict
+            ? EnvLib.requireUint8("DEPLOY_DOWN_CASH_CONFIRM_PERIODS")
+            : EnvLib.envOrUint8("DEPLOY_DOWN_CASH_CONFIRM_PERIODS", runtimeCfg.downCashConfirmPeriods);
+        cfg.emergencyFloorCloseVolUsd6 = strict
+            ? EnvLib.requireUint64("DEPLOY_EMERGENCY_FLOOR_CLOSEVOL_USD6")
+            : EnvLib.envOrUint64("DEPLOY_EMERGENCY_FLOOR_CLOSEVOL_USD6", runtimeCfg.emergencyFloorCloseVolUsd6);
+        cfg.emergencyConfirmPeriods = strict
+            ? EnvLib.requireUint8("DEPLOY_EMERGENCY_CONFIRM_PERIODS")
+            : EnvLib.envOrUint8("DEPLOY_EMERGENCY_CONFIRM_PERIODS", runtimeCfg.emergencyConfirmPeriods);
+    }
+
     function sortPair(address a, address b) internal pure returns (address token0, address token1) {
         if (a < b) {
             return (a, b);

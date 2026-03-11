@@ -73,6 +73,21 @@ library EnvLib {
         value = toUint8Checked(vm.envUint(key), key);
     }
 
+    function envOrUint16(string memory key, uint16 fallbackValue) internal view returns (uint16 value) {
+        if (!hasKey(key)) return fallbackValue;
+        value = toUint16Checked(vm.envUint(key), key);
+    }
+
+    function envOrUint24(string memory key, uint24 fallbackValue) internal view returns (uint24 value) {
+        if (!hasKey(key)) return fallbackValue;
+        value = toUint24Checked(vm.envUint(key), key);
+    }
+
+    function envOrUint32(string memory key, uint32 fallbackValue) internal view returns (uint32 value) {
+        if (!hasKey(key)) return fallbackValue;
+        value = toUint32Checked(vm.envUint(key), key);
+    }
+
     function envOrUint64(string memory key, uint64 fallbackValue) internal view returns (uint64 value) {
         if (!hasKey(key)) return fallbackValue;
         value = toUint64Checked(vm.envUint(key), key);

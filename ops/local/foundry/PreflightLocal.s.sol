@@ -22,11 +22,12 @@ contract PreflightLocal is Script {
         LoggingLib.phase("local.preflight");
 
         OpsTypes.CoreConfig memory cfg = ConfigLoader.loadCoreConfig();
+        OpsTypes.DeploymentConfig memory deployCfg = ConfigLoader.loadDeploymentConfig(cfg);
         ConfigLoader.validateChainId(cfg.chainIdExpected);
 
         string memory scenario = vm.envOr("OPS_SCENARIO", string("bootstrap"));
         bool bootstrapScenario = keccak256(bytes(scenario)) == keccak256(bytes("bootstrap"));
-        (address canonicalHookAddress,,) = HookIdentityLib.expectedHookAddress(cfg);
+        (address canonicalHookAddress,,) = HookIdentityLib.expectedHookAddress(deployCfg);
         bool hookConfigured = cfg.hookAddress != address(0);
         bool configuredHookCanonical = !hookConfigured || cfg.hookAddress == canonicalHookAddress;
         bool hookDeployed = canonicalHookAddress.code.length > 0;
@@ -56,7 +57,7 @@ contract PreflightLocal is Script {
 
         if (hookConfigured && !configuredHookCanonical) {
             hookValidation.ok = false;
-            hookValidation.reason = "HOOK_ADDRESS not canonical for current release/config";
+            hookValidation.reason = "HOOK_ADDRESS not canonical for current release/deployment snapshot";
         } else if (hookDeployed) {
             cfg.hookAddress = canonicalHookAddress;
             hookValidation = HookValidationLib.validateHook(cfg);

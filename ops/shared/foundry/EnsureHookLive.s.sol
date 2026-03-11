@@ -21,14 +21,15 @@ contract EnsureHookLive is LiveOpsBase {
     function run() external {
         LoggingLib.phase(_phase("ensure-hook"));
 
-        OpsTypes.CoreConfig memory cfg = ConfigLoader.loadCoreConfig();
-        ConfigLoader.validateChainId(cfg.chainIdExpected);
+        OpsTypes.CoreConfig memory runtimeCfg = ConfigLoader.loadCoreConfig();
+        OpsTypes.DeploymentConfig memory deployCfg = ConfigLoader.loadDeploymentConfig(runtimeCfg);
+        ConfigLoader.validateChainId(runtimeCfg.chainIdExpected);
 
         string memory statePath = _statePath();
 
-        address configuredHookAddress = cfg.hookAddress;
+        address configuredHookAddress = runtimeCfg.hookAddress;
         (address canonicalHookAddress, bytes32 canonicalSalt, bytes memory constructorArgs) =
-            HookIdentityLib.expectedHookAddress(cfg);
+            HookIdentityLib.expectedHookAddress(deployCfg);
 
         if (configuredHookAddress != address(0) && configuredHookAddress != canonicalHookAddress) {
             LoggingLib.fail("configured HOOK_ADDRESS is non-canonical; ignoring configured address");
@@ -37,17 +38,21 @@ contract EnsureHookLive is LiveOpsBase {
         }
 
         if (canonicalHookAddress.code.length > 0) {
-            cfg.hookAddress = canonicalHookAddress;
-            OpsTypes.HookValidation memory existing = HookValidationLib.validateHook(cfg);
+            runtimeCfg.hookAddress = canonicalHookAddress;
+            OpsTypes.HookValidation memory existing = HookValidationLib.validateHook(runtimeCfg);
             if (existing.ok) {
                 address currentOwner = VolumeDynamicFeeHook(payable(canonicalHookAddress)).owner();
                 (bool reuseNativeRecipientOk, string memory reuseNativeRecipientReason) = NativeRecipientValidationLib.validatePayoutRecipientForNativePool(
-                    cfg.token0, cfg.token1, currentOwner, cfg.poolManager
+                    runtimeCfg.token0, runtimeCfg.token1, currentOwner, runtimeCfg.poolManager
                 );
                 require(reuseNativeRecipientOk, reuseNativeRecipientReason);
 
                 JsonReportLib.writeAddressState(
-                    statePath, cfg.poolManager, canonicalHookAddress, cfg.volatileToken, cfg.stableToken
+                    statePath,
+                    runtimeCfg.poolManager,
+                    canonicalHookAddress,
+                    runtimeCfg.volatileToken,
+                    runtimeCfg.stableToken
                 );
                 LoggingLib.ok("reuse existing hook");
                 return;
@@ -56,30 +61,29 @@ contract EnsureHookLive is LiveOpsBase {
             revert(string.concat("canonical existing hook invalid: ", existing.reason));
         }
 
-        OpsTypes.BudgetCheck memory budget = BudgetLib.checkBeforeBroadcast(cfg, cfg.deployer);
+        OpsTypes.BudgetCheck memory budget = BudgetLib.checkBeforeBroadcast(runtimeCfg, runtimeCfg.deployer);
         require(budget.ok, budget.reason);
 
-        uint256 pk = cfg.privateKey;
+        uint256 pk = runtimeCfg.privateKey;
         require(pk != 0, "PRIVATE_KEY missing");
 
-        uint24 floorFee = cfg.floorFeePips;
-        uint24 cashFee = cfg.cashFeePips;
-        uint24 extremeFee = cfg.extremeFeePips;
+        uint24 floorFee = deployCfg.floorFeePips;
+        uint24 cashFee = deployCfg.cashFeePips;
+        uint24 extremeFee = deployCfg.extremeFeePips;
         require(
             floorFee > 0 && floorFee < cashFee && cashFee < extremeFee && extremeFee <= LPFeeLibrary.MAX_LP_FEE,
             "invalid fee bounds"
         );
 
-        address owner = cfg.owner;
-        uint16 hookFeePercent = cfg.hookFeePercent;
-        uint16 deadbandBps = cfg.deadbandBps;
-        uint64 minCloseVolToCashUsd6 = cfg.minCloseVolToCashUsd6;
-        uint8 cashHoldPeriods = cfg.cashHoldPeriods;
-        uint64 minCloseVolToExtremeUsd6 = cfg.minCloseVolToExtremeUsd6;
-        uint8 extremeHoldPeriods = cfg.extremeHoldPeriods;
-        uint16 downRFromExtremeBps = cfg.downRFromExtremeBps;
-        uint16 downRFromCashBps = cfg.downRFromCashBps;
-        uint64 emergencyFloorCloseVolUsd6 = cfg.emergencyFloorCloseVolUsd6;
+        address owner = deployCfg.owner;
+        uint16 deadbandBps = deployCfg.deadbandBps;
+        uint64 minCloseVolToCashUsd6 = deployCfg.minCloseVolToCashUsd6;
+        uint8 cashHoldPeriods = deployCfg.cashHoldPeriods;
+        uint64 minCloseVolToExtremeUsd6 = deployCfg.minCloseVolToExtremeUsd6;
+        uint8 extremeHoldPeriods = deployCfg.extremeHoldPeriods;
+        uint16 downRFromExtremeBps = deployCfg.downRFromExtremeBps;
+        uint16 downRFromCashBps = deployCfg.downRFromCashBps;
+        uint64 emergencyFloorCloseVolUsd6 = deployCfg.emergencyFloorCloseVolUsd6;
         bool allowWeakHoldPeriods = vm.envOr("ALLOW_WEAK_HOLD_PERIODS", false);
         require(
             emergencyFloorCloseVolUsd6 > 0 && emergencyFloorCloseVolUsd6 < minCloseVolToCashUsd6,
@@ -92,7 +96,7 @@ contract EnsureHookLive is LiveOpsBase {
         );
 
         (bool nativeRecipientOk, string memory nativeRecipientReason) = NativeRecipientValidationLib.validatePayoutRecipientForNativePool(
-            cfg.token0, cfg.token1, owner, cfg.poolManager
+            runtimeCfg.token0, runtimeCfg.token1, owner, runtimeCfg.poolManager
         );
         require(nativeRecipientOk, nativeRecipientReason);
 
@@ -105,12 +109,16 @@ contract EnsureHookLive is LiveOpsBase {
         require(ok, "create2 deploy failed");
         require(canonicalHookAddress.code.length > 0, "hook code missing");
 
-        cfg.hookAddress = canonicalHookAddress;
-        OpsTypes.HookValidation memory validation = HookValidationLib.validateHook(cfg);
+        runtimeCfg.hookAddress = canonicalHookAddress;
+        OpsTypes.HookValidation memory validation = HookValidationLib.validateHook(runtimeCfg);
         require(validation.ok, validation.reason);
 
         JsonReportLib.writeAddressState(
-            statePath, cfg.poolManager, canonicalHookAddress, cfg.volatileToken, cfg.stableToken
+            statePath,
+            runtimeCfg.poolManager,
+            canonicalHookAddress,
+            runtimeCfg.volatileToken,
+            runtimeCfg.stableToken
         );
 
         LoggingLib.ok("hook deployed");

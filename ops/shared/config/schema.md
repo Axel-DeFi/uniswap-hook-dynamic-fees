@@ -18,7 +18,7 @@ All values are loaded from environment variables (defaults + scenario overlay + 
 
 - `HOOK_ADDRESS` (optional for bootstrap, required for ensure/smoke/full/emergency)
   - when provided for deploy/ensure/preflight validation, it must be the canonical CREATE2 hook address for the
-    current release and current constructor args
+    current release and the frozen deployment snapshot loaded from `ops/<network>/config/deploy.env`
 - `POOL_ADDRESS` (optional, validated when provided)
 
 ## Price / range survivability
@@ -55,6 +55,37 @@ All values are loaded from environment variables (defaults + scenario overlay + 
 - `DOWN_CASH_CONFIRM_PERIODS`
 - `EMERGENCY_FLOOR_CLOSEVOL_USD6`
 - `EMERGENCY_CONFIRM_PERIODS`
+
+## Frozen deployment snapshot
+
+These keys live in `ops/<network>/config/deploy.env` for live profiles. They define the constructor snapshot used to
+derive the canonical CREATE2 hook address and must not be edited after the canonical hook is deployed. The ops shell
+loaders source `deploy.env` after scenario overlays and root `.env`, so `DEPLOY_*` values win if duplicates exist.
+
+- `DEPLOY_OWNER`
+- `DEPLOY_FLOOR_FEE_PIPS`
+- `DEPLOY_CASH_FEE_PIPS`
+- `DEPLOY_EXTREME_FEE_PIPS`
+- `DEPLOY_PERIOD_SECONDS`
+- `DEPLOY_EMA_PERIODS`
+- `DEPLOY_DEADBAND_BPS`
+- `DEPLOY_LULL_RESET_SECONDS`
+- `DEPLOY_HOOK_FEE_PERCENT`
+- `DEPLOY_MIN_CLOSEVOL_TO_CASH_USD6`
+- `DEPLOY_UP_R_TO_CASH_BPS`
+- `DEPLOY_CASH_HOLD_PERIODS`
+- `DEPLOY_MIN_CLOSEVOL_TO_EXTREME_USD6`
+- `DEPLOY_UP_R_TO_EXTREME_BPS`
+- `DEPLOY_UP_EXTREME_CONFIRM_PERIODS`
+- `DEPLOY_EXTREME_HOLD_PERIODS`
+- `DEPLOY_DOWN_R_FROM_EXTREME_BPS`
+- `DEPLOY_DOWN_EXTREME_CONFIRM_PERIODS`
+- `DEPLOY_DOWN_R_FROM_CASH_BPS`
+- `DEPLOY_DOWN_CASH_CONFIRM_PERIODS`
+- `DEPLOY_EMERGENCY_FLOOR_CLOSEVOL_USD6`
+- `DEPLOY_EMERGENCY_CONFIRM_PERIODS`
+
+For local profiles the same keys are optional and fall back to the current runtime values in `defaults.env`.
 
 Controller constraint notes:
 - `EMERGENCY_FLOOR_CLOSEVOL_USD6` must be strictly greater than zero.

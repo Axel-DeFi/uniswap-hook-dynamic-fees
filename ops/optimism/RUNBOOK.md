@@ -19,7 +19,7 @@ ops/optimism/scripts/ensure-liquidity.sh
 ```
 
 All three phases use the shared canonical live-ops stack:
-- canonical CREATE2 hook identity for the current release/config,
+- canonical CREATE2 hook identity derived from the current release and `ops/optimism/config/deploy.env`,
 - exact callback surface validation,
 - exact PoolManager binding,
 - full runtime config validation,
@@ -41,3 +41,7 @@ ops/optimism/scripts/emergency.sh
 - Live budgets default to zero; set budget env values explicitly before `ensure-liquidity` or swap-validation phases.
 - For native-asset pools, owner must remain compatible with native payout from the PoolManager claim path.
 - Hold guidance remains `cashHoldPeriods >= 2`, `extremeHoldPeriods >= 2` unless an explicit override is justified.
+- `ops/optimism/config/deploy.env` is a frozen constructor snapshot after deployment; change `defaults.env` for
+  expected runtime/admin drift, not `deploy.env`.
+- The shared shell loader sources `deploy.env` after scenario overlays and root `.env`, so stray `DEPLOY_*` values in
+  overlays cannot silently override the canonical snapshot.

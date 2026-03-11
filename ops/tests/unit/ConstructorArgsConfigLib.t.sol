@@ -27,15 +27,14 @@ contract ConstructorArgsConfigLibTest is Test, VolumeDynamicFeeHookV2DeployHelpe
         manager = new MockPoolManager();
     }
 
-    function test_toCoreConfig_roundTrips_constructor_identity() public view {
-        OpsTypes.CoreConfig memory original = _cfg(address(this), 18, V2_INITIAL_HOOK_FEE_PERCENT);
+    function test_toDeploymentConfig_roundTrips_constructor_identity() public view {
+        OpsTypes.DeploymentConfig memory original = _cfg(address(this), 18, V2_INITIAL_HOOK_FEE_PERCENT);
         bytes memory args = HookIdentityLib.constructorArgs(original);
 
-        OpsTypes.CoreConfig memory decoded = ConstructorArgsConfigLib.toCoreConfig(args);
+        OpsTypes.DeploymentConfig memory decoded = ConstructorArgsConfigLib.toDeploymentConfig(args);
 
         assertEq(decoded.poolManager, original.poolManager);
         assertEq(decoded.owner, original.owner);
-        assertEq(decoded.volatileToken, original.volatileToken);
         assertEq(decoded.stableToken, original.stableToken);
         assertEq(decoded.token0, original.token0);
         assertEq(decoded.token1, original.token1);
@@ -49,7 +48,6 @@ contract ConstructorArgsConfigLibTest is Test, VolumeDynamicFeeHookV2DeployHelpe
         assertEq(decoded.deadbandBps, original.deadbandBps);
         assertEq(decoded.lullResetSeconds, original.lullResetSeconds);
         assertEq(decoded.hookFeePercent, original.hookFeePercent);
-        assertEq(decoded.minCountedSwapUsd6, 4_000_000);
         assertEq(decoded.minCloseVolToCashUsd6, original.minCloseVolToCashUsd6);
         assertEq(decoded.upRToCashBps, original.upRToCashBps);
         assertEq(decoded.cashHoldPeriods, original.cashHoldPeriods);
@@ -65,10 +63,10 @@ contract ConstructorArgsConfigLibTest is Test, VolumeDynamicFeeHookV2DeployHelpe
         assertEq(decoded.emergencyConfirmPeriods, original.emergencyConfirmPeriods);
     }
 
-    function test_toCoreConfig_preserves_canonical_hook_address() public view {
-        OpsTypes.CoreConfig memory original = _cfg(address(0xBEEF), 6, V2_INITIAL_HOOK_FEE_PERCENT);
+    function test_toDeploymentConfig_preserves_canonical_hook_address() public view {
+        OpsTypes.DeploymentConfig memory original = _cfg(address(0xBEEF), 6, V2_INITIAL_HOOK_FEE_PERCENT);
         bytes memory args = HookIdentityLib.constructorArgs(original);
-        OpsTypes.CoreConfig memory decoded = ConstructorArgsConfigLib.toCoreConfig(args);
+        OpsTypes.DeploymentConfig memory decoded = ConstructorArgsConfigLib.toDeploymentConfig(args);
 
         (address originalHook,,) = HookIdentityLib.expectedHookAddress(original);
         (address decodedHook,,) = HookIdentityLib.expectedHookAddress(decoded);
@@ -79,22 +77,13 @@ contract ConstructorArgsConfigLibTest is Test, VolumeDynamicFeeHookV2DeployHelpe
     function _cfg(address owner_, uint8 stableDecimals_, uint16 hookFeePercent_)
         internal
         view
-        returns (OpsTypes.CoreConfig memory cfg)
+        returns (OpsTypes.DeploymentConfig memory cfg)
     {
-        cfg.runtime = OpsTypes.Runtime.Local;
-        cfg.rpcUrl = "";
-        cfg.chainIdExpected = block.chainid;
-        cfg.broadcast = false;
-        cfg.privateKey = 0;
-        cfg.deployer = address(this);
         cfg.poolManager = address(manager);
-        cfg.hookAddress = address(0);
-        cfg.poolAddress = address(0);
         cfg.owner = owner_;
-        cfg.volatileToken = TOKEN1;
-        cfg.stableToken = TOKEN0;
         cfg.token0 = TOKEN0;
         cfg.token1 = TOKEN1;
+        cfg.stableToken = TOKEN0;
         cfg.stableDecimals = stableDecimals_;
         cfg.tickSpacing = TICK_SPACING;
         cfg.floorFeePips = V2_DEFAULT_FLOOR_FEE;
@@ -105,7 +94,6 @@ contract ConstructorArgsConfigLibTest is Test, VolumeDynamicFeeHookV2DeployHelpe
         cfg.deadbandBps = DEADBAND_BPS;
         cfg.lullResetSeconds = LULL_RESET_SECONDS;
         cfg.hookFeePercent = hookFeePercent_;
-        cfg.minCountedSwapUsd6 = 4_000_000;
         cfg.minCloseVolToCashUsd6 = V2_MIN_CLOSEVOL_TO_CASH_USD6;
         cfg.upRToCashBps = V2_UP_R_TO_CASH_BPS;
         cfg.cashHoldPeriods = V2_CASH_HOLD_PERIODS;

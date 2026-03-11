@@ -60,6 +60,37 @@ library OpsTypes {
         uint256 safetyBufferEthWei;
     }
 
+    struct DeploymentConfig {
+        address poolManager;
+        address token0;
+        address token1;
+        int24 tickSpacing;
+        address stableToken;
+        uint8 stableDecimals;
+        address owner;
+        uint24 floorFeePips;
+        uint24 cashFeePips;
+        uint24 extremeFeePips;
+        uint32 periodSeconds;
+        uint8 emaPeriods;
+        uint16 deadbandBps;
+        uint32 lullResetSeconds;
+        uint16 hookFeePercent;
+        uint64 minCloseVolToCashUsd6;
+        uint16 upRToCashBps;
+        uint8 cashHoldPeriods;
+        uint64 minCloseVolToExtremeUsd6;
+        uint16 upRToExtremeBps;
+        uint8 upExtremeConfirmPeriods;
+        uint8 extremeHoldPeriods;
+        uint16 downRFromExtremeBps;
+        uint8 downExtremeConfirmPeriods;
+        uint16 downRFromCashBps;
+        uint8 downCashConfirmPeriods;
+        uint64 emergencyFloorCloseVolUsd6;
+        uint8 emergencyConfirmPeriods;
+    }
+
     struct BalanceSnapshot {
         uint256 ethWei;
         uint256 stableRaw;

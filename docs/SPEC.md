@@ -291,11 +291,12 @@ Monitoring interpretation note:
 - production owner must be a multisig; EOA owner is acceptable only for local/dev/test.
 - hot-wallet owner usage is unacceptable for production.
 - owner key custody should use cold/hardware wallet standards.
-- deploy/ensure/preflight reuse of an existing hook is pinned to the canonical CREATE2 address for the current release
-  and current constructor args, and requires the exact minimal callback surface (`afterInitialize`, `afterSwap`,
-  `afterSwapReturnDelta` only) plus exact PoolManager binding: owner, no pending owner transfer, stable decimals mode,
-  current `minCountedSwapUsd6`, regime fees, HookFee percent, timing params, controller params, and no pending
-  HookFee / min-counted-swap changes.
+- deploy/ensure/preflight reuse of an existing hook is pinned to the canonical CREATE2 address derived from the
+  current release and the frozen `ops/<network>/config/deploy.env` constructor snapshot, while current runtime/admin
+  expectations come from `ops/<network>/config/defaults.env`. Reuse also requires the exact minimal callback surface
+  (`afterInitialize`, `afterSwap`, `afterSwapReturnDelta` only) plus exact PoolManager binding: owner, no pending
+  owner transfer, stable decimals mode, current `minCountedSwapUsd6`, regime fees, HookFee percent, timing params,
+  controller params, and no pending HookFee / min-counted-swap changes.
 - monitor `PeriodClosed` and alert on repeated abnormal regime escalations.
 - monitor admin/security events as a minimum set:
   `RegimeFeesUpdated`, `ControllerParamsUpdated`, `TimingParamsUpdated`, `Paused`, `Unpaused`,

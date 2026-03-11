@@ -30,7 +30,8 @@ contract EnsureLiquidityLive is LiveOpsBase {
         LoggingLib.phase(_phase("ensure-liquidity"));
 
         OpsTypes.CoreConfig memory cfg = ConfigLoader.loadCoreConfig();
-        (cfg,) = CanonicalHookResolverLib.requireExistingCanonicalHook(cfg);
+        OpsTypes.DeploymentConfig memory deployCfg = ConfigLoader.loadDeploymentConfig(cfg);
+        (cfg,) = CanonicalHookResolverLib.requireExistingCanonicalHook(cfg, deployCfg);
 
         address driver = vm.envOr("LIQUIDITY_DRIVER", address(0));
         require(driver != address(0) && driver.code.length > 0, "LIQUIDITY_DRIVER missing");

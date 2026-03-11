@@ -112,9 +112,10 @@ No. It is approximate telemetry for regime analytics.
 
 ## When do ops flows reuse an existing hook?
 
-Only when the existing hook is the canonical CREATE2 deployment for the current release and current constructor args,
+Only when the existing hook is the canonical CREATE2 deployment derived from the current release and the frozen
+`ops/<network>/config/deploy.env` constructor snapshot,
 exposes the exact minimal callback surface, and matches the expected config identity:
-- canonical mined hook address for current release/config,
+- canonical mined hook address for current release + deployment snapshot,
 - `poolManager()`,
 - pool binding + exact permissions (`afterInitialize`, `afterSwap`, `afterSwapReturnDelta` only),
 - `owner()`,

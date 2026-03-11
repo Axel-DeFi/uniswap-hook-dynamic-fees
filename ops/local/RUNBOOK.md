@@ -117,9 +117,12 @@ Notes:
 - Mitigation is operational: owner key controls + monitoring/alerting.
 - Production owner must be multisig; local EOA owner is acceptable only for dev/test.
 - Hot-wallet owner usage is unacceptable for production; use cold/hardware custody.
-- Reuse of an existing hook in deploy/ensure/preflight is pinned to the canonical CREATE2 address for the current
-  release and current constructor args, requires the exact minimal callback surface, exact PoolManager binding,
-  current `minCountedSwapUsd6`, and zero pending owner / pending config changes.
+- Reuse of an existing hook in deploy/ensure/preflight is pinned to the canonical CREATE2 address derived from the
+  current release and the frozen `ops/local/config/deploy.env` constructor snapshot; current runtime/admin
+  expectations come from `ops/local/config/defaults.env`. Reuse also requires the exact minimal callback surface,
+  exact PoolManager binding, current `minCountedSwapUsd6`, and zero pending owner / pending config changes.
+- `deploy.env` is loaded after scenario overlays and root `.env`, so `DEPLOY_*` keys remain the winning constructor
+  snapshot even when runtime env overlays are used.
 
 Controller safety note:
 - `emergencyFloorCloseVolUsd6` must remain strictly greater than zero.
