@@ -9,42 +9,49 @@ import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {LPFeeLibrary} from "@uniswap/v4-core/src/libraries/LPFeeLibrary.sol";
 
+import {ConstructorArgsConfigLib} from "ops/shared/lib/ConstructorArgsConfigLib.sol";
+import {EnvLib} from "ops/shared/lib/EnvLib.sol";
+import {HookIdentityLib} from "ops/shared/lib/HookIdentityLib.sol";
+import {HookValidationLib} from "ops/shared/lib/HookValidationLib.sol";
+import {OpsTypes} from "ops/shared/types/OpsTypes.sol";
+
 /// @notice Creates + initializes a v4 dynamic-fee pool using a deployed hook.
 /// @dev Reads VOLATILE/STABLE and derives canonical currency0/currency1 by address sorting.
 contract CreatePool is Script {
     function run() external {
-        address poolManager = vm.envAddress("POOL_MANAGER");
-        address hook = vm.envAddress("HOOK_ADDRESS");
+        bytes memory constructorArgs = vm.envBytes("CONSTRUCTOR_ARGS_HEX");
+        require(constructorArgs.length > 0, "CONSTRUCTOR_ARGS_HEX missing");
 
-        address volatileToken = vm.envAddress("VOLATILE");
-        address stableToken = vm.envAddress("STABLE");
+        OpsTypes.CoreConfig memory cfg = ConstructorArgsConfigLib.toCoreConfig(constructorArgs);
+        (address canonicalHookAddress,,) = HookIdentityLib.expectedHookAddress(cfg);
 
-        int24 tickSpacing = int24(vm.envInt("TICK_SPACING"));
-        uint160 sqrtPriceX96 = uint160(vm.envUint("INIT_SQRT_PRICE_X96"));
+        address hook = EnvLib.requireAddress("HOOK_ADDRESS", false);
+        require(hook == canonicalHookAddress, "HOOK_ADDRESS not canonical for current release/config");
+        cfg.hookAddress = canonicalHookAddress;
 
-        (address token0, address token1) = _sort(volatileToken, stableToken);
+        OpsTypes.HookValidation memory validation = HookValidationLib.validateHook(cfg);
+        require(validation.ok, validation.reason);
+
+        uint256 sqrtPriceRaw = EnvLib.requireUint("INIT_SQRT_PRICE_X96");
+        require(sqrtPriceRaw <= type(uint160).max, "INIT_SQRT_PRICE_X96 out of uint160 range");
+        uint160 sqrtPriceX96 = uint160(sqrtPriceRaw);
 
         PoolKey memory key = PoolKey({
-            currency0: Currency.wrap(token0),
-            currency1: Currency.wrap(token1),
+            currency0: Currency.wrap(cfg.token0),
+            currency1: Currency.wrap(cfg.token1),
             fee: LPFeeLibrary.DYNAMIC_FEE_FLAG,
-            tickSpacing: tickSpacing,
-            hooks: IHooks(hook)
+            tickSpacing: cfg.tickSpacing,
+            hooks: IHooks(canonicalHookAddress)
         });
 
         vm.startBroadcast();
-        IPoolManager(poolManager).initialize(key, sqrtPriceX96);
+        IPoolManager(cfg.poolManager).initialize(key, sqrtPriceX96);
         vm.stopBroadcast();
 
         console2.log("Pool initialized.");
-        console2.log("Hook:", hook);
-        console2.log("currency0:", token0);
-        console2.log("currency1:", token1);
-        console2.log("stable:", stableToken);
-    }
-
-    function _sort(address a, address b) internal pure returns (address token0, address token1) {
-        if (a < b) return (a, b);
-        return (b, a);
+        console2.log("Hook:", canonicalHookAddress);
+        console2.log("currency0:", cfg.token0);
+        console2.log("currency1:", cfg.token1);
+        console2.log("stable:", cfg.stableToken);
     }
 }

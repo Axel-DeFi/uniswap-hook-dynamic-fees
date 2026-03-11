@@ -9,6 +9,7 @@ import {ErrorLib} from "./ErrorLib.sol";
 
 library ConfigLoader {
     Vm internal constant vm = Vm(address(uint160(uint256(keccak256("hevm cheat code")))));
+    uint64 internal constant DEFAULT_MIN_COUNTED_SWAP_USD6 = 4_000_000;
 
     function loadCoreConfig() internal view returns (OpsTypes.CoreConfig memory cfg) {
         cfg.runtime = _loadRuntime();
@@ -35,15 +36,47 @@ library ConfigLoader {
 
         (cfg.token0, cfg.token1) = sortPair(cfg.volatileToken, cfg.stableToken);
 
-        cfg.stableDecimals = uint8(EnvLib.requireUint("STABLE_DECIMALS"));
+        cfg.stableDecimals = EnvLib.requireUint8("STABLE_DECIMALS");
         if (cfg.stableDecimals != 6 && cfg.stableDecimals != 18) {
             revert ErrorLib.InvalidEnv("STABLE_DECIMALS", "must be 6 or 18");
         }
 
-        cfg.tickSpacing = int24(int256(EnvLib.requireUint("TICK_SPACING")));
+        cfg.tickSpacing = EnvLib.toPositiveInt24Checked(EnvLib.requireUint("TICK_SPACING"), "TICK_SPACING");
         if (cfg.tickSpacing <= 0) {
             revert ErrorLib.InvalidEnv("TICK_SPACING", "must be > 0");
         }
+
+        cfg.owner = EnvLib.envOrAddress("OWNER", cfg.deployer);
+        if (cfg.owner == address(0)) {
+            revert ErrorLib.InvalidEnv("OWNER", "zero address");
+        }
+
+        cfg.floorFeePips = EnvLib.requireUint24("FLOOR_FEE_PIPS");
+        cfg.cashFeePips = EnvLib.requireUint24("CASH_FEE_PIPS");
+        cfg.extremeFeePips = EnvLib.requireUint24("EXTREME_FEE_PIPS");
+        cfg.periodSeconds = EnvLib.requireUint32("PERIOD_SECONDS");
+        cfg.emaPeriods = EnvLib.requireUint8("EMA_PERIODS");
+        cfg.deadbandBps = EnvLib.requireUint16("DEADBAND_BPS");
+        cfg.lullResetSeconds = EnvLib.requireUint32("LULL_RESET_SECONDS");
+        cfg.hookFeePercent = EnvLib.requireUint16("HOOK_FEE_PERCENT");
+        cfg.minCountedSwapUsd6 =
+            EnvLib.envOrUint64("MIN_COUNTED_SWAP_USD6", DEFAULT_MIN_COUNTED_SWAP_USD6);
+        if (cfg.minCountedSwapUsd6 < 1_000_000 || cfg.minCountedSwapUsd6 > 10_000_000) {
+            revert ErrorLib.InvalidEnv("MIN_COUNTED_SWAP_USD6", "must be in 1000000..10000000");
+        }
+        cfg.minCloseVolToCashUsd6 = EnvLib.requireUint64("MIN_CLOSEVOL_TO_CASH_USD6");
+        cfg.upRToCashBps = EnvLib.requireUint16("UP_R_TO_CASH_BPS");
+        cfg.cashHoldPeriods = EnvLib.requireUint8("CASH_HOLD_PERIODS");
+        cfg.minCloseVolToExtremeUsd6 = EnvLib.requireUint64("MIN_CLOSEVOL_TO_EXTREME_USD6");
+        cfg.upRToExtremeBps = EnvLib.requireUint16("UP_R_TO_EXTREME_BPS");
+        cfg.upExtremeConfirmPeriods = EnvLib.requireUint8("UP_EXTREME_CONFIRM_PERIODS");
+        cfg.extremeHoldPeriods = EnvLib.requireUint8("EXTREME_HOLD_PERIODS");
+        cfg.downRFromExtremeBps = EnvLib.requireUint16("DOWN_R_FROM_EXTREME_BPS");
+        cfg.downExtremeConfirmPeriods = EnvLib.requireUint8("DOWN_EXTREME_CONFIRM_PERIODS");
+        cfg.downRFromCashBps = EnvLib.requireUint16("DOWN_R_FROM_CASH_BPS");
+        cfg.downCashConfirmPeriods = EnvLib.requireUint8("DOWN_CASH_CONFIRM_PERIODS");
+        cfg.emergencyFloorCloseVolUsd6 = EnvLib.requireUint64("EMERGENCY_FLOOR_CLOSEVOL_USD6");
+        cfg.emergencyConfirmPeriods = EnvLib.requireUint8("EMERGENCY_CONFIRM_PERIODS");
 
         cfg.initPriceUsdE18 = EnvLib.envOrDecimalE18("INIT_PRICE_USD", 0);
         cfg.liqRangeMinUsdE18 = EnvLib.envOrDecimalE18("LIQ_RANGE_MIN_USD", 0);

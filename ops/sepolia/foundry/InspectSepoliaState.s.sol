@@ -4,6 +4,7 @@ pragma solidity ^0.8.26;
 import {Script} from "forge-std/Script.sol";
 import {console2} from "forge-std/console2.sol";
 
+import {CanonicalHookResolverLib} from "../../shared/lib/CanonicalHookResolverLib.sol";
 import {ConfigLoader} from "../../shared/lib/ConfigLoader.sol";
 import {PoolStateLib} from "../../shared/lib/PoolStateLib.sol";
 import {JsonReportLib} from "../../shared/lib/JsonReportLib.sol";
@@ -15,6 +16,7 @@ contract InspectSepoliaState is Script {
         LoggingLib.phase("sepolia.inspect");
 
         OpsTypes.CoreConfig memory cfg = ConfigLoader.loadCoreConfig();
+        (cfg,) = CanonicalHookResolverLib.requireExistingCanonicalHook(cfg);
         OpsTypes.PoolSnapshot memory snapshot = PoolStateLib.snapshotHook(cfg.hookAddress);
 
         string memory reportPath = vm.envOr(

@@ -3,6 +3,7 @@ pragma solidity ^0.8.26;
 
 import {Script} from "forge-std/Script.sol";
 
+import {CanonicalHookResolverLib} from "../../shared/lib/CanonicalHookResolverLib.sol";
 import {ConfigLoader} from "../../shared/lib/ConfigLoader.sol";
 import {PoolStateLib} from "../../shared/lib/PoolStateLib.sol";
 import {LoggingLib} from "../../shared/lib/LoggingLib.sol";
@@ -11,6 +12,7 @@ import {OpsTypes} from "../../shared/types/OpsTypes.sol";
 contract ValidatePoolSepolia is Script {
     function run() external view {
         OpsTypes.CoreConfig memory cfg = ConfigLoader.loadCoreConfig();
+        (cfg,) = CanonicalHookResolverLib.requireExistingCanonicalHook(cfg);
 
         require(cfg.poolManager != address(0), "POOL_MANAGER missing");
         require(cfg.poolManager.code.length > 0, "POOL_MANAGER has no code");

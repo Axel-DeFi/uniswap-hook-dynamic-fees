@@ -17,6 +17,8 @@ All values are loaded from environment variables (defaults + scenario overlay + 
 ## Hook / pool binding
 
 - `HOOK_ADDRESS` (optional for bootstrap, required for ensure/smoke/full/emergency)
+  - when provided for deploy/ensure/preflight validation, it must be the canonical CREATE2 hook address for the
+    current release and current constructor args
 - `POOL_ADDRESS` (optional, validated when provided)
 
 ## Price / range survivability
@@ -39,6 +41,7 @@ All values are loaded from environment variables (defaults + scenario overlay + 
 - `DEADBAND_BPS`
 - `LULL_RESET_SECONDS`
 - `HOOK_FEE_PERCENT`
+- `MIN_COUNTED_SWAP_USD6` (expected current telemetry threshold for reuse validation; defaults to `4_000_000` when omitted)
 - `MIN_CLOSEVOL_TO_CASH_USD6`
 - `UP_R_TO_CASH_BPS`
 - `CASH_HOLD_PERIODS`

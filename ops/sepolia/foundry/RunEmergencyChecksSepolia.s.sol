@@ -5,6 +5,7 @@ import {Script} from "forge-std/Script.sol";
 
 import {VolumeDynamicFeeHook} from "src/VolumeDynamicFeeHook.sol";
 
+import {CanonicalHookResolverLib} from "../../shared/lib/CanonicalHookResolverLib.sol";
 import {ConfigLoader} from "../../shared/lib/ConfigLoader.sol";
 import {BudgetLib} from "../../shared/lib/BudgetLib.sol";
 import {PoolStateLib} from "../../shared/lib/PoolStateLib.sol";
@@ -16,7 +17,7 @@ contract RunEmergencyChecksSepolia is Script {
         LoggingLib.phase("sepolia.emergency");
 
         OpsTypes.CoreConfig memory cfg = ConfigLoader.loadCoreConfig();
-        require(cfg.hookAddress != address(0) && cfg.hookAddress.code.length > 0, "HOOK_ADDRESS missing");
+        (cfg,) = CanonicalHookResolverLib.requireExistingCanonicalHook(cfg);
 
         OpsTypes.BudgetCheck memory budget = BudgetLib.checkBeforeBroadcast(cfg, cfg.deployer);
         require(budget.ok, budget.reason);

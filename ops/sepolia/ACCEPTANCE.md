@@ -4,9 +4,10 @@
 
 1. `preflight.sh` succeeds without sending transactions.
 2. `inspect.sh` succeeds without sending transactions.
-3. `ensure-hook.sh` is idempotent (reuse existing valid hook or deploy if missing).
-4. `ensure-pool.sh` is idempotent (skip when already initialized).
-5. `ensure-liquidity.sh` auto-ensures helper drivers and fails early if budget is unsafe.
+3. `ensure-hook.sh` is idempotent for the canonical hook identity (reuse canonical valid hook or deploy it if missing).
+4. `ensure-pool.sh` is idempotent (skip when already initialized) and refuses non-canonical/stale hook identity.
+5. `ensure-liquidity.sh` auto-ensures helper drivers, requires preflight by default, and refuses non-canonical/stale
+   hook identity before broadcast.
 6. `smoke/full/rerun-safe/emergency` only run after preflight passes.
 
 ## Artifact checks

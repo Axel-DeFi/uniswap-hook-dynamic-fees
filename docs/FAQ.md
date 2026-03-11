@@ -98,6 +98,8 @@ This path intentionally has no timelock.
 Payout recipient is always current `owner()`. There is no separate recipient setter.
 After `proposeNewOwner(...)` + `acceptOwner()`, payout destination moves to new owner automatically, including for previously accrued and unclaimed HookFees.
 
+Very large claims are settled in chunks under the hood so that `burn` / `take` stay within PoolManager `int128` accounting bounds.
+
 ## Do native-asset pools require a native-compatible owner?
 
 Yes. If one pool currency is native (`address(0)`), claim payout can include native transfer from the PoolManager claim path.
@@ -107,6 +109,23 @@ If ownership changes later, this compatibility requirement must still be preserv
 ## Is `approxLpFeesUsd6` accounting-accurate?
 
 No. It is approximate telemetry for regime analytics.
+
+## When do ops flows reuse an existing hook?
+
+Only when the existing hook is the canonical CREATE2 deployment for the current release and current constructor args,
+exposes the exact minimal callback surface, and matches the expected config identity:
+- canonical mined hook address for current release/config,
+- `poolManager()`,
+- pool binding + exact permissions (`afterInitialize`, `afterSwap`, `afterSwapReturnDelta` only),
+- `owner()`,
+- no `pendingOwner()`,
+- configured stable decimals mode,
+- current `minCountedSwapUsd6()`,
+- regime fees,
+- `hookFeePercent`,
+- timing params,
+- controller params,
+- and no pending `HookFeePercent` / `minCountedSwapUsd6` changes.
 
 ## Is wash-trading fully prevented onchain?
 

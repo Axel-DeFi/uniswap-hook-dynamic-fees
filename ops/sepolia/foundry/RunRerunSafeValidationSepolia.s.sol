@@ -14,6 +14,7 @@ import {LPFeeLibrary} from "@uniswap/v4-core/src/libraries/LPFeeLibrary.sol";
 import {SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {IERC20Minimal} from "@uniswap/v4-core/src/interfaces/external/IERC20Minimal.sol";
 
+import {CanonicalHookResolverLib} from "../../shared/lib/CanonicalHookResolverLib.sol";
 import {ConfigLoader} from "../../shared/lib/ConfigLoader.sol";
 import {BudgetLib} from "../../shared/lib/BudgetLib.sol";
 import {RangeSafetyLib} from "../../shared/lib/RangeSafetyLib.sol";
@@ -40,7 +41,7 @@ contract RunRerunSafeValidationSepolia is Script {
         LoggingLib.phase("sepolia.rerun-safe");
 
         OpsTypes.CoreConfig memory cfg = ConfigLoader.loadCoreConfig();
-        require(cfg.hookAddress != address(0) && cfg.hookAddress.code.length > 0, "HOOK_ADDRESS missing");
+        (cfg,) = CanonicalHookResolverLib.requireExistingCanonicalHook(cfg);
 
         OpsTypes.BudgetCheck memory budget = BudgetLib.checkBeforeBroadcast(cfg, cfg.deployer);
         require(budget.ok, budget.reason);

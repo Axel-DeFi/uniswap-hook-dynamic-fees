@@ -17,6 +17,7 @@ import {IERC20Minimal} from "@uniswap/v4-core/src/interfaces/external/IERC20Mini
 
 import {LiquidityAmounts} from "@uniswap/v4-periphery/src/libraries/LiquidityAmounts.sol";
 
+import {CanonicalHookResolverLib} from "../../shared/lib/CanonicalHookResolverLib.sol";
 import {ConfigLoader} from "../../shared/lib/ConfigLoader.sol";
 import {BudgetLib} from "../../shared/lib/BudgetLib.sol";
 import {LoggingLib} from "../../shared/lib/LoggingLib.sol";
@@ -30,7 +31,7 @@ contract EnsureLiquiditySepolia is Script {
         LoggingLib.phase("sepolia.ensure-liquidity");
 
         OpsTypes.CoreConfig memory cfg = ConfigLoader.loadCoreConfig();
-        require(cfg.hookAddress != address(0) && cfg.hookAddress.code.length > 0, "HOOK_ADDRESS missing");
+        (cfg,) = CanonicalHookResolverLib.requireExistingCanonicalHook(cfg);
 
         address driver = vm.envOr("LIQUIDITY_DRIVER", address(0));
         require(driver != address(0) && driver.code.length > 0, "LIQUIDITY_DRIVER missing");

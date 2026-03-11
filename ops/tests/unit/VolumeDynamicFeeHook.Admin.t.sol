@@ -172,6 +172,20 @@ contract VolumeDynamicFeeHookAdminTest is Test, VolumeDynamicFeeHookV2DeployHelp
         manager.callAfterSwapWithParams(hook, key, params, delta);
     }
 
+    function _swapFor(
+        VolumeDynamicFeeHookAdminHarness targetHook,
+        PoolKey memory targetKey,
+        bool zeroForOne,
+        int256 amountSpecified,
+        int128 amount0,
+        int128 amount1
+    ) internal {
+        SwapParams memory params =
+            SwapParams({zeroForOne: zeroForOne, amountSpecified: amountSpecified, sqrtPriceLimitX96: 0});
+        BalanceDelta delta = toBalanceDelta(amount0, amount1);
+        manager.callAfterSwapWithParams(targetHook, targetKey, params, delta);
+    }
+
     function _moveToCashRegimeWithHold() internal {
         _swap(true, -1, -1_000_000_000, 900_000_000);
         vm.warp(block.timestamp + PERIOD_SECONDS);
@@ -301,6 +315,31 @@ contract VolumeDynamicFeeHookAdminTest is Test, VolumeDynamicFeeHookV2DeployHelp
 
         vm.expectRevert(VolumeDynamicFeeHook.InvalidRecipient.selector);
         hook.claimHookFees(outsider, 0, fees1);
+    }
+
+    function test_claimAllHookFees_chunks_settlement_when_accrual_exceeds_poolManager_int128_limit() public {
+        uint24 nearMaxFloorFee = 999_998;
+        VolumeDynamicFeeHookAdminHarness largeClaimHook =
+            _deployHarness(nearMaxFloorFee, nearMaxFloorFee + 1, 1_000_000, owner, 10, 6);
+        PoolKey memory largeClaimKey = _poolKey(address(largeClaimHook));
+        manager.callAfterInitialize(largeClaimHook, largeClaimKey);
+
+        for (uint256 i = 0; i < 11; ++i) {
+            _swapFor(largeClaimHook, largeClaimKey, true, -1, -1, type(int128).max);
+        }
+
+        uint256 poolManagerLimit = uint256(uint128(type(int128).max));
+        (, uint256 fees1) = largeClaimHook.hookFeesAccrued();
+        assertGt(fees1, poolManagerLimit, "precondition: accrued HookFee must exceed single-settlement limit");
+
+        largeClaimHook.claimAllHookFees();
+
+        (uint256 fees0After, uint256 fees1After) = largeClaimHook.hookFeesAccrued();
+        assertEq(fees0After, 0);
+        assertEq(fees1After, 0);
+        assertEq(manager.unlockCount(), 1, "claim should still use a single unlock call");
+        assertEq(manager.burnCount(), 2, "oversized accrual must be burned in multiple chunks");
+        assertEq(manager.takeCount(), 2, "oversized accrual must be taken in multiple chunks");
     }
 
     function test_claimAllHookFees_after_owner_transfer_uses_new_owner_without_manual_sync() public {

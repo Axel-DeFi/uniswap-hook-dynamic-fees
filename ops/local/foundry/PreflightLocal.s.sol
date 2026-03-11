@@ -9,6 +9,7 @@ import {ConfigLoader} from "../../shared/lib/ConfigLoader.sol";
 import {TokenValidationLib} from "../../shared/lib/TokenValidationLib.sol";
 import {BudgetLib} from "../../shared/lib/BudgetLib.sol";
 import {RangeSafetyLib} from "../../shared/lib/RangeSafetyLib.sol";
+import {HookIdentityLib} from "../../shared/lib/HookIdentityLib.sol";
 import {HookValidationLib} from "../../shared/lib/HookValidationLib.sol";
 import {NativeRecipientValidationLib} from "../../shared/lib/NativeRecipientValidationLib.sol";
 import {PoolStateLib} from "../../shared/lib/PoolStateLib.sol";
@@ -25,8 +26,10 @@ contract PreflightLocal is Script {
 
         string memory scenario = vm.envOr("OPS_SCENARIO", string("bootstrap"));
         bool bootstrapScenario = keccak256(bytes(scenario)) == keccak256(bytes("bootstrap"));
+        (address canonicalHookAddress,,) = HookIdentityLib.expectedHookAddress(cfg);
         bool hookConfigured = cfg.hookAddress != address(0);
-        bool hookDeployed = hookConfigured && cfg.hookAddress.code.length > 0;
+        bool configuredHookCanonical = !hookConfigured || cfg.hookAddress == canonicalHookAddress;
+        bool hookDeployed = canonicalHookAddress.code.length > 0;
         bool bootstrapStage = _isBootstrapStage(bootstrapScenario, hookDeployed);
 
         OpsTypes.TokenValidation memory tokenValidation;
@@ -51,9 +54,13 @@ contract PreflightLocal is Script {
         OpsTypes.HookValidation memory hookValidation;
         OpsTypes.PoolSnapshot memory snapshot;
 
-        if (hookDeployed) {
+        if (hookConfigured && !configuredHookCanonical) {
+            hookValidation.ok = false;
+            hookValidation.reason = "HOOK_ADDRESS not canonical for current release/config";
+        } else if (hookDeployed) {
+            cfg.hookAddress = canonicalHookAddress;
             hookValidation = HookValidationLib.validateHook(cfg);
-            snapshot = PoolStateLib.snapshotHook(cfg.hookAddress);
+            snapshot = PoolStateLib.snapshotHook(canonicalHookAddress);
         } else if (bootstrapScenario) {
             hookValidation.ok = true;
             hookValidation.reason =
@@ -102,10 +109,10 @@ contract PreflightLocal is Script {
                 cashHoldPeriods = h.cashHoldPeriods();
                 extremeHoldPeriods = h.extremeHoldPeriods();
             } else {
-                minCloseVolToCashUsd6 = uint64(vm.envOr("MIN_CLOSEVOL_TO_CASH_USD6", uint256(0)));
-                emergencyFloorCloseVolUsd6 = uint64(vm.envOr("EMERGENCY_FLOOR_CLOSEVOL_USD6", uint256(0)));
-                cashHoldPeriods = uint8(vm.envOr("CASH_HOLD_PERIODS", uint256(0)));
-                extremeHoldPeriods = uint8(vm.envOr("EXTREME_HOLD_PERIODS", uint256(0)));
+                minCloseVolToCashUsd6 = cfg.minCloseVolToCashUsd6;
+                emergencyFloorCloseVolUsd6 = cfg.emergencyFloorCloseVolUsd6;
+                cashHoldPeriods = cfg.cashHoldPeriods;
+                extremeHoldPeriods = cfg.extremeHoldPeriods;
             }
 
             if (

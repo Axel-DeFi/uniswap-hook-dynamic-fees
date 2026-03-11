@@ -34,6 +34,9 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
     /// @notice Hard maximum for HookFee share as a percent of LP fee.
     uint16 public constant MAX_HOOK_FEE_PERCENT = 10;
 
+    /// @notice Maximum single settlement amount accepted by PoolManager burn/take accounting.
+    uint256 private constant MAX_POOLMANAGER_SETTLEMENT_AMOUNT = uint256(uint128(type(int128).max));
+
     /// @notice Delay for HookFee percent changes.
     uint64 public constant HOOK_FEE_PERCENT_CHANGE_DELAY = 48 hours;
 
@@ -307,6 +310,9 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
     /// @notice Stable-side token used for USD6 volume telemetry.
     Currency public immutable stableCurrency;
 
+    /// @notice Configured decimals mode for stable-side telemetry scaling.
+    uint8 public immutable stableDecimals;
+
     bool internal immutable _stableIsCurrency0;
     uint64 internal immutable _stableScale;
 
@@ -320,7 +326,7 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
     /// @param _poolCurrency1 Pool currency1.
     /// @param _poolTickSpacing Pool tick spacing.
     /// @param _stableCurrency Stable-side token used for volume telemetry.
-    /// @param stableDecimals Stable token decimals; only `6` or `18` are accepted.
+    /// @param stableDecimals_ Stable token decimals; only `6` or `18` are accepted.
     /// @param _floorFee Floor LP fee in hundredths of a bip.
     /// @param _cashFee Cash LP fee in hundredths of a bip.
     /// @param _extremeFee Extreme LP fee in hundredths of a bip.
@@ -349,7 +355,7 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
         Currency _poolCurrency1,
         int24 _poolTickSpacing,
         Currency _stableCurrency,
-        uint8 stableDecimals,
+        uint8 stableDecimals_,
         uint24 _floorFee,
         uint24 _cashFee,
         uint24 _extremeFee,
@@ -389,11 +395,12 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
         stableCurrency = _stableCurrency;
         _stableIsCurrency0 = (_stableCurrency == _poolCurrency0);
 
-        if (stableDecimals != 6 && stableDecimals != 18) {
-            revert InvalidStableDecimals(stableDecimals);
+        if (stableDecimals_ != 6 && stableDecimals_ != 18) {
+            revert InvalidStableDecimals(stableDecimals_);
         }
+        stableDecimals = stableDecimals_;
 
-        if (stableDecimals == 6) _stableScale = 1;
+        if (stableDecimals_ == 6) _stableScale = 1;
         else _stableScale = 1_000_000_000_000;
 
         _setTimingParamsInternal(_periodSeconds, _emaPeriods, _lullResetSeconds, _deadbandBps);
@@ -1402,12 +1409,21 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
     /// @dev Burn creates positive PoolManager delta for this hook; take withdraws the same amount to `to`.
     function _withdrawHookFeeViaPoolManagerAccounting(address to, uint256 amount0, uint256 amount1) internal {
         if (amount0 > 0) {
-            poolManager.burn(address(this), poolCurrency0.toId(), amount0);
-            poolManager.take(poolCurrency0, to, amount0);
+            _withdrawCurrencyClaim(poolCurrency0, to, amount0);
         }
         if (amount1 > 0) {
-            poolManager.burn(address(this), poolCurrency1.toId(), amount1);
-            poolManager.take(poolCurrency1, to, amount1);
+            _withdrawCurrencyClaim(poolCurrency1, to, amount1);
+        }
+    }
+
+    function _withdrawCurrencyClaim(Currency currency, address to, uint256 amount) internal {
+        while (amount > 0) {
+            uint256 chunk = amount > MAX_POOLMANAGER_SETTLEMENT_AMOUNT ? MAX_POOLMANAGER_SETTLEMENT_AMOUNT : amount;
+            poolManager.burn(address(this), currency.toId(), chunk);
+            poolManager.take(currency, to, chunk);
+            unchecked {
+                amount -= chunk;
+            }
         }
     }
 

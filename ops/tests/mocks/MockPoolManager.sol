@@ -17,6 +17,8 @@ interface IUnlockCallback {
 /// @notice Minimal PoolManager mock used by unit/fuzz tests.
 /// @dev Not a full IPoolManager implementation; only methods required by this repository tests.
 contract MockPoolManager {
+    uint256 internal constant MAX_SETTLEMENT_AMOUNT = uint256(uint128(type(int128).max));
+
     uint24 public lastFee;
     uint256 public updateCount;
     uint256 public unlockCount;
@@ -68,6 +70,7 @@ contract MockPoolManager {
     }
 
     function take(Currency currency, address to, uint256 amount) external {
+        if (amount > MAX_SETTLEMENT_AMOUNT) revert("amount exceeds int128");
         takeCount += 1;
         address token = Currency.unwrap(currency);
         if (token == address(0)) {
@@ -83,11 +86,13 @@ contract MockPoolManager {
     }
 
     function mint(address to, uint256 id, uint256 amount) external {
+        if (amount > MAX_SETTLEMENT_AMOUNT) revert("amount exceeds int128");
         claimBalances[to][id] += amount;
         mintCount += 1;
     }
 
     function burn(address from, uint256 id, uint256 amount) external {
+        if (amount > MAX_SETTLEMENT_AMOUNT) revert("amount exceeds int128");
         uint256 balance = claimBalances[from][id];
         require(balance >= amount, "insufficient claim balance");
         claimBalances[from][id] = balance - amount;

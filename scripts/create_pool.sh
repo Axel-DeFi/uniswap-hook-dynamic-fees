@@ -26,6 +26,18 @@ set -euo pipefail
 #   - or loaded from ./scripts/out/deploy.<chain>.json (local -> deploy.local.json)
 
 lower() { printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]'; }
+sort_pool_tokens() {
+  local a b al bl
+  a="${1:?}"
+  b="${2:?}"
+  al="$(printf '%s' "$a" | tr '[:upper:]' '[:lower:]')"
+  bl="$(printf '%s' "$b" | tr '[:upper:]' '[:lower:]')"
+  if [[ "$al" < "$bl" ]]; then
+    printf '%s %s\n' "$a" "$b"
+  else
+    printf '%s %s\n' "$b" "$a"
+  fi
+}
 percent_to_pips() {
   local pct="$1"
   awk -v pct="${pct}" '
@@ -116,23 +128,21 @@ for k in "${required[@]}"; do
   fi
 done
 
-if [[ "$CHAIN" == "optimism" ]]; then
-  required_v2=(
-    FLOOR_TIER CASH_TIER EXTREME_TIER
-    PERIOD_SECONDS EMA_PERIODS LULL_RESET_SECONDS DEADBAND_BPS
-    HOOK_FEE_PERCENT
-    MIN_CLOSEVOL_TO_CASH_USD6 UP_R_TO_CASH_BPS CASH_HOLD_PERIODS
-    MIN_CLOSEVOL_TO_EXTREME_USD6 UP_R_TO_EXTREME_BPS UP_EXTREME_CONFIRM_PERIODS EXTREME_HOLD_PERIODS
-    DOWN_R_FROM_EXTREME_BPS DOWN_EXTREME_CONFIRM_PERIODS DOWN_R_FROM_CASH_BPS DOWN_CASH_CONFIRM_PERIODS
-    EMERGENCY_FLOOR_CLOSEVOL_USD6 EMERGENCY_CONFIRM_PERIODS
-  )
-  for k in "${required_v2[@]}"; do
-    if [[ -z "${!k:-}" ]]; then
-      echo "ERROR: missing v2 key $k in $CFG (required for Optimism deployment)." >&2
-      exit 1
-    fi
-  done
-fi
+required_v2=(
+  FLOOR_TIER CASH_TIER EXTREME_TIER
+  PERIOD_SECONDS EMA_PERIODS LULL_RESET_SECONDS DEADBAND_BPS
+  HOOK_FEE_PERCENT
+  MIN_CLOSEVOL_TO_CASH_USD6 UP_R_TO_CASH_BPS CASH_HOLD_PERIODS
+  MIN_CLOSEVOL_TO_EXTREME_USD6 UP_R_TO_EXTREME_BPS UP_EXTREME_CONFIRM_PERIODS EXTREME_HOLD_PERIODS
+  DOWN_R_FROM_EXTREME_BPS DOWN_EXTREME_CONFIRM_PERIODS DOWN_R_FROM_CASH_BPS DOWN_CASH_CONFIRM_PERIODS
+  EMERGENCY_FLOOR_CLOSEVOL_USD6 EMERGENCY_CONFIRM_PERIODS
+)
+for k in "${required_v2[@]}"; do
+  if [[ -z "${!k:-}" ]]; then
+    echo "ERROR: missing v2 key $k in $CFG (required for canonical hook validation)." >&2
+    exit 1
+  fi
+done
 
 # Ask for INIT_PRICE_USD if missing.
 if [[ -z "${INIT_PRICE_USD:-}" ]]; then
@@ -204,13 +214,71 @@ PY
   echo "==> Loaded HOOK_ADDRESS=$HOOK_ADDRESS from $deploy_json"
 fi
 
+if [[ -z "${OWNER:-}" ]]; then
+  OWNER="$(cast call "${HOOK_ADDRESS}" "owner()(address)" --rpc-url "${RPC_URL}" 2>/dev/null || true)"
+  if [[ -z "${OWNER}" || ! "${OWNER}" =~ ^0x[0-9a-fA-F]{40}$ ]]; then
+    echo "ERROR: OWNER missing and failed to read owner() from HOOK_ADDRESS=${HOOK_ADDRESS}" >&2
+    exit 1
+  fi
+  echo "==> OWNER not set; using on-chain hook owner: ${OWNER}"
+fi
+export OWNER
+
+FLOOR_FEE_PIPS="$(percent_to_pips "$(printf '%s' "${FLOOR_TIER}" | tr -d '[:space:]')" || true)"
+CASH_FEE_PIPS="$(percent_to_pips "$(printf '%s' "${CASH_TIER}" | tr -d '[:space:]')" || true)"
+EXTREME_FEE_PIPS="$(percent_to_pips "$(printf '%s' "${EXTREME_TIER}" | tr -d '[:space:]')" || true)"
+if [[ -z "${FLOOR_FEE_PIPS}" || -z "${CASH_FEE_PIPS}" || -z "${EXTREME_FEE_PIPS}" ]]; then
+  echo "ERROR: invalid FLOOR_TIER/CASH_TIER/EXTREME_TIER values in ${CFG}" >&2
+  exit 1
+fi
+if (( FLOOR_FEE_PIPS >= CASH_FEE_PIPS || CASH_FEE_PIPS >= EXTREME_FEE_PIPS )); then
+  echo "ERROR: fee bounds must satisfy FLOOR_TIER < CASH_TIER < EXTREME_TIER." >&2
+  exit 1
+fi
+
+read -r POOL_CURRENCY0 POOL_CURRENCY1 <<< "$(sort_pool_tokens "${VOLATILE}" "${STABLE}")"
+CONSTRUCTOR_ARGS_HEX="$(cast abi-encode \
+  "constructor(address,address,address,int24,address,uint8,uint24,uint24,uint24,uint32,uint8,uint16,uint32,address,uint16,uint64,uint16,uint8,uint64,uint16,uint8,uint8,uint16,uint8,uint16,uint8,uint64,uint8)" \
+  "${POOL_MANAGER}" \
+  "${POOL_CURRENCY0}" \
+  "${POOL_CURRENCY1}" \
+  "${TICK_SPACING}" \
+  "${STABLE}" \
+  "${STABLE_DECIMALS}" \
+  "${FLOOR_FEE_PIPS}" \
+  "${CASH_FEE_PIPS}" \
+  "${EXTREME_FEE_PIPS}" \
+  "${PERIOD_SECONDS}" \
+  "${EMA_PERIODS}" \
+  "${DEADBAND_BPS}" \
+  "${LULL_RESET_SECONDS}" \
+  "${OWNER}" \
+  "${HOOK_FEE_PERCENT}" \
+  "${MIN_CLOSEVOL_TO_CASH_USD6}" \
+  "${UP_R_TO_CASH_BPS}" \
+  "${CASH_HOLD_PERIODS}" \
+  "${MIN_CLOSEVOL_TO_EXTREME_USD6}" \
+  "${UP_R_TO_EXTREME_BPS}" \
+  "${UP_EXTREME_CONFIRM_PERIODS}" \
+  "${EXTREME_HOLD_PERIODS}" \
+  "${DOWN_R_FROM_EXTREME_BPS}" \
+  "${DOWN_EXTREME_CONFIRM_PERIODS}" \
+  "${DOWN_R_FROM_CASH_BPS}" \
+  "${DOWN_CASH_CONFIRM_PERIODS}" \
+  "${EMERGENCY_FLOOR_CLOSEVOL_USD6}" \
+  "${EMERGENCY_CONFIRM_PERIODS}")"
+if [[ -z "${CONSTRUCTOR_ARGS_HEX}" || "${CONSTRUCTOR_ARGS_HEX}" == "0x" ]]; then
+  echo "ERROR: failed to encode CONSTRUCTOR_ARGS_HEX" >&2
+  exit 1
+fi
+
 INIT_SQRT_PRICE_X96="$(./scripts/calc_init_sqrt_price.sh --config "$CFG" --rpc-url "$RPC_URL" --from-usd --sqrt-only)"
 if [[ -z "$INIT_SQRT_PRICE_X96" ]]; then
   echo "ERROR: failed to compute INIT_SQRT_PRICE_X96" >&2
   exit 1
 fi
 
-export RPC_URL PRIVATE_KEY HOOK_ADDRESS INIT_SQRT_PRICE_X96
+export RPC_URL PRIVATE_KEY HOOK_ADDRESS INIT_SQRT_PRICE_X96 CONSTRUCTOR_ARGS_HEX
 
 echo "==> Create+init pool (dynamic fee)"
 echo "==> Config: $CFG"

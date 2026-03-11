@@ -5,6 +5,7 @@ import {Script} from "forge-std/Script.sol";
 import {console2} from "forge-std/console2.sol";
 
 import {MockPoolManager} from "../../tests/mocks/MockPoolManager.sol";
+import {EnvLib} from "../../shared/lib/EnvLib.sol";
 import {JsonReportLib} from "../../shared/lib/JsonReportLib.sol";
 
 contract LocalMintableToken {
@@ -64,7 +65,7 @@ contract StartAnvilState is Script {
         uint256 pk = vm.envUint("PRIVATE_KEY");
         address deployer = vm.addr(pk);
 
-        uint8 stableDecimals = uint8(vm.envOr("STABLE_DECIMALS", uint256(6)));
+        uint8 stableDecimals = EnvLib.envOrUint8("STABLE_DECIMALS", 6);
         string memory statePath = vm.envOr(
             "OPS_LOCAL_STATE_PATH", string.concat(vm.projectRoot(), "/ops/local/out/state/local.addresses.json")
         );

@@ -9,6 +9,7 @@ import {ConfigLoader} from "../../shared/lib/ConfigLoader.sol";
 import {TokenValidationLib} from "../../shared/lib/TokenValidationLib.sol";
 import {BudgetLib} from "../../shared/lib/BudgetLib.sol";
 import {RangeSafetyLib} from "../../shared/lib/RangeSafetyLib.sol";
+import {HookIdentityLib} from "../../shared/lib/HookIdentityLib.sol";
 import {HookValidationLib} from "../../shared/lib/HookValidationLib.sol";
 import {NativeRecipientValidationLib} from "../../shared/lib/NativeRecipientValidationLib.sol";
 import {PoolStateLib} from "../../shared/lib/PoolStateLib.sol";
@@ -28,18 +29,27 @@ contract PreflightSepolia is Script {
         OpsTypes.TokenValidation memory tokenValidation = TokenValidationLib.validateTokens(cfg);
         OpsTypes.BudgetCheck memory budget = BudgetLib.checkBeforeBroadcast(cfg, cfg.deployer);
         OpsTypes.RangeCheck memory range = RangeSafetyLib.validateRange(cfg);
+        (address canonicalHookAddress,,) = HookIdentityLib.expectedHookAddress(cfg);
 
         OpsTypes.HookValidation memory hookValidation;
         OpsTypes.PoolSnapshot memory snapshot;
 
         if (cfg.hookAddress != address(0)) {
-            if (cfg.hookAddress.code.length == 0) {
+            if (cfg.hookAddress != canonicalHookAddress) {
+                hookValidation.ok = false;
+                hookValidation.reason = "HOOK_ADDRESS not canonical for current release/config";
+            } else if (canonicalHookAddress.code.length == 0) {
                 hookValidation.ok = false;
                 hookValidation.reason = "stale HOOK_ADDRESS (no code)";
             } else {
+                cfg.hookAddress = canonicalHookAddress;
                 hookValidation = HookValidationLib.validateHook(cfg);
-                snapshot = PoolStateLib.snapshotHook(cfg.hookAddress);
+                snapshot = PoolStateLib.snapshotHook(canonicalHookAddress);
             }
+        } else if (canonicalHookAddress.code.length > 0) {
+            cfg.hookAddress = canonicalHookAddress;
+            hookValidation = HookValidationLib.validateHook(cfg);
+            snapshot = PoolStateLib.snapshotHook(canonicalHookAddress);
         } else {
             hookValidation.ok = true;
             hookValidation.reason = "hook not set";
@@ -79,10 +89,10 @@ contract PreflightSepolia is Script {
                 cashHoldPeriods = h.cashHoldPeriods();
                 extremeHoldPeriods = h.extremeHoldPeriods();
             } else {
-                minCloseVolToCashUsd6 = uint64(vm.envOr("MIN_CLOSEVOL_TO_CASH_USD6", uint256(0)));
-                emergencyFloorCloseVolUsd6 = uint64(vm.envOr("EMERGENCY_FLOOR_CLOSEVOL_USD6", uint256(0)));
-                cashHoldPeriods = uint8(vm.envOr("CASH_HOLD_PERIODS", uint256(0)));
-                extremeHoldPeriods = uint8(vm.envOr("EXTREME_HOLD_PERIODS", uint256(0)));
+                minCloseVolToCashUsd6 = cfg.minCloseVolToCashUsd6;
+                emergencyFloorCloseVolUsd6 = cfg.emergencyFloorCloseVolUsd6;
+                cashHoldPeriods = cfg.cashHoldPeriods;
+                extremeHoldPeriods = cfg.extremeHoldPeriods;
             }
 
             if (

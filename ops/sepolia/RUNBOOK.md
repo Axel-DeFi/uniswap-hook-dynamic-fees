@@ -30,7 +30,11 @@ ops/sepolia/scripts/ensure-pool.sh
 ops/sepolia/scripts/ensure-liquidity.sh
 ```
 
-`ensure-hook.sh` reuses a valid hook; if existing hook is stale/invalid, it deploys a replacement hook and refreshes state.
+`ensure-hook.sh` reuses only the canonical valid hook for the current release/config; if the canonical hook is missing it
+deploys it, and if the canonical address is already occupied by invalid code it fails loud instead of silently
+repointing reuse.
+`ensure-pool.sh` and `ensure-liquidity.sh` also enforce canonical hook identity inside their Foundry scripts and run
+through the preflight gate by default before broadcast.
 
 ## Validation suite
 
@@ -62,6 +66,7 @@ Timelock visibility is intentional. The main exposed effect is HookFee timing; L
 - Use `claimHookFees(...)` / `claimAllHookFees(...)` as owner.
 - `claimAllHookFees(...)` has no recipient overload; full claim always pays to current `owner()`.
 - Payout path is PoolManager accounting withdrawal: `unlock` -> `burn` -> `take`.
+- Oversized payouts are chunked automatically so each `burn` / `take` fits PoolManager `int128` accounting bounds.
 - `claimHookFees(...)` requires `to == owner()`.
 - If pool includes native currency, recipient must be compatible with native payout from PoolManager sender context in the claim path.
 - Sepolia preflight/ensure flow validates this compatibility before deploy/reuse success.
@@ -99,6 +104,9 @@ Timelock visibility is intentional. The main exposed effect is HookFee timing; L
 - Production owner must be multisig; EOA owner is acceptable only for local/dev/test.
 - Hot-wallet owner usage is unacceptable for production.
 - Owner key custody should be cold/hardware.
+- Reuse of an existing hook in deploy/ensure/preflight is pinned to the canonical CREATE2 address for the current
+  release and current constructor args, requires the exact minimal callback surface, exact PoolManager binding,
+  current `minCountedSwapUsd6`, and zero pending owner / pending config changes.
 
 Controller safety note:
 - `emergencyFloorCloseVolUsd6` must remain strictly greater than zero.

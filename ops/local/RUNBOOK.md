@@ -63,6 +63,7 @@ Timelock visibility is intentional. The main exposed effect is HookFee timing; L
 - Use `claimHookFees(...)` / `claimAllHookFees(...)` as owner.
 - `claimAllHookFees(...)` has no recipient overload; full claim always pays to current `owner()`.
 - Payout path is PoolManager accounting withdrawal: `unlock` -> `burn` -> `take`.
+- Oversized payouts are chunked automatically so each `burn` / `take` fits PoolManager `int128` accounting bounds.
 - `claimHookFees(...)` requires `to == owner()`.
 - If pool includes native currency, recipient must be compatible with native payout from PoolManager sender context in the claim path.
 - Local preflight/deploy flow validates this compatibility before deployment/ensure.
@@ -116,6 +117,9 @@ Notes:
 - Mitigation is operational: owner key controls + monitoring/alerting.
 - Production owner must be multisig; local EOA owner is acceptable only for dev/test.
 - Hot-wallet owner usage is unacceptable for production; use cold/hardware custody.
+- Reuse of an existing hook in deploy/ensure/preflight is pinned to the canonical CREATE2 address for the current
+  release and current constructor args, requires the exact minimal callback surface, exact PoolManager binding,
+  current `minCountedSwapUsd6`, and zero pending owner / pending config changes.
 
 Controller safety note:
 - `emergencyFloorCloseVolUsd6` must remain strictly greater than zero.

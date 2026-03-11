@@ -34,9 +34,48 @@ library EnvLib {
         value = vm.envUint(key);
     }
 
+    function requireUint8(string memory key) internal view returns (uint8 value) {
+        value = toUint8Checked(requireUint(key), key);
+    }
+
+    function requireUint16(string memory key) internal view returns (uint16 value) {
+        value = toUint16Checked(requireUint(key), key);
+    }
+
+    function requireUint24(string memory key) internal view returns (uint24 value) {
+        value = toUint24Checked(requireUint(key), key);
+    }
+
+    function requireUint32(string memory key) internal view returns (uint32 value) {
+        value = toUint32Checked(requireUint(key), key);
+    }
+
+    function requireUint64(string memory key) internal view returns (uint64 value) {
+        value = toUint64Checked(requireUint(key), key);
+    }
+
+    function requireInt24(string memory key) internal view returns (int24 value) {
+        if (!hasKey(key)) revert ErrorLib.MissingEnv(key);
+        int256 raw = vm.envInt(key);
+        if (raw < type(int24).min || raw > type(int24).max) {
+            revert ErrorLib.InvalidEnv(key, "value out of int24 range");
+        }
+        value = int24(raw);
+    }
+
     function envOrUint(string memory key, uint256 fallbackValue) internal view returns (uint256 value) {
         if (!hasKey(key)) return fallbackValue;
         value = vm.envUint(key);
+    }
+
+    function envOrUint8(string memory key, uint8 fallbackValue) internal view returns (uint8 value) {
+        if (!hasKey(key)) return fallbackValue;
+        value = toUint8Checked(vm.envUint(key), key);
+    }
+
+    function envOrUint64(string memory key, uint64 fallbackValue) internal view returns (uint64 value) {
+        if (!hasKey(key)) return fallbackValue;
+        value = toUint64Checked(vm.envUint(key), key);
     }
 
     function envOrBool(string memory key, bool fallbackValue) internal view returns (bool value) {
@@ -123,5 +162,37 @@ library EnvLib {
             if (a[i] != b[i]) return false;
         }
         return true;
+    }
+
+    function toUint8Checked(uint256 raw, string memory key) internal pure returns (uint8 value) {
+        if (raw > type(uint8).max) revert ErrorLib.InvalidEnv(key, "value too large for uint8");
+        value = uint8(raw);
+    }
+
+    function toUint16Checked(uint256 raw, string memory key) internal pure returns (uint16 value) {
+        if (raw > type(uint16).max) revert ErrorLib.InvalidEnv(key, "value too large for uint16");
+        value = uint16(raw);
+    }
+
+    function toUint24Checked(uint256 raw, string memory key) internal pure returns (uint24 value) {
+        if (raw > type(uint24).max) revert ErrorLib.InvalidEnv(key, "value too large for uint24");
+        value = uint24(raw);
+    }
+
+    function toUint32Checked(uint256 raw, string memory key) internal pure returns (uint32 value) {
+        if (raw > type(uint32).max) revert ErrorLib.InvalidEnv(key, "value too large for uint32");
+        value = uint32(raw);
+    }
+
+    function toUint64Checked(uint256 raw, string memory key) internal pure returns (uint64 value) {
+        if (raw > type(uint64).max) revert ErrorLib.InvalidEnv(key, "value too large for uint64");
+        value = uint64(raw);
+    }
+
+    function toPositiveInt24Checked(uint256 raw, string memory key) internal pure returns (int24 value) {
+        if (raw > uint256(uint24(type(int24).max))) {
+            revert ErrorLib.InvalidEnv(key, "must fit positive int24");
+        }
+        value = int24(uint24(raw));
     }
 }

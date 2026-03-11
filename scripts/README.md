@@ -30,12 +30,17 @@ Deployment/mining must include:
 Uses:
 - `scripts/foundry/DeployHook.s.sol`
 - Deployment is constructor-driven only; no post-deploy admin setter phase is executed.
+- The script derives the canonical CREATE2 address from the current release/config constructor args, reuses an
+  already-valid canonical hook, and never mines an alternate duplicate address on rerun.
 
 ### Create + initialize pool
 
 ```bash
 ./scripts/create_pool.sh --chain <chain> --rpc-url <url> --private-key <pk> --broadcast
 ```
+
+The pool-init script reconstructs constructor identity, requires `HOOK_ADDRESS` to match the canonical hook for the
+current release/config, and validates the canonical deployed hook before broadcasting pool initialization.
 
 ### Inspect hook state
 
@@ -81,8 +86,16 @@ Primary artifacts:
 - Threshold updates are pending-state only, bounded to `1e6..10e6`, and activate at next period boundary.
 - Threshold updates intentionally have no timelock; recalibration target cadence is 5 days offchain.
 - Claim payout path uses PoolManager accounting withdrawal (`unlock` -> `burn` -> `take`).
+- Oversized claim payouts are chunked automatically to fit PoolManager `int128` accounting bounds.
 - Full claim path is `claimAllHookFees()` only and always pays current `owner()`.
+- `MIN_COUNTED_SWAP_USD6` is the expected current telemetry threshold used for deploy/ensure/preflight reuse validation
+  (defaults to `4_000_000` if omitted).
 - For native-asset pools (`token0 == address(0)` or `token1 == address(0)`), deploy/ensure/preflight validates that current `owner()` can receive native payout from PoolManager sender context in the claim path.
+- Existing hook reuse is pinned to the canonical CREATE2 address for the current release and current constructor args,
+  requires the exact minimal callback surface (`afterInitialize`, `afterSwap`, `afterSwapReturnDelta` only), and
+  requires full config identity match plus exact PoolManager binding and zero pending state:
+  `owner()`, no `pendingOwner()`, stable decimals mode, current `minCountedSwapUsd6()`, fees, HookFee percent,
+  timing params, controller params, and no pending HookFee / min-counted-swap changes.
 - Ownership transfer (`proposeNewOwner` -> `acceptOwner`) automatically moves payout destination without extra sync calls.
 - `approxLpFeesUsd6` is approximate analytics, not accounting output.
 - Pool key uses strict dynamic fee flag matching (`key.fee == LPFeeLibrary.DYNAMIC_FEE_FLAG`).

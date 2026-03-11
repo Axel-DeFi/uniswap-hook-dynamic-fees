@@ -26,7 +26,15 @@ See `LICENSE` for full terms.
 - HookFee is based on an approximate LP-fee estimate from the unspecified side; exact-input vs exact-output can diverge by design.
 - HookFee accrual is persisted as PoolManager ERC6909 claims and claimed via `unlock` + `burn` + `take`.
 - Claim-all path is single and explicit: `claimAllHookFees()` always pays to current `owner()`.
+- Claim settlement automatically chunks oversized payouts to fit PoolManager `int128` accounting bounds.
 - For native-asset pools (`token0 == address(0)` or `token1 == address(0)`), deploy/ensure/preflight flows validate that current `owner()` can accept native payout from the PoolManager claim path.
+- Deploy/ensure/preflight hook reuse is pinned to the canonical CREATE2 address for the current release and current
+  constructor args, requires the exact minimal callback surface (`afterInitialize`, `afterSwap`,
+  `afterSwapReturnDelta` only), expected PoolManager binding, current `minCountedSwapUsd6`, and zero pending owner /
+  pending config changes.
+- Manual `scripts/deploy_hook.sh` and `scripts/create_pool.sh` flows also derive the same canonical constructor-driven
+  hook identity and reject stale/non-canonical hook addresses instead of silently deploying or initializing a sibling
+  pool path.
 - `pause()/unpause()` freeze/resume regulator transitions at the current LP fee regime (no automatic floor reset, no swap stop, no HookFee stop).
 - `setRegimeFees(...)` (paused-only) preserves EMA, resets hold/streak counters, starts a fresh open period, and updates current LP fee immediately if active regime fee changed.
 - `setControllerParams(...)` (paused-only) preserves active regime + EMA, clears hold/streak counters, and starts a fresh open period.

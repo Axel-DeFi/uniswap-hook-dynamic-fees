@@ -192,6 +192,7 @@ Allowed stable decimals:
 Any other value reverts (`InvalidStableDecimals`).
 
 Scaling path is explicit and bounded for USD6 conversion.
+Configured stable decimals mode is exposed as `stableDecimals()` for deployment/reuse validation.
 
 ## EMA model
 
@@ -253,8 +254,8 @@ Recipient semantics:
 
 Claim settlement path:
 1. owner request enters `poolManager.unlock(...)`,
-2. callback burns hook ERC6909 claims (`burn`),
-3. callback withdraws underlying currency (`take`) to current owner.
+2. callback burns hook ERC6909 claims (`burn`) in one or more chunks when needed,
+3. callback withdraws underlying currency (`take`) to current owner, chunked to stay within PoolManager `int128` accounting bounds.
 
 Native recipient compatibility:
 - For pools with native currency in `token0` or `token1`, claim payout can include native transfer via the PoolManager claim path.
@@ -290,6 +291,11 @@ Monitoring interpretation note:
 - production owner must be a multisig; EOA owner is acceptable only for local/dev/test.
 - hot-wallet owner usage is unacceptable for production.
 - owner key custody should use cold/hardware wallet standards.
+- deploy/ensure/preflight reuse of an existing hook is pinned to the canonical CREATE2 address for the current release
+  and current constructor args, and requires the exact minimal callback surface (`afterInitialize`, `afterSwap`,
+  `afterSwapReturnDelta` only) plus exact PoolManager binding: owner, no pending owner transfer, stable decimals mode,
+  current `minCountedSwapUsd6`, regime fees, HookFee percent, timing params, controller params, and no pending
+  HookFee / min-counted-swap changes.
 - monitor `PeriodClosed` and alert on repeated abnormal regime escalations.
 - monitor admin/security events as a minimum set:
   `RegimeFeesUpdated`, `ControllerParamsUpdated`, `TimingParamsUpdated`, `Paused`, `Unpaused`,

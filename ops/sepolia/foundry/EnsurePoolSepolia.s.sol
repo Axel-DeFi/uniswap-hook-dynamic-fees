@@ -9,6 +9,7 @@ import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {LPFeeLibrary} from "@uniswap/v4-core/src/libraries/LPFeeLibrary.sol";
 
+import {CanonicalHookResolverLib} from "../../shared/lib/CanonicalHookResolverLib.sol";
 import {ConfigLoader} from "../../shared/lib/ConfigLoader.sol";
 import {BudgetLib} from "../../shared/lib/BudgetLib.sol";
 import {PoolStateLib} from "../../shared/lib/PoolStateLib.sol";
@@ -20,7 +21,7 @@ contract EnsurePoolSepolia is Script {
         LoggingLib.phase("sepolia.ensure-pool");
 
         OpsTypes.CoreConfig memory cfg = ConfigLoader.loadCoreConfig();
-        require(cfg.hookAddress != address(0) && cfg.hookAddress.code.length > 0, "HOOK_ADDRESS missing");
+        (cfg,) = CanonicalHookResolverLib.requireExistingCanonicalHook(cfg);
 
         OpsTypes.PoolSnapshot memory snapshot = PoolStateLib.snapshotHook(cfg.hookAddress);
         if (snapshot.initialized) {
