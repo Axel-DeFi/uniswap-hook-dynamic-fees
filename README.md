@@ -57,6 +57,7 @@ See `LICENSE` for full terms.
   - `emergencyResetToCash()`
 - Timing guardrail: `lullResetSeconds` must be strictly greater than `periodSeconds`.
 - Hold semantics: configured `cashHoldPeriods = N` gives `N - 1` fully protected periods (`N = 1` means zero effective hold protection).
+- Automatic emergency floor evaluation has priority over hold protection and can reset to `FLOOR` even when `holdRemaining > 0`.
 - Controller parameter cross-checks are enforced:
   - `minCloseVolToCashUsd6 <= minCloseVolToExtremeUsd6`
   - `upRToCashBps <= upRToExtremeBps`
@@ -74,9 +75,9 @@ See `LICENSE` for full terms.
 
 ## Documentation
 
+- Documentation hierarchy: contract NatSpec is authoritative, `docs/SPEC.md` is the normative mirror, and README/FAQ/runbooks are operational guidance.
 - Specification: `docs/SPEC.md`
 - FAQ: `docs/FAQ.md`
-- Source-of-truth policy: `SOURCE_OF_TRUTH.md`
 - Release process: `docs/RELEASE.md`
 - Ops and deployment flow: `ops/README.md`
 - Auxiliary scripts: `scripts/README.md`

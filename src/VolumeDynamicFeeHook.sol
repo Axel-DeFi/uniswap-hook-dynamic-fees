@@ -13,8 +13,9 @@ import {Hooks} from "@uniswap/v4-core/src/libraries/Hooks.sol";
 import {LPFeeLibrary} from "@uniswap/v4-core/src/libraries/LPFeeLibrary.sol";
 
 /// @title VolumeDynamicFeeHook
-/// @notice Single-pool Uniswap v4 hook that manages dynamic LP fees and applies an extra trader HookFee in `afterSwap`.
-/// @dev This contract binds to exactly one pool key. NatSpec in this file is the source of truth for operations docs.
+/// @notice Single-pool Uniswap v4 hook that manages dynamic LP fees.
+/// @notice Source code, documentation, and audit reports live at https://github.com/Axel-DeFi/uniswap-hook-dynamic-fees.
+/// @dev NatSpec in this file is the source of truth for operations docs.
 contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
     using BalanceDeltaLibrary for BalanceDelta;
 
@@ -1554,6 +1555,11 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
         return current < maxValue ? current + 1 : maxValue;
     }
 
+    /// @notice Computes the next LP-fee regime and transition counters for a closed period.
+    /// @dev Hold is decremented at period-close start, so configured hold `N` yields `N - 1` fully protected periods.
+    /// @dev The automatic emergency floor trigger is evaluated before hold protection and can reset to `FLOOR`
+    /// @dev even when `holdRemaining > 0` once `emergencyConfirmPeriods` consecutive closes stay below
+    /// @dev `emergencyFloorCloseVolUsd6`.
     function _computeNextRegimeV2(
         uint8 feeIdx,
         uint64 closeVol,

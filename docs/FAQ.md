@@ -2,8 +2,7 @@
 
 ## Where is the authoritative behavior definition?
 
-See `SOURCE_OF_TRUTH.md` for hierarchy.
-Short form: contract NatSpec in `src/VolumeDynamicFeeHook.sol` is primary, `docs/SPEC.md` is normative operational mirror, README/runbooks are operational guidance.
+Short form: contract NatSpec in `src/VolumeDynamicFeeHook.sol` is primary, `docs/SPEC.md` is the normative operational mirror, and README/runbooks are operational guidance.
 Legacy concept PDFs are archival and non-normative for this repository behavior.
 
 ## Can I change parameters without redeploy?
@@ -60,6 +59,13 @@ Configured hold `N` gives `N - 1` fully protected periods.
 `cashHoldPeriods = 1` means zero effective extra hold protection.
 Production guidance is `cashHoldPeriods >= 2` and `extremeHoldPeriods >= 2` (recommended `3..4`).
 Non-local deploy/preflight guardrails block weak hold configs by default unless `ALLOW_WEAK_HOLD_PERIODS=true` is explicitly set.
+
+## Can the automatic emergency floor trigger bypass hold protection?
+
+Yes.
+The automatic emergency floor trigger is evaluated before hold protection checks during normal unpaused runtime operation.
+If consecutive closed periods stay below `emergencyFloorCloseVolUsd6` long enough to satisfy `emergencyConfirmPeriods`,
+the controller resets to `FLOOR` even when `holdRemaining > 0`.
 
 ## Can one swap close multiple overdue periods?
 

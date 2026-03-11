@@ -1,7 +1,7 @@
 # VolumeDynamicFeeHook Specification
 
-This document follows contract NatSpec in `src/VolumeDynamicFeeHook.sol` and is the operational source for behavior.
-Repository-wide hierarchy is defined in `SOURCE_OF_TRUTH.md`.
+This document follows contract NatSpec in `src/VolumeDynamicFeeHook.sol` and is the normative operational mirror for behavior.
+If there is any mismatch, contract NatSpec takes precedence over this document, and this document takes precedence over README/FAQ/runbooks.
 
 ## Scope
 
@@ -104,6 +104,9 @@ Events:
 - Hold counter is decremented at the start of each closed period, before hold protection checks.
 - Configured hold `N` therefore provides `N - 1` fully protected periods.
 - `cashHoldPeriods = 1` provides zero effective extra hold protection.
+- Automatic emergency floor evaluation has priority over hold protection.
+- If `closeVol < emergencyFloorCloseVolUsd6` for `emergencyConfirmPeriods` consecutive closes, the controller resets
+  to `FLOOR` even when `holdRemaining > 0`.
 - This behavior is intentional in the current design and is regression-tested.
 
 ## Controller parameter consistency
