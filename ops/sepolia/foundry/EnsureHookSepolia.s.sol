@@ -72,9 +72,23 @@ contract EnsureHookSepolia is Script {
         address hookFeeRecipient = vm.envOr("HOOK_FEE_ADDRESS", owner);
         require(hookFeeRecipient != address(0), "HOOK_FEE_ADDRESS invalid");
         uint16 deadbandBps = uint16(vm.envUint("DEADBAND_BPS"));
+        uint64 minCloseVolToCashUsd6 = uint64(vm.envUint("MIN_CLOSEVOL_TO_CASH_USD6"));
+        uint8 cashHoldPeriods = uint8(vm.envUint("CASH_HOLD_PERIODS"));
+        uint64 minCloseVolToExtremeUsd6 = uint64(vm.envUint("MIN_CLOSEVOL_TO_EXTREME_USD6"));
+        uint8 extremeHoldPeriods = uint8(vm.envUint("EXTREME_HOLD_PERIODS"));
         uint16 downRFromExtremeBps = uint16(vm.envUint("DOWN_R_FROM_EXTREME_BPS"));
         uint16 downRFromCashBps = uint16(vm.envUint("DOWN_R_FROM_CASH_BPS"));
+        uint64 emergencyFloorCloseVolUsd6 = uint64(vm.envUint("EMERGENCY_FLOOR_CLOSEVOL_USD6"));
+        bool allowWeakHoldPeriods = vm.envOr("ALLOW_WEAK_HOLD_PERIODS", false);
+        require(
+            emergencyFloorCloseVolUsd6 > 0 && emergencyFloorCloseVolUsd6 < minCloseVolToCashUsd6,
+            "invalid emergency floor threshold"
+        );
         require(deadbandBps < downRFromExtremeBps && deadbandBps < downRFromCashBps, "invalid deadband thresholds");
+        require(
+            allowWeakHoldPeriods || (cashHoldPeriods >= 2 && extremeHoldPeriods >= 2),
+            "weak hold periods blocked (set ALLOW_WEAK_HOLD_PERIODS=true to override)"
+        );
 
         bytes memory constructorArgs = abi.encode(
             IPoolManager(cfg.poolManager),
@@ -93,18 +107,18 @@ contract EnsureHookSepolia is Script {
             owner,
             hookFeeRecipient,
             hookFeePercent,
-            uint64(vm.envUint("MIN_CLOSEVOL_TO_CASH_USD6")),
+            minCloseVolToCashUsd6,
             uint16(vm.envUint("UP_R_TO_CASH_BPS")),
-            uint8(vm.envUint("CASH_HOLD_PERIODS")),
-            uint64(vm.envUint("MIN_CLOSEVOL_TO_EXTREME_USD6")),
+            cashHoldPeriods,
+            minCloseVolToExtremeUsd6,
             uint16(vm.envUint("UP_R_TO_EXTREME_BPS")),
             uint8(vm.envUint("UP_EXTREME_CONFIRM_PERIODS")),
-            uint8(vm.envUint("EXTREME_HOLD_PERIODS")),
+            extremeHoldPeriods,
             downRFromExtremeBps,
             uint8(vm.envUint("DOWN_EXTREME_CONFIRM_PERIODS")),
             downRFromCashBps,
             uint8(vm.envUint("DOWN_CASH_CONFIRM_PERIODS")),
-            uint64(vm.envUint("EMERGENCY_FLOOR_CLOSEVOL_USD6")),
+            emergencyFloorCloseVolUsd6,
             uint8(vm.envUint("EMERGENCY_CONFIRM_PERIODS"))
         );
 

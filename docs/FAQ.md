@@ -2,7 +2,9 @@
 
 ## Where is the authoritative behavior definition?
 
-Contract NatSpec in `src/VolumeDynamicFeeHook.sol` is primary. `docs/SPEC.md` mirrors it for operations.
+See `SOURCE_OF_TRUTH.md` for hierarchy.
+Short form: contract NatSpec in `src/VolumeDynamicFeeHook.sol` is primary, `docs/SPEC.md` is normative operational mirror, README/runbooks are operational guidance.
+Legacy concept PDFs are archival and non-normative for this repository behavior.
 
 ## Can I change parameters without redeploy?
 
@@ -12,6 +14,17 @@ Yes, Owner can update runtime config onchain:
 - `setTimingParams(...)` (paused only)
 - `setHookFeeRecipient(...)`
 - HookFee timelock flow (`schedule/cancel/execute`)
+
+## What exactly happens on `setTimingParams(...)`?
+
+Two explicit paths:
+- Time-scale change (`periodSeconds` or `emaPeriods`) does a safe reset: FLOOR regime, EMA reset, counters reset, fresh open period, immediate LP-fee sync if tier changed.
+- Non-time-scale change (only `lullResetSeconds` / `deadbandBps`) preserves regime + EMA + counters and only restarts open period.
+
+## What exactly happens on `setControllerParams(...)`?
+
+While paused, it preserves active regime and EMA, clears hold/streak counters, and starts a fresh open period.
+This avoids stale counter carry-over after config updates.
 
 ## Is HookFee the same as LP fee?
 
@@ -46,6 +59,8 @@ The active LP fee regime stays frozen until `unpause()` or explicit paused-mode 
 Hold counter is decremented at the start of each closed period.
 Configured hold `N` gives `N - 1` fully protected periods.
 `cashHoldPeriods = 1` means zero effective extra hold protection.
+Production guidance is `cashHoldPeriods >= 2` and `extremeHoldPeriods >= 2` (recommended `3..4`).
+Non-local deploy/preflight guardrails block weak hold configs by default unless `ALLOW_WEAK_HOLD_PERIODS=true` is explicitly set.
 
 ## Can one swap close multiple overdue periods?
 
@@ -131,3 +146,4 @@ To avoid accidental ETH transfers into hook accounting. ETH movement is explicit
 ## Can emergency floor threshold be zero?
 
 No. `emergencyFloorCloseVolUsd6` must be strictly greater than zero in constructor and paused config updates.
+It must also stay strictly below `minCloseVolToCashUsd6`.

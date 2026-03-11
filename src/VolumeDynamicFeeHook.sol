@@ -350,7 +350,7 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
     /// @param _downExtremeConfirmPeriods Confirmation periods for extreme->cash transition.
     /// @param _downRFromCashBps Ratio threshold for cash->floor transition.
     /// @param _downCashConfirmPeriods Confirmation periods for cash->floor transition.
-    /// @param _emergencyFloorCloseVolUsd6 Emergency floor trigger threshold (must be strictly greater than zero).
+    /// @param _emergencyFloorCloseVolUsd6 Emergency floor trigger threshold (`> 0` and strictly below `_minCloseVolToCashUsd6`).
     /// @param _emergencyConfirmPeriods Consecutive confirmations for emergency floor trigger.
     constructor(
         IPoolManager _poolManager,
@@ -864,6 +864,9 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
     }
 
     /// @notice Returns detailed packed state counters for debugging and monitoring.
+    /// @dev `downStreak` is context-dependent and must be interpreted together with current `feeIdx`:
+    /// when `feeIdx==REGIME_CASH` it tracks cash->floor confirmations, and when `feeIdx==REGIME_EXTREME` it tracks
+    /// extreme->cash confirmations.
     function getStateDebug()
         external
         view
@@ -1040,7 +1043,10 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
     /// @notice Updates controller transition parameters while paused.
     /// @dev Hold counters are decremented at the start of each closed period, so configured hold `N` yields `N - 1`
     /// fully protected periods (`N = 1` means zero extra hold protection).
+    /// @dev Preserves active regime id and EMA, clears hold/streak counters, and starts a fresh open period.
     function setControllerParams(ControllerParams calldata p) external onlyOwner whenPaused {
+        (, uint96 emaVolScaled, uint64 periodStart, uint8 feeIdx, bool paused_,,,,) = _unpackState(_state);
+
         _setControllerParamsInternal(p);
         emit ControllerParamsUpdated(
             p.minCloseVolToCashUsd6,
@@ -1057,20 +1063,72 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
             p.emergencyFloorCloseVolUsd6,
             p.emergencyConfirmPeriods
         );
+
+        if (periodStart == 0) return;
+
+        _state = _packState(0, emaVolScaled, _now64(), feeIdx, paused_, 0, 0, 0, 0);
     }
 
     /// @notice Updates timing and smoothing parameters while paused.
     /// @dev Requires `lullResetSeconds_ > periodSeconds_`; equality is rejected.
-    /// @dev Does not reset fee regime, EMA, or streak counters; only starts a fresh open period.
+    /// @dev Time-scale updates (`periodSeconds` or `emaPeriods`) perform a safe reset:
+    /// floor regime, zero EMA/counters, fresh open period, and immediate LP fee sync when active tier changes.
+    /// @dev Non-time-scale updates (only `lullResetSeconds` and/or `deadbandBps`) preserve regime and EMA/counters,
+    /// and only restart a fresh open period.
     function setTimingParams(
         uint32 periodSeconds_,
         uint8 emaPeriods_,
         uint32 lullResetSeconds_,
         uint16 deadbandBps_
     ) external onlyOwner whenPaused {
+        (
+            ,
+            uint96 emaVolScaled,
+            uint64 periodStart,
+            uint8 feeIdx,
+            bool paused_,
+            uint8 holdRemaining,
+            uint8 upExtremeStreak,
+            uint8 downStreak,
+            uint8 emergencyStreak
+        ) = _unpackState(_state);
+
+        bool timeScaleChanged = periodSeconds_ != _config.periodSeconds || emaPeriods_ != _config.emaPeriods;
+        uint24 oldActiveFee = _regimeFee(feeIdx);
+
         _setTimingParamsInternal(periodSeconds_, emaPeriods_, lullResetSeconds_, deadbandBps_);
         emit TimingParamsUpdated(periodSeconds_, emaPeriods_, lullResetSeconds_, deadbandBps_);
-        _resetOpenPeriodOnly();
+
+        if (periodStart == 0) return;
+
+        if (timeScaleChanged) {
+            feeIdx = REGIME_FLOOR;
+            emaVolScaled = 0;
+            holdRemaining = 0;
+            upExtremeStreak = 0;
+            downStreak = 0;
+            emergencyStreak = 0;
+        }
+
+        _state = _packState(
+            0,
+            emaVolScaled,
+            _now64(),
+            feeIdx,
+            paused_,
+            holdRemaining,
+            upExtremeStreak,
+            downStreak,
+            emergencyStreak
+        );
+
+        if (timeScaleChanged) {
+            uint24 newActiveFee = _regimeFee(feeIdx);
+            if (newActiveFee != oldActiveFee) {
+                poolManager.updateDynamicLPFee(_poolKey(), newActiveFee);
+                emit FeeUpdated(newActiveFee, feeIdx, 0, emaVolScaled);
+            }
+        }
     }
 
     /// @notice Enters paused freeze mode.
@@ -1294,6 +1352,7 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
         // Emergency floor threshold at zero would force permanent trigger semantics.
         if (p.emergencyFloorCloseVolUsd6 == 0) revert InvalidConfig();
         // Cross-parameter consistency guards.
+        if (p.emergencyFloorCloseVolUsd6 >= p.minCloseVolToCashUsd6) revert InvalidConfig();
         if (p.minCloseVolToCashUsd6 > p.minCloseVolToExtremeUsd6) revert InvalidConfig();
         if (p.upRToCashBps > p.upRToExtremeBps) revert InvalidConfig();
         if (p.downRFromCashBps < p.downRFromExtremeBps) revert InvalidConfig();

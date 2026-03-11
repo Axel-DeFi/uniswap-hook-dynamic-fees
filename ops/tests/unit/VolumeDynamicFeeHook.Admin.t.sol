@@ -191,6 +191,18 @@ contract VolumeDynamicFeeHookAdminTest is Test, VolumeDynamicFeeHookV2DeployHelp
         assertGt(holdRemaining, 0, "precondition: cash hold must be active");
     }
 
+    function _moveToCashWithPendingUpExtremeStreak() internal {
+        _moveToCashRegimeWithHold();
+
+        _swap(true, -1, -10_000_000_000, 9_000_000_000);
+        vm.warp(block.timestamp + PERIOD_SECONDS);
+        _swap(true, -1, 0, 0);
+
+        (uint8 feeIdx,, uint8 upExtremeStreak,,,,,,) = hook.getStateDebug();
+        assertEq(feeIdx, hook.REGIME_CASH(), "precondition: active tier must stay cash");
+        assertEq(upExtremeStreak, 1, "precondition: one pending up streak expected");
+    }
+
     function _defaultControllerParams()
         internal
         pure
@@ -378,6 +390,166 @@ contract VolumeDynamicFeeHookAdminTest is Test, VolumeDynamicFeeHookV2DeployHelp
         hook.setTimingParams(PERIOD_SECONDS, EMA_PERIODS, LULL_RESET_SECONDS, V2_DOWN_R_FROM_EXTREME_BPS);
     }
 
+    function test_setTimingParams_deadband_only_keeps_regime_ema_and_counters() public {
+        _moveToCashWithPendingUpExtremeStreak();
+        hook.pause();
+
+        (
+            uint8 feeIdxBefore,
+            uint8 holdBefore,
+            uint8 upBefore,
+            uint8 downBefore,
+            uint8 emergencyBefore,
+            uint64 periodStartBefore,,
+            uint96 emaBefore,
+        ) = hook.getStateDebug();
+        uint256 updatesBefore = manager.updateCount();
+
+        uint16 newDeadband = DEADBAND_BPS - 100;
+        hook.setTimingParams(PERIOD_SECONDS, EMA_PERIODS, LULL_RESET_SECONDS, newDeadband);
+
+        (
+            uint8 feeIdxAfter,
+            uint8 holdAfter,
+            uint8 upAfter,
+            uint8 downAfter,
+            uint8 emergencyAfter,
+            uint64 periodStartAfter,
+            uint64 periodVolAfter,
+            uint96 emaAfter,
+        ) = hook.getStateDebug();
+
+        assertEq(feeIdxAfter, feeIdxBefore);
+        assertEq(holdAfter, holdBefore);
+        assertEq(upAfter, upBefore);
+        assertEq(downAfter, downBefore);
+        assertEq(emergencyAfter, emergencyBefore);
+        assertEq(emaAfter, emaBefore);
+        assertEq(periodVolAfter, 0);
+        assertGe(periodStartAfter, periodStartBefore);
+        assertEq(manager.updateCount(), updatesBefore, "no immediate LP fee update expected");
+        assertEq(hook.deadbandBps(), newDeadband);
+    }
+
+    function test_setTimingParams_lull_only_keeps_regime_ema_and_counters() public {
+        _moveToCashWithPendingUpExtremeStreak();
+        hook.pause();
+
+        (
+            uint8 feeIdxBefore,
+            uint8 holdBefore,
+            uint8 upBefore,
+            uint8 downBefore,
+            uint8 emergencyBefore,
+            uint64 periodStartBefore,,
+            uint96 emaBefore,
+        ) = hook.getStateDebug();
+        uint256 updatesBefore = manager.updateCount();
+
+        uint32 newLullReset = LULL_RESET_SECONDS + PERIOD_SECONDS;
+        hook.setTimingParams(PERIOD_SECONDS, EMA_PERIODS, newLullReset, DEADBAND_BPS);
+
+        (
+            uint8 feeIdxAfter,
+            uint8 holdAfter,
+            uint8 upAfter,
+            uint8 downAfter,
+            uint8 emergencyAfter,
+            uint64 periodStartAfter,
+            uint64 periodVolAfter,
+            uint96 emaAfter,
+        ) = hook.getStateDebug();
+
+        assertEq(feeIdxAfter, feeIdxBefore);
+        assertEq(holdAfter, holdBefore);
+        assertEq(upAfter, upBefore);
+        assertEq(downAfter, downBefore);
+        assertEq(emergencyAfter, emergencyBefore);
+        assertEq(emaAfter, emaBefore);
+        assertEq(periodVolAfter, 0);
+        assertGe(periodStartAfter, periodStartBefore);
+        assertEq(manager.updateCount(), updatesBefore, "no immediate LP fee update expected");
+        assertEq(hook.lullResetSeconds(), newLullReset);
+    }
+
+    function test_setTimingParams_period_change_resets_to_floor_and_clears_state() public {
+        _moveToCashWithPendingUpExtremeStreak();
+        hook.pause();
+
+        (uint8 feeIdxBefore,,,,, uint64 periodStartBefore,, uint96 emaBefore,) = hook.getStateDebug();
+        assertEq(feeIdxBefore, hook.REGIME_CASH(), "precondition: must be in cash before reset");
+        assertGt(emaBefore, 0, "precondition: EMA must be seeded");
+
+        uint256 updatesBefore = manager.updateCount();
+        uint32 newPeriod = PERIOD_SECONDS + 15;
+        uint32 newLullReset = newPeriod + 30;
+        hook.setTimingParams(newPeriod, EMA_PERIODS, newLullReset, DEADBAND_BPS);
+
+        (
+            uint8 feeIdxAfter,
+            uint8 holdAfter,
+            uint8 upAfter,
+            uint8 downAfter,
+            uint8 emergencyAfter,
+            uint64 periodStartAfter,
+            uint64 periodVolAfter,
+            uint96 emaAfter,
+            bool pausedAfter
+        ) = hook.getStateDebug();
+
+        assertEq(feeIdxAfter, hook.REGIME_FLOOR());
+        assertEq(holdAfter, 0);
+        assertEq(upAfter, 0);
+        assertEq(downAfter, 0);
+        assertEq(emergencyAfter, 0);
+        assertEq(periodVolAfter, 0);
+        assertEq(emaAfter, 0);
+        assertGe(periodStartAfter, periodStartBefore);
+        assertTrue(pausedAfter, "pause flag must remain set");
+        assertEq(manager.updateCount(), updatesBefore + 1, "fee update expected when active tier changes");
+        assertEq(manager.lastFee(), hook.floorFee(), "active LP fee must switch to floor");
+        assertEq(hook.periodSeconds(), newPeriod);
+        assertEq(hook.lullResetSeconds(), newLullReset);
+    }
+
+    function test_setTimingParams_emaPeriods_change_resets_to_floor_and_clears_state() public {
+        _moveToCashWithPendingUpExtremeStreak();
+        hook.pause();
+
+        (uint8 feeIdxBefore,,,,,,,,) = hook.getStateDebug();
+        assertEq(feeIdxBefore, hook.REGIME_CASH(), "precondition: must be in cash before reset");
+
+        uint256 updatesBefore = manager.updateCount();
+        uint8 newEmaPeriods = EMA_PERIODS + 1;
+        hook.setTimingParams(PERIOD_SECONDS, newEmaPeriods, LULL_RESET_SECONDS, DEADBAND_BPS);
+
+        (
+            uint8 feeIdxAfter,
+            uint8 holdAfter,
+            uint8 upAfter,
+            uint8 downAfter,
+            uint8 emergencyAfter,,
+            uint64 periodVolAfter,
+            uint96 emaAfter,
+            bool pausedAfter
+        ) = hook.getStateDebug();
+
+        assertEq(feeIdxAfter, hook.REGIME_FLOOR());
+        assertEq(holdAfter, 0);
+        assertEq(upAfter, 0);
+        assertEq(downAfter, 0);
+        assertEq(emergencyAfter, 0);
+        assertEq(periodVolAfter, 0);
+        assertEq(emaAfter, 0);
+        assertTrue(pausedAfter, "pause flag must remain set");
+        assertEq(manager.updateCount(), updatesBefore + 1, "fee update expected when active tier changes");
+        assertEq(manager.lastFee(), hook.floorFee(), "active LP fee must switch to floor");
+        assertEq(hook.emaPeriods(), newEmaPeriods);
+
+        hook.unpause();
+        assertFalse(hook.isPaused(), "unpause should still work after timing reset");
+    }
+
     function test_setControllerParams_reverts_when_cash_volume_threshold_exceeds_extreme_threshold() public {
         hook.pause();
 
@@ -438,6 +610,142 @@ contract VolumeDynamicFeeHookAdminTest is Test, VolumeDynamicFeeHookV2DeployHelp
 
         vm.expectRevert(VolumeDynamicFeeHook.InvalidConfig.selector);
         hook.setControllerParams(p);
+    }
+
+    function test_setControllerParams_reverts_when_emergency_floor_not_below_cash_threshold() public {
+        hook.pause();
+
+        VolumeDynamicFeeHook.ControllerParams memory p = _defaultControllerParams();
+        p.emergencyFloorCloseVolUsd6 = p.minCloseVolToCashUsd6;
+
+        vm.expectRevert(VolumeDynamicFeeHook.InvalidConfig.selector);
+        hook.setControllerParams(p);
+    }
+
+    function test_setControllerParams_accepts_when_emergency_floor_is_strictly_below_cash_threshold() public {
+        hook.pause();
+
+        VolumeDynamicFeeHook.ControllerParams memory p = _defaultControllerParams();
+        p.emergencyFloorCloseVolUsd6 = p.minCloseVolToCashUsd6 - 1;
+
+        hook.setControllerParams(p);
+        assertEq(hook.emergencyFloorCloseVolUsd6(), p.emergencyFloorCloseVolUsd6);
+    }
+
+    function test_setControllerParams_preserves_regime_and_ema_but_clears_counters() public {
+        _moveToCashWithPendingUpExtremeStreak();
+        hook.pause();
+
+        (
+            uint8 feeIdxBefore,
+            uint8 holdBefore,
+            uint8 upBefore,
+            uint8 downBefore,
+            uint8 emergencyBefore,
+            uint64 periodStartBefore,,
+            uint96 emaBefore,
+        ) = hook.getStateDebug();
+        assertEq(feeIdxBefore, hook.REGIME_CASH());
+        assertGt(holdBefore, 0, "precondition: hold must be active");
+        assertGt(upBefore, 0, "precondition: up streak must be active");
+
+        VolumeDynamicFeeHook.ControllerParams memory p = _defaultControllerParams();
+        p.minCloseVolToCashUsd6 = p.minCloseVolToCashUsd6 + 1;
+        p.minCloseVolToExtremeUsd6 = p.minCloseVolToExtremeUsd6 + 1;
+        hook.setControllerParams(p);
+
+        (
+            uint8 feeIdxAfter,
+            uint8 holdAfter,
+            uint8 upAfter,
+            uint8 downAfter,
+            uint8 emergencyAfter,
+            uint64 periodStartAfter,
+            uint64 periodVolAfter,
+            uint96 emaAfter,
+            bool pausedAfter
+        ) = hook.getStateDebug();
+        downBefore;
+        emergencyBefore;
+        assertEq(feeIdxAfter, feeIdxBefore, "regime must be preserved");
+        assertEq(emaAfter, emaBefore, "EMA must be preserved");
+        assertEq(holdAfter, 0, "hold counter must reset");
+        assertEq(upAfter, 0, "up streak must reset");
+        assertEq(downAfter, 0, "down streak must reset");
+        assertEq(emergencyAfter, 0, "emergency streak must reset");
+        assertEq(periodVolAfter, 0, "fresh open period must start from zero volume");
+        assertGe(periodStartAfter, periodStartBefore, "open period start must restart");
+        assertTrue(pausedAfter, "pause flag must remain true");
+    }
+
+    function test_setControllerParams_clears_stale_up_streak_before_unpause() public {
+        _moveToCashWithPendingUpExtremeStreak();
+        hook.pause();
+
+        VolumeDynamicFeeHook.ControllerParams memory p = _defaultControllerParams();
+        p.minCloseVolToCashUsd6 = p.minCloseVolToCashUsd6 + 1;
+        p.minCloseVolToExtremeUsd6 = p.minCloseVolToExtremeUsd6 + 1;
+        hook.setControllerParams(p);
+        hook.unpause();
+
+        _swap(true, -1, -10_000_000_000, 9_000_000_000);
+        vm.warp(block.timestamp + PERIOD_SECONDS);
+        _swap(true, -1, 0, 0);
+
+        (uint8 feeIdxAfter,,,,,,,,) = hook.getStateDebug();
+        assertEq(
+            feeIdxAfter, hook.REGIME_CASH(), "stale up streak must not trigger immediate jump to extreme"
+        );
+    }
+
+    function testFuzz_setControllerParams_rejects_emergency_floor_not_below_cash_threshold(uint64 minCloseVolToCash)
+        public
+    {
+        hook.pause();
+
+        uint64 minCash = uint64(bound(minCloseVolToCash, 1, type(uint64).max));
+        VolumeDynamicFeeHook.ControllerParams memory p = _defaultControllerParams();
+        p.minCloseVolToCashUsd6 = minCash;
+        p.minCloseVolToExtremeUsd6 = minCash;
+        p.emergencyFloorCloseVolUsd6 = minCash;
+
+        vm.expectRevert(VolumeDynamicFeeHook.InvalidConfig.selector);
+        hook.setControllerParams(p);
+    }
+
+    function testFuzz_setTimingParams_time_scale_change_performs_safe_reset(uint32 periodSeed, uint8 emaSeed)
+        public
+    {
+        _moveToCashRegimeWithHold();
+        hook.pause();
+
+        uint32 newPeriod = uint32(bound(periodSeed, 1, 7200));
+        uint8 newEma = uint8(bound(emaSeed, 2, 64));
+        if (newPeriod == PERIOD_SECONDS && newEma == EMA_PERIODS) {
+            if (newEma < 64) newEma += 1;
+            else newPeriod += 1;
+        }
+        uint32 newLull = newPeriod + 1;
+
+        hook.setTimingParams(newPeriod, newEma, newLull, DEADBAND_BPS);
+
+        (
+            uint8 feeIdxAfter,
+            uint8 holdAfter,
+            uint8 upAfter,
+            uint8 downAfter,
+            uint8 emergencyAfter,,
+            uint64 periodVolAfter,
+            uint96 emaAfter,
+        ) = hook.getStateDebug();
+
+        assertEq(feeIdxAfter, hook.REGIME_FLOOR());
+        assertEq(holdAfter, 0);
+        assertEq(upAfter, 0);
+        assertEq(downAfter, 0);
+        assertEq(emergencyAfter, 0);
+        assertEq(periodVolAfter, 0);
+        assertEq(emaAfter, 0);
     }
 
     function test_cashHoldPeriods_one_results_in_zero_effective_hold_protection() public {

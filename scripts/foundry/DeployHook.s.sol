@@ -36,6 +36,7 @@ contract DeployHook is Script {
             ,
             address hookFeeRecipient,
             ,
+            uint64 minCloseVolToCashUsd6,
             ,
             ,
             ,
@@ -45,8 +46,7 @@ contract DeployHook is Script {
             ,
             ,
             ,
-            ,
-            ,
+            uint64 emergencyFloorCloseVolUsd6,
             ,
         ) = abi.decode(
             constructorArgs,
@@ -81,6 +81,10 @@ contract DeployHook is Script {
                 uint64,
                 uint8
             )
+        );
+        require(
+            emergencyFloorCloseVolUsd6 > 0 && emergencyFloorCloseVolUsd6 < minCloseVolToCashUsd6,
+            "DeployHook: invalid emergency floor relation"
         );
 
         // Hook must have flags encoded in its address.

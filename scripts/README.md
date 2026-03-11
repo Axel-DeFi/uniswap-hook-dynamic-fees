@@ -51,6 +51,27 @@ scripts/release/check.sh
 scripts/release/cut.sh --bump patch --push
 ```
 
+## Gas artifacts (local)
+
+Use this reproducible flow for audit gas evidence:
+
+```bash
+export NO_PROXY='127.0.0.1,localhost'
+export no_proxy='127.0.0.1,localhost'
+export HTTP_PROXY='http://127.0.0.1:9'
+export HTTPS_PROXY='http://127.0.0.1:9'
+export ALL_PROXY='http://127.0.0.1:9'
+
+ops/local/scripts/anvil-up.sh
+forge test --offline --gas-report --match-contract VolumeDynamicFeeHookAdminTest > ops/local/out/reports/gas.admin.report.txt
+forge script scripts/foundry/MeasureGasLocal.s.sol:MeasureGasLocal --rpc-url http://127.0.0.1:8545 --broadcast
+ops/local/scripts/anvil-down.sh
+```
+
+Primary artifacts:
+- `ops/local/out/reports/gas.admin.report.txt`
+- `scripts/out/broadcast/MeasureGasLocal.s.sol/31337/run-latest.json`
+
 ## Operational notes
 
 - `pause()`/`unpause()` are freeze/resume semantics (not swap stop, not HookFee stop).
@@ -65,7 +86,11 @@ scripts/release/cut.sh --bump patch --push
 - Zero-address recipient checks alone are insufficient in native-asset pools; if governance changes recipient later, native compatibility must still hold.
 - `approxLpFeesUsd6` is approximate analytics, not accounting output.
 - Pool key uses strict dynamic fee flag matching (`key.fee == LPFeeLibrary.DYNAMIC_FEE_FLAG`).
-- `emergencyFloorCloseVolUsd6` must be configured as strictly positive.
+- `emergencyFloorCloseVolUsd6` must satisfy `0 < emergencyFloorCloseVolUsd6 < minCloseVolToCashUsd6`.
+- Hold semantics are `N -> N - 1` effective protected periods; production guidance is
+  `CASH_HOLD_PERIODS >= 2` and `EXTREME_HOLD_PERIODS >= 2` (recommended `3..4`).
+- Non-local deploy/ensure/preflight guardrails block weak hold configs by default; explicit override:
+  `ALLOW_WEAK_HOLD_PERIODS=1`.
 - Production owner baseline: multisig + cold/hardware key custody; hot-wallet ownership is not acceptable.
 - Overdue catch-up can close multiple periods in one swap; only the first close uses accumulated close volume while later closes use zero close volume.
 - Multi-close downward sequences are accepted architectural/economic behavior in current scope and should be monitored.

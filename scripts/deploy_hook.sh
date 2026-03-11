@@ -208,9 +208,23 @@ if (( EMERGENCY_FLOOR_CLOSEVOL_USD6 == 0 )); then
   echo "ERROR: EMERGENCY_FLOOR_CLOSEVOL_USD6 must be > 0." >&2
   exit 1
 fi
+if (( EMERGENCY_FLOOR_CLOSEVOL_USD6 >= MIN_CLOSEVOL_TO_CASH_USD6 )); then
+  echo "ERROR: EMERGENCY_FLOOR_CLOSEVOL_USD6 must be strictly less than MIN_CLOSEVOL_TO_CASH_USD6." >&2
+  exit 1
+fi
 if (( DEADBAND_BPS >= DOWN_R_FROM_EXTREME_BPS || DEADBAND_BPS >= DOWN_R_FROM_CASH_BPS )); then
   echo "ERROR: DEADBAND_BPS must be strictly below both DOWN_R_FROM_EXTREME_BPS and DOWN_R_FROM_CASH_BPS." >&2
   exit 1
+fi
+if (( CASH_HOLD_PERIODS < 2 || EXTREME_HOLD_PERIODS < 2 )); then
+  if [[ "$CHAIN" == "local" ]]; then
+    echo "WARN: weak hold periods for local profile (CASH_HOLD_PERIODS=${CASH_HOLD_PERIODS}, EXTREME_HOLD_PERIODS=${EXTREME_HOLD_PERIODS})."
+  elif [[ "${ALLOW_WEAK_HOLD_PERIODS:-0}" == "1" ]]; then
+    echo "WARN: weak hold periods override enabled (ALLOW_WEAK_HOLD_PERIODS=1)."
+  else
+    echo "ERROR: weak hold periods are blocked for non-local deployment. Require CASH_HOLD_PERIODS>=2 and EXTREME_HOLD_PERIODS>=2, or set ALLOW_WEAK_HOLD_PERIODS=1 to override." >&2
+    exit 1
+  fi
 fi
 
 # Human-friendly percent input in config (10 means 10%).

@@ -55,7 +55,10 @@ All values are loaded from environment variables (defaults + scenario overlay + 
 
 Controller constraint notes:
 - `EMERGENCY_FLOOR_CLOSEVOL_USD6` must be strictly greater than zero.
+- `EMERGENCY_FLOOR_CLOSEVOL_USD6` must be strictly lower than `MIN_CLOSEVOL_TO_CASH_USD6`.
 - `DEADBAND_BPS` must be strictly lower than both `DOWN_R_FROM_EXTREME_BPS` and `DOWN_R_FROM_CASH_BPS`.
+- Hold semantics are `N -> N - 1` fully protected periods; production guidance is
+  `CASH_HOLD_PERIODS >= 2` and `EXTREME_HOLD_PERIODS >= 2` (recommended `3..4`).
 
 ## Budget safety keys
 
@@ -72,6 +75,7 @@ Controller constraint notes:
 
 - `OPS_BROADCAST` (`0|1`)
 - `OPS_FORCE_SIMULATION` (`0|1`)
+- `ALLOW_WEAK_HOLD_PERIODS` (`0|1`, default `0`; explicit override for non-local weak hold configs)
 - `SMOKE_SWAP_STABLE_RAW`
 - `FULL_SWAP_STABLE_RAW`
 - `FULL_SWAP_ITERATIONS`

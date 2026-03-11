@@ -56,7 +56,7 @@ contract PreflightSepolia is Script {
             } else {
                 address owner = vm.envOr("OWNER", cfg.deployer);
                 hookFeeRecipient = vm.envOr("HOOK_FEE_ADDRESS", owner);
-                payoutSender = address(this);
+                payoutSender = owner;
             }
 
             (bool nativeRecipientOk, string memory nativeRecipientReason) = NativeRecipientValidationLib.validateHookFeeRecipientForNativePool(
@@ -65,6 +65,46 @@ contract PreflightSepolia is Script {
             if (!nativeRecipientOk) {
                 hookValidation.ok = false;
                 hookValidation.reason = nativeRecipientReason;
+            }
+        }
+
+        if (hookValidation.ok) {
+            bool hookDeployed = cfg.hookAddress != address(0) && cfg.hookAddress.code.length > 0;
+
+            uint64 minCloseVolToCashUsd6;
+            uint64 emergencyFloorCloseVolUsd6;
+            uint8 cashHoldPeriods;
+            uint8 extremeHoldPeriods;
+
+            if (hookDeployed) {
+                VolumeDynamicFeeHook h = VolumeDynamicFeeHook(payable(cfg.hookAddress));
+                minCloseVolToCashUsd6 = h.minCloseVolToCashUsd6();
+                emergencyFloorCloseVolUsd6 = h.emergencyFloorCloseVolUsd6();
+                cashHoldPeriods = h.cashHoldPeriods();
+                extremeHoldPeriods = h.extremeHoldPeriods();
+            } else {
+                minCloseVolToCashUsd6 = uint64(vm.envOr("MIN_CLOSEVOL_TO_CASH_USD6", uint256(0)));
+                emergencyFloorCloseVolUsd6 = uint64(vm.envOr("EMERGENCY_FLOOR_CLOSEVOL_USD6", uint256(0)));
+                cashHoldPeriods = uint8(vm.envOr("CASH_HOLD_PERIODS", uint256(0)));
+                extremeHoldPeriods = uint8(vm.envOr("EXTREME_HOLD_PERIODS", uint256(0)));
+            }
+
+            if (
+                emergencyFloorCloseVolUsd6 == 0
+                    || emergencyFloorCloseVolUsd6 >= minCloseVolToCashUsd6
+            ) {
+                hookValidation.ok = false;
+                hookValidation.reason = "invalid emergency floor relation (require 0 < emergency < minCloseToCash)";
+            }
+
+            bool allowWeakHoldPeriods = vm.envOr("ALLOW_WEAK_HOLD_PERIODS", false);
+            if (
+                hookValidation.ok
+                    && (cashHoldPeriods < 2 || extremeHoldPeriods < 2)
+                    && !allowWeakHoldPeriods
+            ) {
+                hookValidation.ok = false;
+                hookValidation.reason = "weak hold periods blocked (set ALLOW_WEAK_HOLD_PERIODS=true to override)";
             }
         }
 

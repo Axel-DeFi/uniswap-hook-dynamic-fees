@@ -3,7 +3,18 @@
 ## v2.0.5 - 2026-03-11
 
 ### Release summary
-- Release notes captured in git history and audit bundle updates.
+- Fixed controller misconfiguration trap: `0 < emergencyFloorCloseVolUsd6 < minCloseVolToCashUsd6` is now enforced onchain in shared validation path.
+- Updated paused `setTimingParams(...)` semantics:
+  - time-scale updates (`periodSeconds` / `emaPeriods`) perform safe reset to FLOOR with EMA/counter reset and immediate LP-fee sync when tier changes;
+  - non-time-scale updates preserve regime + EMA + counters and only restart open period.
+- Updated paused `setControllerParams(...)` semantics:
+  - preserve active regime + EMA,
+  - clear hold/streak counters,
+  - restart fresh open period.
+- Added/updated tests for constructor/admin guards, timing reset split behavior, and stale-counter clearing after controller updates.
+- Added deploy/preflight guardrails and docs for weak hold configs in non-local runtime
+  (`ALLOW_WEAK_HOLD_PERIODS` explicit override).
+- Added explicit source-of-truth hierarchy document (`SOURCE_OF_TRUTH.md`) and aligned README/SPEC/FAQ/runbooks.
 
 
 ## v2.0.4 - 2026-03-11

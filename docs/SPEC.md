@@ -1,6 +1,7 @@
 # VolumeDynamicFeeHook Specification
 
 This document follows contract NatSpec in `src/VolumeDynamicFeeHook.sol` and is the operational source for behavior.
+Repository-wide hierarchy is defined in `SOURCE_OF_TRUTH.md`.
 
 ## Scope
 
@@ -86,6 +87,10 @@ Events:
 - `lullResetSeconds` must be strictly greater than `periodSeconds`.
 - Equality (`lullResetSeconds == periodSeconds`) is rejected.
 - Upper bound remains `lullResetSeconds <= periodSeconds * MAX_LULL_PERIODS`.
+- `setTimingParams(...)` semantics are explicit:
+  - if `periodSeconds` or `emaPeriods` changes, this is a time-scale change and triggers a safe reset:
+    FLOOR regime, EMA reset, hold/streak counters reset, fresh open period, immediate LP-fee sync when active tier changes.
+  - if only `lullResetSeconds` and/or `deadbandBps` changes, regime + EMA + counters are preserved and only a fresh open period is started.
 
 ## Overdue catch-up semantics (accepted behavior)
 
@@ -111,9 +116,14 @@ Controller params are validated with cross-invariants:
 - `downRFromCashBps >= downRFromExtremeBps`
 - `deadbandBps < downRFromExtremeBps`
 - `deadbandBps < downRFromCashBps`
-- `emergencyFloorCloseVolUsd6 > 0`
+- `0 < emergencyFloorCloseVolUsd6 < minCloseVolToCashUsd6`
 
 Invalid combinations revert with `InvalidConfig`.
+
+Paused maintenance behavior:
+- `setControllerParams(...)` preserves active regime id and EMA.
+- It always clears hold/streak counters (`holdRemaining`, `upExtremeStreak`, `downStreak`, `emergencyStreak`).
+- It always starts a fresh open period (`periodVol = 0`, refreshed `periodStart`).
 
 ## Pause and emergency semantics
 
@@ -268,6 +278,10 @@ All admin state transitions emit events, including:
 - emergency resets,
 - controller/regime/timing updates.
 
+Monitoring interpretation note:
+- `downStreak` is context-dependent and must be interpreted together with current `feeIdx`.
+- In CASH it tracks cash->floor confirmations; in EXTREME it tracks extreme->cash confirmations.
+
 ## Accepted risks in current scope
 
 - `setHookFeeRecipient(...)` remains immediate (no timelock), accepted as owner governance/key risk.
@@ -281,10 +295,15 @@ All admin state transitions emit events, including:
 - hot-wallet owner usage is unacceptable for production.
 - owner key custody should use cold/hardware wallet standards.
 - monitor `PeriodClosed` and alert on repeated abnormal regime escalations.
-- monitor recipient-change events (`HookFeeRecipientUpdated`) as a mandatory operational control.
+- monitor admin/security events as a minimum set:
+  `HookFeeRecipientUpdated`, `RegimeFeesUpdated`, `ControllerParamsUpdated`, `TimingParamsUpdated`, `Paused`, `Unpaused`,
+  `EmergencyResetToFloorApplied`, `EmergencyResetToCashApplied`.
 - for native-asset pools, any governance update to `hookFeeRecipient` must preserve native payout compatibility.
 - EMA preservation across `setRegimeFees(...)` is intentional for paused maintenance updates.
-- for material controller reconfiguration, keep paused, apply maintenance updates, run explicit emergency reset-to-floor, then unpause.
+- production guidance for hold parameters:
+  `cashHoldPeriods >= 2`, `extremeHoldPeriods >= 2`, recommended `3..4`.
+- deploy/preflight guardrails block weak hold configs in non-local runtime by default; explicit override is
+  `ALLOW_WEAK_HOLD_PERIODS=true`.
 
 ## Hook key validation
 
@@ -303,8 +322,7 @@ Any non-exact dynamic-flag encoding is rejected (`NotDynamicFeePool`).
 - latest local observation artifacts:
   - `ops/local/out/reports/*.json`
   - `ops/local/out/reports/*.md`
-  - `audit/gas/*.json` (inside audit bundle package)
-  - `audit/gas/*.md` (inside audit bundle package)
+  - `audit_bundle/validation/gas/*.txt` (bundle workspace)
 
 ## Audit boundary
 

@@ -7,6 +7,18 @@ ops/local/scripts/anvil-up.sh
 ops/local/scripts/anvil-down.sh
 ```
 
+### Proxy-stable environment (Foundry on macOS)
+
+If Foundry panics on system proxy discovery, pin proxy vars before running scripts:
+
+```bash
+export NO_PROXY='127.0.0.1,localhost'
+export no_proxy='127.0.0.1,localhost'
+export HTTP_PROXY='http://127.0.0.1:9'
+export HTTPS_PROXY='http://127.0.0.1:9'
+export ALL_PROXY='http://127.0.0.1:9'
+```
+
 ## Bootstrap and checks
 
 ```bash
@@ -18,6 +30,17 @@ ops/local/scripts/full.sh
 ops/local/scripts/rerun-safe.sh
 ops/local/scripts/emergency.sh
 ```
+
+## Gas evidence reproduction
+
+```bash
+forge test --offline --gas-report --match-contract VolumeDynamicFeeHookAdminTest > ops/local/out/reports/gas.admin.report.txt
+forge script scripts/foundry/MeasureGasLocal.s.sol:MeasureGasLocal --rpc-url http://127.0.0.1:8545 --broadcast
+```
+
+Artifacts:
+- `ops/local/out/reports/gas.admin.report.txt`
+- `scripts/out/broadcast/MeasureGasLocal.s.sol/31337/run-latest.json`
 
 ## Admin operation model
 
@@ -55,6 +78,13 @@ Timelock visibility is intentional. The main exposed effect is HookFee timing; L
 - Do not disable swaps.
 - Do not disable HookFee accrual.
 
+### Paused maintenance updates
+
+- `setControllerParams(...)` preserves active regime + EMA, clears hold/streak counters, and starts a fresh open period.
+- `setTimingParams(...)` behavior depends on what changed:
+  - if `periodSeconds` or `emaPeriods` changed: safe reset to FLOOR, EMA/counters cleared, fresh open period, immediate LP-fee sync if needed.
+  - if only `lullResetSeconds` and/or `deadbandBps` changed: preserve regime + EMA + counters, fresh open period only.
+
 ### Emergency resets (paused-only)
 
 - `emergencyResetToFloor()`
@@ -91,9 +121,12 @@ Notes:
 
 Controller safety note:
 - `emergencyFloorCloseVolUsd6` must remain strictly greater than zero.
+- `emergencyFloorCloseVolUsd6` must remain strictly less than `minCloseVolToCashUsd6`.
+- Hold semantics are `N -> N - 1`; production guidance is `cashHoldPeriods >= 2`, `extremeHoldPeriods >= 2` (recommended `3..4`).
+- Non-local deploy/preflight paths block weak hold configs by default; explicit override: `ALLOW_WEAK_HOLD_PERIODS=1`.
 
 ## Monitoring minimums
 
 - Track `PeriodClosed` and alert on repeated abnormal regime escalations.
-- Track `HookFeeRecipientUpdated` and emergency-reset events.
+- Track admin/security events: `HookFeeRecipientUpdated`, `RegimeFeesUpdated`, `ControllerParamsUpdated`, `TimingParamsUpdated`, `Paused`, `Unpaused`, emergency-reset events.
 - Treat wash-trading and fee-poisoning as residual economic risks in adversarial routing environments.

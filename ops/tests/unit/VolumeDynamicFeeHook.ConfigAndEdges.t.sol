@@ -292,6 +292,14 @@ contract VolumeDynamicFeeHookConfigAndEdgesTest is Test, VolumeDynamicFeeHookV2D
         _deploy(cfg);
     }
 
+    function test_constructor_reverts_when_emergency_floor_threshold_is_not_below_cash_threshold() public {
+        DeployCfg memory cfg = _defaultCfg();
+        cfg.emergencyFloorCloseVolUsd6 = V2_MIN_CLOSEVOL_TO_CASH_USD6;
+
+        vm.expectRevert(VolumeDynamicFeeHook.InvalidConfig.selector);
+        _deploy(cfg);
+    }
+
     function test_constructor_accepts_positive_emergency_floor_threshold() public {
         DeployCfg memory cfg = _defaultCfg();
         cfg.emergencyFloorCloseVolUsd6 = 1;

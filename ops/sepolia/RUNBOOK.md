@@ -7,6 +7,18 @@ ops/sepolia/scripts/preflight.sh
 ops/sepolia/scripts/inspect.sh
 ```
 
+### Proxy-stable environment (Foundry on macOS)
+
+If Foundry panics on system proxy discovery, pin proxy vars before running scripts:
+
+```bash
+export NO_PROXY='127.0.0.1,localhost'
+export no_proxy='127.0.0.1,localhost'
+export HTTP_PROXY='http://127.0.0.1:9'
+export HTTPS_PROXY='http://127.0.0.1:9'
+export ALL_PROXY='http://127.0.0.1:9'
+```
+
 Stop if preflight fails.
 `smoke/full/rerun-safe/emergency` wrappers enforce this gate by default.
 
@@ -65,6 +77,9 @@ Timelock visibility is intentional. The main exposed effect is HookFee timing; L
 - `resetToCash` is default emergency path unless strict floor mode is required.
 - If reset target tier already equals current tier, state still resets and emits reset event, but no `FeeUpdated`.
 - Monitoring should consume reset events, not only fee update events.
+- Paused maintenance updates:
+  - `setControllerParams(...)` preserves regime + EMA, clears counters, and starts a fresh open period.
+  - `setTimingParams(...)` does a safe reset only for time-scale changes (`periodSeconds`/`emaPeriods`); otherwise it preserves regime + EMA + counters and restarts open period only.
 
 ## Telemetry controls
 
@@ -89,10 +104,12 @@ Timelock visibility is intentional. The main exposed effect is HookFee timing; L
 
 Controller safety note:
 - `emergencyFloorCloseVolUsd6` must remain strictly greater than zero.
+- `emergencyFloorCloseVolUsd6` must remain strictly less than `minCloseVolToCashUsd6`.
+- Hold semantics are `N -> N - 1`; production guidance is `cashHoldPeriods >= 2`, `extremeHoldPeriods >= 2` (recommended `3..4`).
+- Non-local deploy/preflight paths block weak hold configs by default; explicit override: `ALLOW_WEAK_HOLD_PERIODS=1`.
 
 ## Monitoring and response
 
 - Monitor `PeriodClosed` for repeated abnormal regime escalations.
-- Monitor `HookFeeRecipientUpdated` and emergency reset events.
+- Monitor admin/security events: `HookFeeRecipientUpdated`, `RegimeFeesUpdated`, `ControllerParamsUpdated`, `TimingParamsUpdated`, `Paused`, `Unpaused`, emergency reset events.
 - Treat wash-trading / fee-poisoning as residual economic manipulation risk, especially on low-cost networks.
-- For material controller/topology reconfiguration: keep paused, apply maintenance changes, execute explicit emergency reset-to-floor, then resume.

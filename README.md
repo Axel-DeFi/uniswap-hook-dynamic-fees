@@ -31,6 +31,10 @@ See `LICENSE` for full terms.
 - For native-asset pools (`token0 == address(0)` or `token1 == address(0)`), deploy/ensure/preflight flows validate that `hookFeeRecipient` can accept native payout from the hook claim path.
 - `pause()/unpause()` freeze/resume regulator transitions at the current LP fee regime (no automatic floor reset, no swap stop, no HookFee stop).
 - `setRegimeFees(...)` (paused-only) preserves EMA, resets hold/streak counters, starts a fresh open period, and updates current LP fee immediately if active regime fee changed.
+- `setControllerParams(...)` (paused-only) preserves active regime + EMA, clears hold/streak counters, and starts a fresh open period.
+- `setTimingParams(...)` (paused-only) has explicit split semantics:
+  - time-scale change (`periodSeconds` or `emaPeriods`) => safe reset to FLOOR, EMA/counters cleared, fresh open period, immediate LP-fee sync if tier changed.
+  - non-time-scale change (`lullResetSeconds` / `deadbandBps` only) => preserve regime + EMA/counters, fresh open period only.
 - Emergency resets are explicit and available only while paused:
   - `emergencyResetToFloor()`
   - `emergencyResetToCash()`
@@ -42,7 +46,7 @@ See `LICENSE` for full terms.
   - `downRFromCashBps >= downRFromExtremeBps`
   - `deadbandBps < downRFromExtremeBps`
   - `deadbandBps < downRFromCashBps`
-  - `emergencyFloorCloseVolUsd6 > 0`
+  - `0 < emergencyFloorCloseVolUsd6 < minCloseVolToCashUsd6`
 - Pool key validation requires exact dynamic-fee flag: `key.fee == LPFeeLibrary.DYNAMIC_FEE_FLAG`.
 - Telemetry fields are explicit:
   - counted volume threshold `minCountedSwapUsd6` (default `$4 / 4e6`, bounded to `1e6..10e6`)
@@ -55,6 +59,7 @@ See `LICENSE` for full terms.
 
 - Specification: `docs/SPEC.md`
 - FAQ: `docs/FAQ.md`
+- Source-of-truth policy: `SOURCE_OF_TRUTH.md`
 - Release process: `docs/RELEASE.md`
 - Scripts and deployment flow: `scripts/README.md`
 - Local ops runbook: `ops/local/RUNBOOK.md`
@@ -75,7 +80,7 @@ See `LICENSE` for full terms.
 - Hot-wallet owner usage is unacceptable for production.
 - Owner key material should be held in cold/hardware custody.
 - Zero-address recipient checks alone are insufficient for native-asset pools; recipient native-payout compatibility must be preserved if governance later updates `hookFeeRecipient`.
-- Monitor `PeriodClosed`, `HookFeeRecipientUpdated`, and emergency-reset events; alert on repeated abnormal regime escalations.
+- Monitor `PeriodClosed`, `HookFeeRecipientUpdated`, `RegimeFeesUpdated`, `ControllerParamsUpdated`, `TimingParamsUpdated`, `Paused`, `Unpaused`, and emergency-reset events; alert on repeated abnormal regime escalations.
 - Monitoring should treat repeated multi-close downward `PeriodClosed` sequences as notable routing/yield behavior.
 
 ## Build and test
@@ -89,6 +94,25 @@ forge test --offline --match-path 'ops/tests/invariant/*.sol' --match-contract V
 forge test --offline --match-path 'ops/tests/invariant/*.sol' --match-contract VolumeDynamicFeeHookInvariant_Stable0_Tick60
 forge test --offline --match-path 'ops/tests/invariant/*.sol' --match-contract VolumeDynamicFeeHookInvariant_Stable1_Tick60
 ```
+
+## Gas measurements (local)
+
+```bash
+export NO_PROXY='127.0.0.1,localhost'
+export no_proxy='127.0.0.1,localhost'
+export HTTP_PROXY='http://127.0.0.1:9'
+export HTTPS_PROXY='http://127.0.0.1:9'
+export ALL_PROXY='http://127.0.0.1:9'
+
+ops/local/scripts/anvil-up.sh
+forge test --offline --gas-report --match-contract VolumeDynamicFeeHookAdminTest > ops/local/out/reports/gas.admin.report.txt
+forge script scripts/foundry/MeasureGasLocal.s.sol:MeasureGasLocal --rpc-url http://127.0.0.1:8545 --broadcast
+ops/local/scripts/anvil-down.sh
+```
+
+Artifacts:
+- `ops/local/out/reports/gas.admin.report.txt`
+- `scripts/out/broadcast/MeasureGasLocal.s.sol/31337/run-latest.json`
 
 ## Release versioning
 
