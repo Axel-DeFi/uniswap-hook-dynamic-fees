@@ -16,14 +16,46 @@ Usage:
   ./scripts/hook_status.sh --chain <chain> [--rpc-url <url>] [--hook-address <addr>] [--state-view-address <addr>] [--refresh <int>] [--limit <int>]
 
 Options:
-  --chain <chain>               Chain config name (e.g. optimism, sepolia, arbitrum, local).
-  --rpc-url <url>               Override RPC URL from config.
-  --hook-address <addr>         Override hook address. If empty, reads deploy artifact.
+  --chain <chain>               Supported ops network: local, sepolia, optimism.
+  --rpc-url <url>               Override RPC URL from ops defaults.
+  --hook-address <addr>         Override hook address. If empty, reads ops state snapshot.
   --state-view-address <addr>   Optional StateView address. If empty, tries broadcast artifacts.
   --refresh <int>               Repeat status every N seconds (0 = one shot, default 0).
   --limit <int>                 Max rows in "Activity (Last Hour)" table (0 = auto, default 0).
   -h, --help                    Show help.
 EOF
+}
+
+ops_defaults_env_path() {
+  case "$1" in
+    local|sepolia|optimism) printf './ops/%s/config/defaults.env\n' "$1" ;;
+    *)
+      echo "ERROR: unsupported --chain '$1' (expected local, sepolia, or optimism)" >&2
+      return 1
+      ;;
+  esac
+}
+
+ops_state_path() {
+  printf './ops/%s/out/state/%s.addresses.json\n' "$1" "$1"
+}
+
+read_state_field() {
+  local path="$1"
+  local field="$2"
+  python3 - "${path}" "${field}" <<'PY'
+import json
+import sys
+
+path, field = sys.argv[1], sys.argv[2]
+with open(path, "r", encoding="utf-8") as f:
+    data = json.load(f)
+value = data.get(field, "")
+if isinstance(value, str):
+    print(value.strip())
+else:
+    print("")
+PY
 }
 
 first_token() { printf '%s\n' "${1:-}" | sed -n '1p' | awk '{print $1}'; }
@@ -189,38 +221,6 @@ try_cast_call() {
 try_get_code() {
   local addr="$1"
   rpc_get_code "${addr}"
-}
-
-find_hook_in_json() {
-  local path="$1"
-  python3 - "${path}" <<'PY'
-import json
-import sys
-path = sys.argv[1]
-with open(path, "r", encoding="utf-8") as f:
-    data = json.load(f)
-
-def find_addr(x):
-    if isinstance(x, str) and x.startswith("0x") and len(x) == 42:
-        return x
-    if isinstance(x, dict):
-        for k, v in x.items():
-            if k.lower() in ("hook", "hook_address", "hookaddress"):
-                if isinstance(v, str) and v.startswith("0x") and len(v) == 42:
-                    return v
-        for v in x.values():
-            r = find_addr(v)
-            if r:
-                return r
-    if isinstance(x, list):
-        for v in x:
-            r = find_addr(v)
-            if r:
-                return r
-    return ""
-
-print(find_addr(data))
-PY
 }
 
 find_state_view_in_json() {
@@ -1524,15 +1524,7 @@ if ! [[ "${ACTIVITY_ROWS_LIMIT}" =~ ^[0-9]+$ ]]; then
   exit 1
 fi
 
-if [[ -f "./.env" ]]; then
-  # shellcheck disable=SC1091
-  source "./.env"
-fi
-
-CFG="./config/hook.${CHAIN}.conf"
-if [[ "${CHAIN}" == "local" ]]; then
-  CFG="./config/hook.local.conf"
-fi
+CFG="$(ops_defaults_env_path "${CHAIN}")"
 if [[ ! -f "${CFG}" ]]; then
   echo "ERROR: config not found: ${CFG}" >&2
   exit 1
@@ -1541,7 +1533,32 @@ fi
 # shellcheck disable=SC1090
 set -a
 source "${CFG}"
+if [[ -f "./.env" ]]; then
+  # shellcheck disable=SC1091
+  source "./.env"
+fi
 set +a
+
+STATE_JSON="$(ops_state_path "${CHAIN}")"
+if [[ -f "${STATE_JSON}" ]]; then
+  state_hook="$(read_state_field "${STATE_JSON}" "hookAddress")"
+  state_pm="$(read_state_field "${STATE_JSON}" "poolManager")"
+  state_vol="$(read_state_field "${STATE_JSON}" "volatileToken")"
+  state_stable="$(read_state_field "${STATE_JSON}" "stableToken")"
+
+  if [[ -z "${HOOK_ADDRESS:-}" && -n "${state_hook}" && "${state_hook}" != "0x0000000000000000000000000000000000000000" ]]; then
+    HOOK_ADDRESS="${state_hook}"
+  fi
+  if [[ -z "${POOL_MANAGER:-}" && -n "${state_pm}" ]]; then
+    POOL_MANAGER="${state_pm}"
+  fi
+  if [[ -z "${VOLATILE:-}" && -n "${state_vol}" ]]; then
+    VOLATILE="${state_vol}"
+  fi
+  if [[ -z "${STABLE:-}" && -n "${state_stable}" ]]; then
+    STABLE="${state_stable}"
+  fi
+fi
 
 RPC_URL="${RPC_URL_CLI:-${RPC_URL:-}}"
 if [[ -z "${RPC_URL:-}" ]]; then
@@ -1551,16 +1568,7 @@ fi
 
 HOOK_ADDRESS="${HOOK_ADDRESS_CLI:-${HOOK_ADDRESS:-}}"
 if [[ -z "${HOOK_ADDRESS}" ]]; then
-  DEPLOY_JSON="./scripts/out/deploy.${CHAIN}.json"
-  if [[ "${CHAIN}" == "local" ]]; then
-    DEPLOY_JSON="./scripts/out/deploy.local.json"
-  fi
-  if [[ -f "${DEPLOY_JSON}" ]]; then
-    HOOK_ADDRESS="$(find_hook_in_json "${DEPLOY_JSON}")"
-  fi
-fi
-if [[ -z "${HOOK_ADDRESS}" ]]; then
-  echo "ERROR: HOOK_ADDRESS not provided and could not be read from deploy artifact" >&2
+  echo "ERROR: HOOK_ADDRESS not provided and could not be read from ops state" >&2
   exit 1
 fi
 
@@ -1605,7 +1613,8 @@ fi
 
 if [[ -z "${POOL_ACTIVITY_START_BLOCK}" && -n "${CHAIN_ID}" ]]; then
   cp_paths=(
-    "./scripts/out/broadcast/CreatePool.s.sol/${CHAIN_ID}/run-latest.json"
+    "./scripts/out/broadcast/EnsurePoolLocal.s.sol/${CHAIN_ID}/run-latest.json"
+    "./scripts/out/broadcast/EnsurePoolLive.s.sol/${CHAIN_ID}/run-latest.json"
     "./lib/v4-periphery/broadcast/CreatePool.s.sol/${CHAIN_ID}/run-latest.json"
   )
   for p in "${cp_paths[@]}"; do

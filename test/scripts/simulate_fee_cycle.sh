@@ -30,7 +30,7 @@ fi
 #
 # Notes:
 # - This script sends real transactions (broadcast only).
-# - Designed for local/sepolia/prod flows in this repository.
+# - Designed for the Sepolia ops rehearsal flow in this repository.
 
 CHAIN="sepolia"
 MODE="cases"
@@ -339,10 +339,7 @@ cast_rpc() {
 
 CLI_RPC_URL="${RPC_URL}"
 
-HOOK_CONF="./config/hook.conf"
-if [[ -n "${CHAIN}" && -f "./config/hook.${CHAIN}.conf" ]]; then
-  HOOK_CONF="./config/hook.${CHAIN}.conf"
-fi
+HOOK_CONF="./ops/sepolia/config/defaults.env"
 if [[ ! -f "${HOOK_CONF}" ]]; then
   echo "ERROR: missing ${HOOK_CONF}"
   exit 1
@@ -351,6 +348,10 @@ fi
 set -a
 # shellcheck disable=SC1090
 source "${HOOK_CONF}"
+if [[ -f "./.env" ]]; then
+  # shellcheck disable=SC1091
+  source "./.env"
+fi
 set +a
 
 # Resolve RPC URL: CLI > config RPC_URL
@@ -395,45 +396,22 @@ if [[ -z "${CHAIN_ID}" ]]; then
   exit 1
 fi
 
-if [[ -z "${HOOK_ADDRESS:-}" ]]; then
-  HOOK_DEPLOY_PATH="./scripts/out/deploy.${CHAIN}.json"
-  if [[ -f "${HOOK_DEPLOY_PATH}" ]]; then
-    HOOK_ADDRESS="$(python3 -S - "${HOOK_DEPLOY_PATH}" <<'PY'
+STATE_JSON="./ops/sepolia/out/state/sepolia.addresses.json"
+if [[ -z "${HOOK_ADDRESS:-}" && -f "${STATE_JSON}" ]]; then
+  HOOK_ADDRESS="$(python3 -S - "${STATE_JSON}" <<'PY'
 import json
 import sys
 path = sys.argv[1]
 with open(path, "r", encoding="utf-8") as f:
     data = json.load(f)
-hook = data.get("hook") or data.get("HOOK_ADDRESS") or ""
+hook = data.get("hookAddress") or ""
 print(str(hook).strip())
 PY
-    )"
-  fi
+  )"
 fi
 
 if [[ -z "${HOOK_ADDRESS:-}" ]]; then
-  HOOK_BROADCAST_PATH="./scripts/out/broadcast/DeployHook.s.sol/${CHAIN_ID}/run-latest.json"
-  if [[ -f "${HOOK_BROADCAST_PATH}" ]]; then
-    HOOK_ADDRESS="$(python3 -S - "${HOOK_BROADCAST_PATH}" <<'PY'
-import json
-import sys
-path = sys.argv[1]
-with open(path, "r", encoding="utf-8") as f:
-    data = json.load(f)
-for tx in data.get("transactions", []):
-    addr = (tx.get("contractAddress") or "").strip()
-    if addr:
-        print(addr)
-        break
-else:
-    print("")
-PY
-    )"
-  fi
-fi
-
-if [[ -z "${HOOK_ADDRESS:-}" ]]; then
-  echo "ERROR: HOOK_ADDRESS must be set in ${HOOK_CONF}, passed via --hook-address, or present in scripts/out deploy artifacts."
+  echo "ERROR: HOOK_ADDRESS must be set in ${HOOK_CONF}, passed via --hook-address, or present in ${STATE_JSON}."
   exit 1
 fi
 

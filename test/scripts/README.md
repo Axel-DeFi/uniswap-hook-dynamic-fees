@@ -13,7 +13,7 @@ Current long-run live traffic simulator:
 Default run profile:
 - chain is fixed to `sepolia` in this workflow.
 - broadcast is enabled by default.
-- hook address is read from `config/hook.sepolia.conf` (`HOOK_ADDRESS`) with optional override.
+- hook address is read from `ops/sepolia/config/defaults.env` with fallback to `ops/sepolia/out/state/sepolia.addresses.json`, plus optional CLI override.
 
 `cases` mode flow (high-level):
 - EMA bootstrap from zero-volume baseline.

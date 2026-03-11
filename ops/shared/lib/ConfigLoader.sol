@@ -114,10 +114,10 @@ library ConfigLoader {
     function _loadRuntime() private view returns (OpsTypes.Runtime runtime) {
         string memory raw = EnvLib.envOrString("OPS_RUNTIME", "local");
         bytes32 id = keccak256(bytes(_lower(raw)));
-        if (id == keccak256("sepolia")) {
-            return OpsTypes.Runtime.Sepolia;
+        if (id == keccak256("local")) {
+            return OpsTypes.Runtime.Local;
         }
-        return OpsTypes.Runtime.Local;
+        return OpsTypes.Runtime.Live;
     }
 
     function _lower(string memory s) private pure returns (string memory) {

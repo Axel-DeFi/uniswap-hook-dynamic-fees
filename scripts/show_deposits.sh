@@ -1,7 +1,7 @@
-#!/usr/bin/env zsh
+#!/usr/bin/env bash
 set -euo pipefail
 
-# Local-only helper:
+# Auxiliary helper:
 # Aggregate current net LP liquidity by wallet in USD for a Uniswap v4 pool.
 #
 # Examples:
@@ -17,8 +17,8 @@ Usage:
   ./scripts/show_deposits.sh --chain <chain> [options]
 
 Options:
-  --chain <name>               Chain config name (e.g. optimism, sepolia, arbitrum).
-  --rpc-url <url>              Override RPC URL from config.
+  --chain <name>               Supported ops network: local, sepolia, optimism.
+  --rpc-url <url>              Override RPC URL from ops defaults.
   --pool-manager <addr>        Override PoolManager address.
   --pool-id <bytes32>          PoolId. If omitted, tries to read from hook_status.sh.
   --from-block <hex|int>       Start block (default: latest - 2,000,000 blocks).
@@ -30,6 +30,20 @@ Options:
   --cache-path <path>          Optional tx-from cache path (default: tmp/private_lp_txfrom_<chain>.json).
   -h, --help                   Show help.
 EOF
+}
+
+ops_defaults_env_path() {
+  case "$1" in
+    local|sepolia|optimism) printf './ops/%s/config/defaults.env\n' "$1" ;;
+    *)
+      echo "ERROR: unsupported --chain '$1' (expected local, sepolia, or optimism)" >&2
+      return 1
+      ;;
+  esac
+}
+
+ops_state_path() {
+  printf './ops/%s/out/state/%s.addresses.json\n' "$1" "$1"
 }
 
 require_cmd() {
@@ -57,7 +71,7 @@ rpc_post() {
   local attempt resp last_err
   last_err=""
   for attempt in 1 2 3 4 5; do
-    resp="$(printf '%s' "${payload}" | zsh -lc "curl -sS --connect-timeout 4 --max-time 20 -H 'content-type: application/json' --data @- '${RPC_URL}'" 2>&1 || true)"
+    resp="$(printf '%s' "${payload}" | curl -sS --connect-timeout 4 --max-time 20 -H 'content-type: application/json' --data @- "${RPC_URL}" 2>&1 || true)"
     if [[ -n "${resp}" ]] && printf '%s' "${resp}" | jq -e . >/dev/null 2>&1; then
       printf '%s\n' "${resp}"
       return 0
@@ -114,18 +128,7 @@ require_cmd curl
 require_cmd jq
 require_cmd python3
 
-if [[ -f "./.env" ]]; then
-  # shellcheck disable=SC1091
-  source "./.env"
-fi
-
-HOOK_CONF="./config/hook.${CHAIN}.conf"
-if [[ "${CHAIN}" == "local" ]]; then
-  HOOK_CONF="./config/hook.local.conf"
-elif [[ "${CHAIN}" == "sepolia" ]]; then
-  HOOK_CONF="./config/hook.sepolia.conf"
-fi
-
+HOOK_CONF="$(ops_defaults_env_path "${CHAIN}")"
 if [[ ! -f "${HOOK_CONF}" ]]; then
   echo "ERROR: config not found: ${HOOK_CONF}" >&2
   exit 1
@@ -134,7 +137,23 @@ fi
 # shellcheck disable=SC1090
 set -a
 source "${HOOK_CONF}"
+if [[ -f "./.env" ]]; then
+  # shellcheck disable=SC1091
+  source "./.env"
+fi
 set +a
+
+STATE_JSON="$(ops_state_path "${CHAIN}")"
+if [[ -f "${STATE_JSON}" ]]; then
+  state_pool_manager="$(jq -r '.poolManager // empty' "${STATE_JSON}")"
+  state_stable="$(jq -r '.stableToken // empty' "${STATE_JSON}")"
+  if [[ -z "${POOL_MANAGER:-}" && -n "${state_pool_manager}" ]]; then
+    POOL_MANAGER="${state_pool_manager}"
+  fi
+  if [[ -z "${STABLE:-}" && -n "${state_stable}" ]]; then
+    STABLE="${state_stable}"
+  fi
+fi
 
 RPC_URL="${RPC_URL_CLI:-${RPC_URL:-}}"
 POOL_MANAGER="${POOL_MANAGER_CLI:-${POOL_MANAGER:-}}"

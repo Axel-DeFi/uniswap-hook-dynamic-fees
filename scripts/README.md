@@ -1,9 +1,14 @@
 # Scripts
 
-Shell + Foundry scripts are used to:
-1) deploy the hook at a mined CREATE2 address,
-2) initialize pool and liquidity,
-3) run operational checks.
+Top-level `scripts/` now contains only auxiliary tooling:
+1. observability / diagnostics helpers,
+2. release helpers,
+3. local gas-measurement helpers.
+
+Canonical deployment and live operational flows are under:
+- `ops/local`
+- `ops/sepolia`
+- `ops/optimism`
 
 ## Required hook flags
 
@@ -19,34 +24,26 @@ Deployment/mining must include:
 - `FLOOR_TIER`, `CASH_TIER`, `EXTREME_TIER`: explicit LP fee regime model.
 - `STABLE`, `STABLE_DECIMALS`: telemetry quote token and scaling mode.
 
-## Main flows
+## Canonical operational flows
 
-### Deploy hook
-
-```bash
-./scripts/deploy_hook.sh --chain <chain> --rpc-url <url> --private-key <pk> --broadcast
-```
-
-Uses:
-- `scripts/foundry/DeployHook.s.sol`
-- Deployment is constructor-driven only; no post-deploy admin setter phase is executed.
-- The script derives the canonical CREATE2 address from the current release/config constructor args, reuses an
-  already-valid canonical hook, and never mines an alternate duplicate address on rerun.
-
-### Create + initialize pool
+Use the `ops/*` wrappers instead of ad-hoc deploy/create scripts:
 
 ```bash
-./scripts/create_pool.sh --chain <chain> --rpc-url <url> --private-key <pk> --broadcast
+ops/local/scripts/bootstrap.sh
+ops/sepolia/scripts/ensure-hook.sh
+ops/sepolia/scripts/ensure-pool.sh
+ops/sepolia/scripts/ensure-liquidity.sh
+ops/optimism/scripts/ensure-hook.sh
+ops/optimism/scripts/ensure-pool.sh
+ops/optimism/scripts/ensure-liquidity.sh
 ```
-
-The pool-init script reconstructs constructor identity, requires `HOOK_ADDRESS` to match the canonical hook for the
-current release/config, and validates the canonical deployed hook before broadcasting pool initialization.
 
 ### Inspect hook state
 
 ```bash
-./scripts/hook_status.sh --chain <chain>
-./scripts/hook_status.sh --chain <chain> --watch-seconds 15
+./scripts/hook_status.sh --chain <local|sepolia|optimism>
+./scripts/hook_status.sh --chain optimism --refresh 15
+./scripts/show_deposits.sh --chain optimism
 ```
 
 ### Release helpers
@@ -96,6 +93,8 @@ Primary artifacts:
   requires full config identity match plus exact PoolManager binding and zero pending state:
   `owner()`, no `pendingOwner()`, stable decimals mode, current `minCountedSwapUsd6()`, fees, HookFee percent,
   timing params, controller params, and no pending HookFee / min-counted-swap changes.
+- Auxiliary scripts resolve network defaults from `ops/<network>/config/defaults.env` and live addresses from
+  `ops/<network>/out/state/<network>.addresses.json`.
 - Ownership transfer (`proposeNewOwner` -> `acceptOwner`) automatically moves payout destination without extra sync calls.
 - `approxLpFeesUsd6` is approximate analytics, not accounting output.
 - Pool key uses strict dynamic fee flag matching (`key.fee == LPFeeLibrary.DYNAMIC_FEE_FLAG`).

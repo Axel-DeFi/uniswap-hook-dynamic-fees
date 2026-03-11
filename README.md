@@ -32,9 +32,10 @@ See `LICENSE` for full terms.
   constructor args, requires the exact minimal callback surface (`afterInitialize`, `afterSwap`,
   `afterSwapReturnDelta` only), expected PoolManager binding, current `minCountedSwapUsd6`, and zero pending owner /
   pending config changes.
-- Manual `scripts/deploy_hook.sh` and `scripts/create_pool.sh` flows also derive the same canonical constructor-driven
-  hook identity and reject stale/non-canonical hook addresses instead of silently deploying or initializing a sibling
-  pool path.
+- Live deployment and validation now run only through the unified `ops/*` contours:
+  - `ops/local` for deterministic Anvil lifecycle
+  - `ops/sepolia` for public-testnet rehearsal
+  - `ops/optimism` for production deployment and operations
 - `pause()/unpause()` freeze/resume regulator transitions at the current LP fee regime (no automatic floor reset, no swap stop, no HookFee stop).
 - `setRegimeFees(...)` (paused-only) preserves EMA, resets hold/streak counters, starts a fresh open period, and updates current LP fee immediately if active regime fee changed.
 - `setControllerParams(...)` (paused-only) preserves active regime + EMA, clears hold/streak counters, and starts a fresh open period.
@@ -67,9 +68,11 @@ See `LICENSE` for full terms.
 - FAQ: `docs/FAQ.md`
 - Source-of-truth policy: `SOURCE_OF_TRUTH.md`
 - Release process: `docs/RELEASE.md`
-- Scripts and deployment flow: `scripts/README.md`
+- Ops and deployment flow: `ops/README.md`
+- Auxiliary scripts: `scripts/README.md`
 - Local ops runbook: `ops/local/RUNBOOK.md`
 - Sepolia ops runbook: `ops/sepolia/RUNBOOK.md`
+- Optimism ops runbook: `ops/optimism/RUNBOOK.md`
 
 ## Accepted risks (current scope)
 

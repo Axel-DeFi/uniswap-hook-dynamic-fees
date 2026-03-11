@@ -4,7 +4,7 @@ All values are loaded from environment variables (defaults + scenario overlay + 
 
 ## Required keys
 
-- `OPS_RUNTIME` = `local|sepolia`
+- `OPS_RUNTIME` = `local|live`
 - `CHAIN_ID_EXPECTED`
 - `RPC_URL` (required for real RPC execution)
 - `POOL_MANAGER`
@@ -78,6 +78,7 @@ Controller constraint notes:
 
 - `OPS_BROADCAST` (`0|1`)
 - `OPS_FORCE_SIMULATION` (`0|1`)
+- `OPS_NETWORK` (normally set by wrappers; `sepolia` or `optimism` for shared live paths)
 - `ALLOW_WEAK_HOLD_PERIODS` (`0|1`, default `0`; explicit override for non-local weak hold configs)
 - `SMOKE_SWAP_STABLE_RAW`
 - `FULL_SWAP_STABLE_RAW`
@@ -87,6 +88,6 @@ Controller constraint notes:
 - `SEED_VOLATILE_RAW`
 - `PERIODS_TO_WARP`
 - `WARP_CLOSE_PERIOD`
-- `INIT_SQRT_PRICE_X96` (needed for `EnsurePoolSepolia` if init tx is required)
+- `INIT_SQRT_PRICE_X96` (needed for `EnsurePoolLive` if init tx is required)
 - `SWAP_DRIVER` (external helper contract for live swaps; auto-provisioned when wrappers detect missing state)
 - `LIQUIDITY_DRIVER` (external helper contract for live liquidity actions; auto-provisioned when wrappers detect missing state)

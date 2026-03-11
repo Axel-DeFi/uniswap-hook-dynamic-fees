@@ -27,7 +27,7 @@ Sepolia validation scripts mirror local phase names, with explicit read-only and
 
 - Config layering: `defaults.env` -> scenario overlay -> `.env` -> process env.
 - `SWAP_DRIVER` and `LIQUIDITY_DRIVER` are helper contracts used by live swap/liquidity phases.
-- If helper addresses are not set, wrappers auto-provision drivers via `EnsureDriversSepolia` and persist them in `ops/sepolia/out/state/sepolia.drivers.json`.
+- If helper addresses are not set, wrappers auto-provision drivers via the shared `EnsureDriversLive` path and persist them in `ops/sepolia/out/state/sepolia.drivers.json`.
 - `preflight` validates chain id, budget, token decimals, hook/pool consistency before broadcast-capable phases.
 - `smoke/full/rerun-safe/emergency` enforce preflight gate by default and stop on preflight failure.
 - `ensure-pool` and `ensure-liquidity` now also enforce the same preflight gate by default.
