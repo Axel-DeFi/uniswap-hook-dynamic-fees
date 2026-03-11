@@ -597,7 +597,6 @@ sync_runtime_config() {
   set_config_value "STABLE_DECIMALS" "6"
   set_config_value "TICK_SPACING" "${TICK_SPACING}"
   set_config_value "OWNER" "${OWNER_ADDR}"
-  set_config_value "HOOK_FEE_ADDRESS" "${OWNER_ADDR}"
   set_config_value "HOOK_ADDRESS" "${HOOK_ADDRESS}"
 }
 
@@ -856,48 +855,6 @@ run_deploy_hook_script() {
   return 1
 }
 
-ensure_hook_runtime_configured() {
-  local hook_fee_address paused_now
-  local ctrl_tuple
-
-  hook_fee_address="${HOOK_FEE_ADDRESS:-}"
-  if [[ -z "${hook_fee_address}" ]]; then
-    hook_fee_address="${OWNER_ADDR}"
-  fi
-
-  paused_now="$(cast_call_single "${HOOK_ADDRESS}" "isPaused()(bool)" || true)"
-  if [[ "${paused_now}" != "true" ]]; then
-    cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" "pause()" >/dev/null || return 1
-  fi
-
-  cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" \
-    "setRegimeFees(uint24,uint24,uint24)" \
-    "${FLOOR_FEE_PIPS}" "${CASH_FEE_PIPS}" "${EXTREME_FEE_PIPS}" >/dev/null || return 1
-
-  cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" \
-    "setTimingParams(uint32,uint8,uint32,uint16)" \
-    "${PERIOD_SECONDS}" "${EMA_PERIODS}" "${LULL_RESET_SECONDS}" "${DEADBAND_BPS}" >/dev/null || return 1
-
-  ctrl_tuple="(${MIN_CLOSEVOL_TO_CASH_USD6},${UP_R_TO_CASH_BPS},${CASH_HOLD_PERIODS},${MIN_CLOSEVOL_TO_EXTREME_USD6},${UP_R_TO_EXTREME_BPS},${UP_EXTREME_CONFIRM_PERIODS},${EXTREME_HOLD_PERIODS},${DOWN_R_FROM_EXTREME_BPS},${DOWN_EXTREME_CONFIRM_PERIODS},${DOWN_R_FROM_CASH_BPS},${DOWN_CASH_CONFIRM_PERIODS},${EMERGENCY_FLOOR_CLOSEVOL_USD6},${EMERGENCY_CONFIRM_PERIODS})"
-  cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" \
-    "setControllerParams((uint64,uint16,uint8,uint64,uint16,uint8,uint8,uint16,uint8,uint16,uint8,uint64,uint8))" \
-    "${ctrl_tuple}" >/dev/null || return 1
-
-  cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" \
-    "setHookFeeRecipient(address)" "${hook_fee_address}" >/dev/null || return 1
-
-  # Best-effort cleanup for previous pending timelock value.
-  cast send --rpc-url "${RPC_URL}" --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" \
-    "cancelHookFeePercentChange()" >/dev/null 2>&1 || true
-
-  paused_now="$(cast_call_single "${HOOK_ADDRESS}" "isPaused()(bool)" || true)"
-  if [[ "${paused_now}" == "true" ]]; then
-    cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" "unpause()" >/dev/null || return 1
-  fi
-
-  return 0
-}
-
 run_create_pool_script() {
   local attempt
   for attempt in 1 2 3; do
@@ -928,7 +885,6 @@ setup_local_environment() {
   set_config_value "VOLATILE" "${VOLATILE}"
   set_config_value "STABLE" "${STABLE}"
   set_config_value "STABLE_DECIMALS" "6"
-  set_config_value "HOOK_FEE_ADDRESS" "${OWNER_ADDR}"
   set_config_value "HOOK_ADDRESS" ""
 
   if ! run_deploy_hook_script; then
@@ -940,16 +896,6 @@ setup_local_environment() {
   [[ -n "${HOOK_ADDRESS}" ]] || die "Failed to parse HOOK_ADDRESS from ${deploy_json}"
 
   set_config_value "HOOK_ADDRESS" "${HOOK_ADDRESS}"
-  local runtime_cfg_attempt
-  local runtime_cfg_ok=0
-  for runtime_cfg_attempt in 1 2 3; do
-    if ensure_hook_runtime_configured; then
-      runtime_cfg_ok=1
-      break
-    fi
-    sleep 0.8
-  done
-  (( runtime_cfg_ok == 1 )) || die "Failed to apply hook runtime config on local Anvil"
 
   if ! run_create_pool_script; then
     die "create_pool.sh failed; see /tmp/preflight_local_create.log"
@@ -1548,7 +1494,6 @@ test_t01_abi_view_pure_sweep() {
 
   # NotInitialized coverage on an extra hook instance (deploy-only, no pool init).
   set_config_value "OWNER" "${ATTACKER_ADDR}"
-  set_config_value "HOOK_FEE_ADDRESS" "${OWNER_ADDR}"
   set_config_value "HOOK_ADDRESS" ""
   run_deploy_hook_script || return 1
   extra_hook="$(extract_hook_from_deploy_json "${ROOT_DIR}/scripts/out/deploy.local.json" || true)"
@@ -1603,11 +1548,6 @@ test_t02_access_control_matrix() {
   cover_function "scheduleHookFeePercentChange(uint16)"
   expect_revert_custom "T02 attacker scheduleHookFeePercentChange" \
     "cast call --rpc-url \"${RPC_URL}\" --from \"${ATTACKER_ADDR}\" \"${HOOK_ADDRESS}\" \"scheduleHookFeePercentChange(uint16)\" 2" \
-    "NotOwner" || return 1
-
-  cover_function "setHookFeeRecipient(address)"
-  expect_revert_custom "T02 attacker setHookFeeRecipient" \
-    "cast call --rpc-url \"${RPC_URL}\" --from \"${ATTACKER_ADDR}\" \"${HOOK_ADDRESS}\" \"setHookFeeRecipient(address)\" \"${ATTACKER_ADDR}\"" \
     "NotOwner" || return 1
 
   cover_function "pause()"
@@ -1665,9 +1605,6 @@ test_t02_access_control_matrix() {
 
   cover_function "cancelHookFeePercentChange()"
   cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" "cancelHookFeePercentChange()" >/dev/null || return 1
-
-  cover_function "setHookFeeRecipient(address)"
-  cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" "setHookFeeRecipient(address)" "${OWNER_ADDR}" >/dev/null || return 1
 
   cover_function "scheduleMinCountedSwapUsd6Change(uint64)"
   cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" "scheduleMinCountedSwapUsd6Change(uint64)" 1500000 >/dev/null || return 1
@@ -2296,9 +2233,6 @@ test_t12_hook_fee_e2e() {
 
   ensure_unpaused || return 1
 
-  cover_function "setHookFeeRecipient(address)"
-  cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" "setHookFeeRecipient(address)" "${OWNER_ADDR}" >/dev/null || return 1
-
   cover_function "MAX_HOOK_FEE_PERCENT()"
   limit="$(cast_call_single "${HOOK_ADDRESS}" "MAX_HOOK_FEE_PERCENT()(uint16)")"
   assert_eq "T12 hook fee limit" "${limit}" "10" || return 1
@@ -2362,12 +2296,7 @@ test_t12_hook_fee_e2e() {
 
   swap_exact_in_stable "5000000" >/dev/null || return 1
   read -r accrued_live0 accrued_live1 <<<"$(cast_call_json "${HOOK_ADDRESS}" "hookFeesAccrued()(uint256,uint256)" | jq -r '.[0],.[1]' | xargs)"
-  assert_true "T12 accrued fees present for HookFeesAccrued guard" "[[ ${accrued_live0} -gt 0 || ${accrued_live1} -gt 0 ]]" || return 1
-
-  cover_function "setHookFeeRecipient(address)"
-  expect_revert_custom "T12 hook fee recipient zero with accrued fees" \
-    "cast call --rpc-url \"${RPC_URL}\" --from \"${OWNER_ADDR}\" \"${HOOK_ADDRESS}\" \"setHookFeeRecipient(address)\" 0x0000000000000000000000000000000000000000" \
-    "HookFeesAccrued" || return 1
+  assert_true "T12 accrued fees present before claim" "[[ ${accrued_live0} -gt 0 || ${accrued_live1} -gt 0 ]]" || return 1
 
   cover_function "claimAllHookFees()"
   cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" "claimAllHookFees()" >/dev/null || return 1
@@ -2383,16 +2312,6 @@ test_t12_hook_fee_e2e() {
   cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" "executeHookFeePercentChange()" >/dev/null || return 1
 
   # Edge checks.
-  cover_function "setHookFeeRecipient(address)"
-  cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" "setHookFeeRecipient(address)" \
-    "0x0000000000000000000000000000000000000000" >/dev/null || return 1
-  cover_function "scheduleHookFeePercentChange(uint16)"
-  expect_revert_custom "T12 hook fee requires recipient" \
-    "cast call --rpc-url \"${RPC_URL}\" --from \"${OWNER_ADDR}\" \"${HOOK_ADDRESS}\" \"scheduleHookFeePercentChange(uint16)\" 1" \
-    "HookFeeRecipientRequired" || return 1
-  cover_function "setHookFeeRecipient(address)"
-  cast_send_retry --private-key "${OWNER_PK}" "${HOOK_ADDRESS}" "setHookFeeRecipient(address)" "${OWNER_ADDR}" >/dev/null || return 1
-
   cover_function "scheduleHookFeePercentChange(uint16)"
   expect_revert_custom "T12 hook fee percent above limit" \
     "cast call --rpc-url \"${RPC_URL}\" --from \"${OWNER_ADDR}\" \"${HOOK_ADDRESS}\" \"scheduleHookFeePercentChange(uint16)\" 11" \

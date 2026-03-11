@@ -60,12 +60,12 @@ Timelock visibility is intentional. The main exposed effect is HookFee timing; L
 ### HookFee claim settlement
 
 - Use `claimHookFees(...)` / `claimAllHookFees(...)` as owner.
-- `claimAllHookFees(...)` has no recipient overload; full claim always pays to current `hookFeeRecipient`.
+- `claimAllHookFees(...)` has no recipient overload; full claim always pays to current `owner()`.
 - Payout path is PoolManager accounting withdrawal: `unlock` -> `burn` -> `take`.
-- Recipient must match current `hookFeeRecipient`.
+- `claimHookFees(...)` requires `to == owner()`.
 - If pool includes native currency, recipient must be compatible with native payout from hook sender context.
 - Sepolia preflight/ensure flow validates this compatibility before deploy/reuse success.
-- If governance later changes recipient in a native-asset pool, preserve this compatibility invariant.
+- If ownership changes later in a native-asset pool, preserve this compatibility invariant.
 
 ## Runtime semantics reminder
 
@@ -95,8 +95,6 @@ Timelock visibility is intentional. The main exposed effect is HookFee timing; L
 
 ## Accepted governance risks
 
-- `setHookFeeRecipient(...)` remains immediate by design.
-- No-op recipient update does not emit `HookFeeRecipientUpdated`.
 - This is accepted owner-key risk; mitigation is operational in current scope.
 - Production owner must be multisig; EOA owner is acceptable only for local/dev/test.
 - Hot-wallet owner usage is unacceptable for production.
@@ -111,5 +109,5 @@ Controller safety note:
 ## Monitoring and response
 
 - Monitor `PeriodClosed` for repeated abnormal regime escalations.
-- Monitor admin/security events: `HookFeeRecipientUpdated`, `RegimeFeesUpdated`, `ControllerParamsUpdated`, `TimingParamsUpdated`, `Paused`, `Unpaused`, emergency reset events.
+- Monitor admin/security events: `RegimeFeesUpdated`, `ControllerParamsUpdated`, `TimingParamsUpdated`, `Paused`, `Unpaused`, emergency reset events.
 - Treat wash-trading / fee-poisoning as residual economic manipulation risk, especially on low-cost networks.

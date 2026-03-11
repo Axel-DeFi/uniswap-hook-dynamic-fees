@@ -2,13 +2,13 @@
 pragma solidity ^0.8.26;
 
 import {Test} from "forge-std/Test.sol";
-import {Vm} from "forge-std/Vm.sol";
 
 import {BaseHook} from "@uniswap/v4-hooks-public/src/base/BaseHook.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
+import {toBalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {LPFeeLibrary} from "@uniswap/v4-core/src/libraries/LPFeeLibrary.sol";
 import {Hooks} from "@uniswap/v4-core/src/libraries/Hooks.sol";
 
@@ -33,7 +33,6 @@ contract VolumeDynamicFeeHookConfigHarness is VolumeDynamicFeeHook {
         uint16 _deadbandBps,
         uint32 _lullResetSeconds,
         address ownerAddr,
-        address hookFeeRecipientAddr,
         uint16 hookFeePercent,
         uint64 _minCloseVolToCashUsd6,
         uint16 _upRToCashBps,
@@ -64,7 +63,6 @@ contract VolumeDynamicFeeHookConfigHarness is VolumeDynamicFeeHook {
             _deadbandBps,
             _lullResetSeconds,
             ownerAddr,
-            hookFeeRecipientAddr,
             hookFeePercent,
             _minCloseVolToCashUsd6,
             _upRToCashBps,
@@ -111,7 +109,6 @@ contract VolumeDynamicFeeHookConfigAndEdgesTest is Test, VolumeDynamicFeeHookV2D
         uint16 deadbandBps;
         uint32 lullResetSeconds;
         address owner;
-        address hookFeeRecipient;
         uint16 hookFeePercent;
         uint64 emergencyFloorCloseVolUsd6;
         uint8 emergencyConfirmPeriods;
@@ -141,7 +138,6 @@ contract VolumeDynamicFeeHookConfigAndEdgesTest is Test, VolumeDynamicFeeHookV2D
             deadbandBps: 500,
             lullResetSeconds: LULL_RESET_SECONDS,
             owner: address(this),
-            hookFeeRecipient: address(this),
             hookFeePercent: V2_INITIAL_HOOK_FEE_PERCENT,
             emergencyFloorCloseVolUsd6: V2_EMERGENCY_FLOOR_CLOSEVOL_USD6,
             emergencyConfirmPeriods: V2_EMERGENCY_CONFIRM_PERIODS
@@ -164,7 +160,6 @@ contract VolumeDynamicFeeHookConfigAndEdgesTest is Test, VolumeDynamicFeeHookV2D
             cfg.deadbandBps,
             cfg.lullResetSeconds,
             cfg.owner,
-            cfg.hookFeeRecipient,
             cfg.hookFeePercent,
             V2_MIN_CLOSEVOL_TO_CASH_USD6,
             V2_UP_R_TO_CASH_BPS,
@@ -221,7 +216,6 @@ contract VolumeDynamicFeeHookConfigAndEdgesTest is Test, VolumeDynamicFeeHookV2D
             cfg.deadbandBps,
             cfg.lullResetSeconds,
             cfg.owner,
-            cfg.hookFeeRecipient,
             cfg.hookFeePercent,
             V2_MIN_CLOSEVOL_TO_CASH_USD6,
             V2_UP_R_TO_CASH_BPS,
@@ -316,13 +310,13 @@ contract VolumeDynamicFeeHookConfigAndEdgesTest is Test, VolumeDynamicFeeHookV2D
         _deploy(cfg);
     }
 
-    function test_constructor_reverts_when_hookFee_recipient_missing() public {
+    function test_constructor_accepts_nonzero_hookFee_without_separate_recipient_config() public {
         DeployCfg memory cfg = _defaultCfg();
         cfg.hookFeePercent = 1;
-        cfg.hookFeeRecipient = address(0);
 
-        vm.expectRevert(VolumeDynamicFeeHook.HookFeeRecipientRequired.selector);
-        _deploy(cfg);
+        VolumeDynamicFeeHookConfigHarness deployed = _deploy(cfg);
+        assertEq(deployed.owner(), cfg.owner);
+        assertEq(deployed.hookFeePercent(), 1);
     }
 
     function test_constructor_reverts_when_hookFee_percent_above_hard_cap() public {
@@ -356,28 +350,31 @@ contract VolumeDynamicFeeHookConfigAndEdgesTest is Test, VolumeDynamicFeeHookV2D
         manager.callAfterInitialize(fresh, badKey);
     }
 
-    function test_owner_and_hookFeeRecipient_are_distinct_entities() public {
-        assertEq(hook.owner(), address(this));
-        assertEq(hook.hookFeeRecipient(), address(this));
-
-        address recipient = address(0x1234);
-        hook.setHookFeeRecipient(recipient);
-        assertEq(hook.owner(), address(this));
-        assertEq(hook.hookFeeRecipient(), recipient);
+    function test_claimHookFees_rejects_non_owner_recipient() public {
+        vm.expectRevert(VolumeDynamicFeeHook.InvalidRecipient.selector);
+        hook.claimHookFees(address(0x1234), 0, 0);
     }
 
-    function test_setHookFeeRecipient_noop_does_not_emit_update_event() public {
-        vm.recordLogs();
-        hook.setHookFeeRecipient(address(this));
-        Vm.Log[] memory logs = vm.getRecordedLogs();
+    function test_claimAllHookFees_uses_current_owner_after_transfer() public {
+        manager.callAfterSwap(hook, key, toBalanceDelta(-10_000_000, 9_000_000));
+        (, uint256 feesBeforeTransfer) = hook.hookFeesAccrued();
+        assertGt(feesBeforeTransfer, 0, "precondition: accrued fees must exist");
 
-        assertEq(logs.length, 0, "no-op recipient update must not emit HookFeeRecipientUpdated");
-        assertEq(hook.hookFeeRecipient(), address(this));
-    }
+        address newOwner = address(0xBEEF);
+        hook.proposeNewOwner(newOwner);
+        vm.prank(newOwner);
+        hook.acceptOwner();
 
-    function test_setHookFeeRecipient_zero_reverts_when_fee_enabled() public {
-        vm.expectRevert(VolumeDynamicFeeHook.HookFeeRecipientRequired.selector);
-        hook.setHookFeeRecipient(address(0));
+        vm.expectRevert(VolumeDynamicFeeHook.NotOwner.selector);
+        hook.claimAllHookFees();
+
+        uint256 takeCountBefore = manager.takeCount();
+        vm.prank(newOwner);
+        hook.claimAllHookFees();
+
+        (, uint256 feesAfterClaim) = hook.hookFeesAccrued();
+        assertEq(feesAfterClaim, 0, "new owner must claim prior accrual");
+        assertEq(manager.takeCount(), takeCountBefore + 1, "claim payout must target new owner");
     }
 
     function test_scheduleHookFeePercentChange_rejects_parallel_pending_update() public {
@@ -439,7 +436,6 @@ contract VolumeDynamicFeeHookConfigAndEdgesTest is Test, VolumeDynamicFeeHookV2D
         address ownerAddr = address(0xA11CE);
         DeployCfg memory cfg = _defaultCfg();
         cfg.owner = ownerAddr;
-        cfg.hookFeeRecipient = ownerAddr;
 
         VolumeDynamicFeeHookConfigHarness ownerHook = _deploy(cfg);
 

@@ -36,9 +36,9 @@ contract EnsureHookSepolia is Script {
         if (cfg.hookAddress != address(0) && cfg.hookAddress.code.length > 0) {
             OpsTypes.HookValidation memory existing = HookValidationLib.validateHook(cfg);
             if (existing.ok) {
-                address currentRecipient = VolumeDynamicFeeHook(payable(cfg.hookAddress)).hookFeeRecipient();
-                (bool reuseNativeRecipientOk, string memory reuseNativeRecipientReason) = NativeRecipientValidationLib.validateHookFeeRecipientForNativePool(
-                    cfg.token0, cfg.token1, currentRecipient, cfg.hookAddress
+                address currentOwner = VolumeDynamicFeeHook(payable(cfg.hookAddress)).owner();
+                (bool reuseNativeRecipientOk, string memory reuseNativeRecipientReason) = NativeRecipientValidationLib.validatePayoutRecipientForNativePool(
+                    cfg.token0, cfg.token1, currentOwner, cfg.hookAddress
                 );
                 require(reuseNativeRecipientOk, reuseNativeRecipientReason);
 
@@ -69,8 +69,6 @@ contract EnsureHookSepolia is Script {
 
         address owner = vm.envOr("OWNER", vm.addr(pk));
         uint16 hookFeePercent = uint16(vm.envUint("HOOK_FEE_PERCENT"));
-        address hookFeeRecipient = vm.envOr("HOOK_FEE_ADDRESS", owner);
-        require(hookFeeRecipient != address(0), "HOOK_FEE_ADDRESS invalid");
         uint16 deadbandBps = uint16(vm.envUint("DEADBAND_BPS"));
         uint64 minCloseVolToCashUsd6 = uint64(vm.envUint("MIN_CLOSEVOL_TO_CASH_USD6"));
         uint8 cashHoldPeriods = uint8(vm.envUint("CASH_HOLD_PERIODS"));
@@ -105,7 +103,6 @@ contract EnsureHookSepolia is Script {
             deadbandBps,
             uint32(vm.envUint("LULL_RESET_SECONDS")),
             owner,
-            hookFeeRecipient,
             hookFeePercent,
             minCloseVolToCashUsd6,
             uint16(vm.envUint("UP_R_TO_CASH_BPS")),
@@ -129,8 +126,8 @@ contract EnsureHookSepolia is Script {
         (address mined, bytes32 salt) =
             HookMiner.find(CREATE2_DEPLOYER, flags, type(VolumeDynamicFeeHook).creationCode, constructorArgs);
 
-        (bool nativeRecipientOk, string memory nativeRecipientReason) = NativeRecipientValidationLib.validateHookFeeRecipientForNativePool(
-            cfg.token0, cfg.token1, hookFeeRecipient, mined
+        (bool nativeRecipientOk, string memory nativeRecipientReason) = NativeRecipientValidationLib.validatePayoutRecipientForNativePool(
+            cfg.token0, cfg.token1, owner, mined
         );
         require(nativeRecipientOk, nativeRecipientReason);
 

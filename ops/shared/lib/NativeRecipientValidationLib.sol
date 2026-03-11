@@ -9,22 +9,22 @@ library NativeRecipientValidationLib {
     address internal constant NATIVE = address(0);
     uint256 internal constant PROBE_VALUE_WEI = 1;
 
-    function validateHookFeeRecipientForNativePool(
+    function validatePayoutRecipientForNativePool(
         address token0,
         address token1,
-        address hookFeeRecipient,
+        address payoutRecipient,
         address payoutSender
     ) internal returns (bool ok, string memory reason) {
         if (!_poolHasNativeCurrency(token0, token1)) {
             return (true, "ok");
         }
 
-        if (hookFeeRecipient == address(0)) {
-            return (false, "HOOK_FEE_ADDRESS invalid for native pool");
+        if (payoutRecipient == address(0)) {
+            return (false, "payout recipient invalid for native pool");
         }
 
         // EOAs are always compatible with native transfers.
-        if (hookFeeRecipient.code.length == 0) {
+        if (payoutRecipient.code.length == 0) {
             return (true, "ok");
         }
 
@@ -34,9 +34,9 @@ library NativeRecipientValidationLib {
 
         vm.deal(payoutSender, PROBE_VALUE_WEI);
         vm.prank(payoutSender);
-        (bool success,) = payable(hookFeeRecipient).call{value: PROBE_VALUE_WEI}("");
+        (bool success,) = payable(payoutRecipient).call{value: PROBE_VALUE_WEI}("");
         if (!success) {
-            return (false, "HOOK_FEE_ADDRESS cannot receive native payout from hook");
+            return (false, "payout recipient cannot receive native payout from hook");
         }
 
         return (true, "ok");

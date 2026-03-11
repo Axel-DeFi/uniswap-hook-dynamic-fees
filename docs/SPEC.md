@@ -28,11 +28,9 @@ Address mining must include:
 ## Roles and accounting entities
 
 - `Owner`: admin role.
-- `HookFeeRecipient`: recipient allowed by claim path.
+- `Owner`: claim recipient in HookFee withdrawal path.
 - `LPs`: receive LP fee as part of pool accounting.
 - `Traders`: pay LP fee and optional HookFee.
-
-`Owner` and `HookFeeRecipient` are intentionally distinct names and concepts.
 
 ## Fee model
 
@@ -249,19 +247,19 @@ HookFee accrual/claim surface:
 - `claimAllHookFees()`
 
 Recipient semantics:
-- `claimAllHookFees()` always pays to current `hookFeeRecipient`.
-- `claimHookFees(address,uint256,uint256)` requires `to == hookFeeRecipient`.
-- No-op `setHookFeeRecipient(...)` updates do not emit `HookFeeRecipientUpdated`.
+- `claimAllHookFees()` always pays to current `owner()`.
+- `claimHookFees(address,uint256,uint256)` requires `to == owner()`.
+- Ownership transfer (`proposeNewOwner` -> `acceptOwner`) automatically moves payout destination.
 
 Claim settlement path:
 1. owner request enters `poolManager.unlock(...)`,
 2. callback burns hook ERC6909 claims (`burn`),
-3. callback withdraws underlying currency (`take`) to `HookFeeRecipient`.
+3. callback withdraws underlying currency (`take`) to current owner.
 
 Native recipient compatibility:
 - For pools with native currency in `token0` or `token1`, claim payout can include native transfer from the hook.
-- Deployment/ensure/preflight flows validate that configured `hookFeeRecipient` can receive native payout from hook sender context.
-- Zero-address recipient checks alone are insufficient for native-asset pools.
+- Deployment/ensure/preflight flows validate that current owner can receive native payout from hook sender context.
+- Owner configuration must preserve native payout compatibility in native-asset pools.
 
 Rescue surface:
 - `rescueToken(Currency,uint256)` (non-pool currencies only)
@@ -271,7 +269,6 @@ Rescue surface:
 
 All admin state transitions emit events, including:
 - ownership transitions,
-- fee recipient updates,
 - timelock schedule/cancel/execute,
 - threshold schedule/cancel/apply,
 - pause/unpause,
@@ -284,8 +281,7 @@ Monitoring interpretation note:
 
 ## Accepted risks in current scope
 
-- `setHookFeeRecipient(...)` remains immediate (no timelock), accepted as owner governance/key risk.
-- Mitigation is operational (key management + monitoring), not contract-level in this patch scope.
+- Mitigation remains operational (key management + monitoring), not contract-level in this patch scope.
 - wash-trading / extreme-tier manipulation remains a residual economic risk (more realistic as competitor-funded distortion/DoS in adversarial routing contexts, especially on cheap environments).
 - multi-period catch-up with first-period volume + subsequent zero-volume closes remains accepted as architectural/economic behavior in this scope.
 
@@ -296,9 +292,9 @@ Monitoring interpretation note:
 - owner key custody should use cold/hardware wallet standards.
 - monitor `PeriodClosed` and alert on repeated abnormal regime escalations.
 - monitor admin/security events as a minimum set:
-  `HookFeeRecipientUpdated`, `RegimeFeesUpdated`, `ControllerParamsUpdated`, `TimingParamsUpdated`, `Paused`, `Unpaused`,
+  `RegimeFeesUpdated`, `ControllerParamsUpdated`, `TimingParamsUpdated`, `Paused`, `Unpaused`,
   `EmergencyResetToFloorApplied`, `EmergencyResetToCashApplied`.
-- for native-asset pools, any governance update to `hookFeeRecipient` must preserve native payout compatibility.
+- for native-asset pools, ownership changes must preserve native payout compatibility.
 - EMA preservation across `setRegimeFees(...)` is intentional for paused maintenance updates.
 - production guidance for hold parameters:
   `cashHoldPeriods >= 2`, `extremeHoldPeriods >= 2`, recommended `3..4`.

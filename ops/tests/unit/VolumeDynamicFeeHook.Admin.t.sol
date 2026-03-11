@@ -32,7 +32,6 @@ contract VolumeDynamicFeeHookAdminHarness is VolumeDynamicFeeHook {
         uint16 _deadbandBps,
         uint32 _lullResetSeconds,
         address ownerAddr,
-        address hookFeeRecipientAddr,
         uint16 hookFeePercent,
         uint64 _minCloseVolToCashUsd6,
         uint16 _upRToCashBps,
@@ -63,7 +62,6 @@ contract VolumeDynamicFeeHookAdminHarness is VolumeDynamicFeeHook {
             _deadbandBps,
             _lullResetSeconds,
             ownerAddr,
-            hookFeeRecipientAddr,
             hookFeePercent,
             _minCloseVolToCashUsd6,
             _upRToCashBps,
@@ -109,7 +107,6 @@ contract VolumeDynamicFeeHookAdminTest is Test, VolumeDynamicFeeHookV2DeployHelp
             V2_DEFAULT_CASH_FEE,
             V2_DEFAULT_EXTREME_FEE,
             owner,
-            owner,
             V2_INITIAL_HOOK_FEE_PERCENT,
             6
         );
@@ -133,7 +130,6 @@ contract VolumeDynamicFeeHookAdminTest is Test, VolumeDynamicFeeHookV2DeployHelp
         uint24 cashFee_,
         uint24 extremeFee_,
         address owner_,
-        address hookFeeRecipient_,
         uint16 hookFeePercent_,
         uint8 stableDecimals
     ) internal returns (VolumeDynamicFeeHookAdminHarness h) {
@@ -152,7 +148,6 @@ contract VolumeDynamicFeeHookAdminTest is Test, VolumeDynamicFeeHookV2DeployHelp
             DEADBAND_BPS,
             LULL_RESET_SECONDS,
             owner_,
-            hookFeeRecipient_,
             hookFeePercent_,
             V2_MIN_CLOSEVOL_TO_CASH_USD6,
             V2_UP_R_TO_CASH_BPS,
@@ -299,53 +294,34 @@ contract VolumeDynamicFeeHookAdminTest is Test, VolumeDynamicFeeHookV2DeployHelp
         assertEq(hook.hookFeePercent(), 5);
     }
 
-    function test_executeHookFeePercentChange_reverts_if_recipient_becomes_zero_before_execution() public {
-        hook.scheduleHookFeePercentChange(0);
-        vm.warp(block.timestamp + 48 hours);
-        hook.executeHookFeePercentChange();
-        assertEq(hook.hookFeePercent(), 0, "precondition: hook fee must be zero");
-
-        hook.scheduleHookFeePercentChange(4);
-        hook.setHookFeeRecipient(address(0));
-        (,, uint64 executeAfter) = hook.pendingHookFeePercentChange();
-        vm.warp(executeAfter);
-
-        vm.expectRevert(VolumeDynamicFeeHook.HookFeeRecipientRequired.selector);
-        hook.executeHookFeePercentChange();
-
-        (bool exists, uint16 pendingValue, uint64 pendingExecuteAfter) = hook.pendingHookFeePercentChange();
-        assertTrue(exists, "pending change must remain queued after failed execute");
-        assertEq(pendingValue, 4, "pending hook fee value must remain intact");
-        assertEq(pendingExecuteAfter, uint64(block.timestamp), "executeAfter should still be mature");
-
-        assertEq(hook.hookFeePercent(), 0, "active config must remain valid after failed execute");
-        assertEq(hook.hookFeeRecipient(), address(0), "recipient update is valid while active fee is zero");
-    }
-
-    function test_setHookFeeRecipient_zero_reverts_when_accrued_fees_exist() public {
+    function test_claimHookFees_reverts_when_to_is_not_current_owner() public {
         _swap(true, -1, -10_000_000, 9_000_000);
         (, uint256 fees1) = hook.hookFeesAccrued();
         assertGt(fees1, 0, "precondition: accrued fees must exist");
 
-        hook.scheduleHookFeePercentChange(0);
-        vm.warp(block.timestamp + 48 hours);
-        hook.executeHookFeePercentChange();
-
-        vm.expectRevert(VolumeDynamicFeeHook.HookFeesAccrued.selector);
-        hook.setHookFeeRecipient(address(0));
+        vm.expectRevert(VolumeDynamicFeeHook.InvalidRecipient.selector);
+        hook.claimHookFees(outsider, 0, fees1);
     }
 
-    function test_setHookFeeRecipient_zero_allowed_without_accrued_fees_when_percent_is_zero() public {
-        hook.scheduleHookFeePercentChange(0);
-        vm.warp(block.timestamp + 48 hours);
-        hook.executeHookFeePercentChange();
+    function test_claimAllHookFees_after_owner_transfer_uses_new_owner_without_manual_sync() public {
+        _swap(true, -1, -10_000_000, 9_000_000);
+        (, uint256 feesBeforeTransfer) = hook.hookFeesAccrued();
+        assertGt(feesBeforeTransfer, 0, "precondition: accrued fees must exist");
 
-        (uint256 fees0, uint256 fees1) = hook.hookFeesAccrued();
-        assertEq(fees0, 0);
-        assertEq(fees1, 0);
+        hook.proposeNewOwner(nextOwner);
+        vm.prank(nextOwner);
+        hook.acceptOwner();
 
-        hook.setHookFeeRecipient(address(0));
-        assertEq(hook.hookFeeRecipient(), address(0));
+        vm.expectRevert(VolumeDynamicFeeHook.NotOwner.selector);
+        hook.claimAllHookFees();
+
+        uint256 takeCountBefore = manager.takeCount();
+        vm.prank(nextOwner);
+        hook.claimAllHookFees();
+
+        (, uint256 feesAfterClaim) = hook.hookFeesAccrued();
+        assertEq(feesAfterClaim, 0, "new owner must be able to claim pre-transfer accrual");
+        assertEq(manager.takeCount(), takeCountBefore + 1, "claim payout must target current owner");
     }
 
     function test_owner_transfer_propose_cancel_accept_flow() public {
@@ -1045,24 +1021,21 @@ contract VolumeDynamicFeeHookAdminTest is Test, VolumeDynamicFeeHookV2DeployHelp
     }
 
     function test_stable_decimals_only_6_or_18() public {
-        VolumeDynamicFeeHookAdminHarness h6 = _deployHarness(
-            V2_DEFAULT_FLOOR_FEE, V2_DEFAULT_CASH_FEE, V2_DEFAULT_EXTREME_FEE, owner, owner, 1, 6
-        );
+        VolumeDynamicFeeHookAdminHarness h6 =
+            _deployHarness(V2_DEFAULT_FLOOR_FEE, V2_DEFAULT_CASH_FEE, V2_DEFAULT_EXTREME_FEE, owner, 1, 6);
         assertEq(h6.REGIME_FLOOR(), 0);
 
-        VolumeDynamicFeeHookAdminHarness h18 = _deployHarness(
-            V2_DEFAULT_FLOOR_FEE, V2_DEFAULT_CASH_FEE, V2_DEFAULT_EXTREME_FEE, owner, owner, 1, 18
-        );
+        VolumeDynamicFeeHookAdminHarness h18 =
+            _deployHarness(V2_DEFAULT_FLOOR_FEE, V2_DEFAULT_CASH_FEE, V2_DEFAULT_EXTREME_FEE, owner, 1, 18);
         assertEq(h18.REGIME_FLOOR(), 0);
 
         vm.expectRevert(abi.encodeWithSelector(VolumeDynamicFeeHook.InvalidStableDecimals.selector, uint8(8)));
-        _deployHarness(V2_DEFAULT_FLOOR_FEE, V2_DEFAULT_CASH_FEE, V2_DEFAULT_EXTREME_FEE, owner, owner, 1, 8);
+        _deployHarness(V2_DEFAULT_FLOOR_FEE, V2_DEFAULT_CASH_FEE, V2_DEFAULT_EXTREME_FEE, owner, 1, 8);
     }
 
     function test_stable_decimals_18_converts_to_usd6_by_division() public {
-        VolumeDynamicFeeHookAdminHarness h18 = _deployHarness(
-            V2_DEFAULT_FLOOR_FEE, V2_DEFAULT_CASH_FEE, V2_DEFAULT_EXTREME_FEE, owner, owner, 1, 18
-        );
+        VolumeDynamicFeeHookAdminHarness h18 =
+            _deployHarness(V2_DEFAULT_FLOOR_FEE, V2_DEFAULT_CASH_FEE, V2_DEFAULT_EXTREME_FEE, owner, 1, 18);
         PoolKey memory key18 = _poolKey(address(h18));
         manager.callAfterInitialize(h18, key18);
 

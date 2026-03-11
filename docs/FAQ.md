@@ -12,7 +12,6 @@ Yes, Owner can update runtime config onchain:
 - `setRegimeFees(...)` (paused only)
 - `setControllerParams(...)` (paused only)
 - `setTimingParams(...)` (paused only)
-- `setHookFeeRecipient(...)`
 - HookFee timelock flow (`schedule/cancel/execute`)
 
 ## What exactly happens on `setTimingParams(...)`?
@@ -94,23 +93,16 @@ This mitigates dust-splitting pressure but is not a formal proof against every f
 No. Scheduled threshold changes are activated only at next period boundary.
 This path intentionally has no timelock.
 
-## Is `setHookFeeRecipient(...)` timelocked?
+## How is HookFee payout recipient determined?
 
-No. Recipient change is immediate by design and treated as accepted owner-key governance risk.
+Payout recipient is always current `owner()`. There is no separate recipient setter.
+After `proposeNewOwner(...)` + `acceptOwner()`, payout destination moves to new owner automatically, including for previously accrued and unclaimed HookFees.
 
-No-op update (`newRecipient == currentRecipient`) is ignored and does not emit `HookFeeRecipientUpdated`.
-
-Production guidance:
-- owner must be multisig,
-- owner key custody should be cold/hardware,
-- hot-wallet owner usage is unacceptable for production,
-- recipient-change event monitoring is mandatory.
-
-## Do native-asset pools require a native-compatible `hookFeeRecipient`?
+## Do native-asset pools require a native-compatible owner?
 
 Yes. If one pool currency is native (`address(0)`), claim payout can include native transfer from the hook.
-Deployment/ensure/preflight flows validate recipient native-payout compatibility; zero-address checks alone are not enough.
-If governance changes `hookFeeRecipient` later, this compatibility requirement must still be preserved.
+Deployment/ensure/preflight flows validate owner native-payout compatibility; zero-address checks alone are not enough.
+If ownership changes later, this compatibility requirement must still be preserved.
 
 ## Is `approxLpFeesUsd6` accounting-accurate?
 

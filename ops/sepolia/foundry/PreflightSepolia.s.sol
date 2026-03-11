@@ -46,21 +46,20 @@ contract PreflightSepolia is Script {
         }
 
         if (hookValidation.ok) {
-            address hookFeeRecipient;
+            address payoutRecipient;
             address payoutSender;
             bool hookDeployed = cfg.hookAddress != address(0) && cfg.hookAddress.code.length > 0;
 
             if (hookDeployed) {
-                hookFeeRecipient = VolumeDynamicFeeHook(payable(cfg.hookAddress)).hookFeeRecipient();
+                payoutRecipient = VolumeDynamicFeeHook(payable(cfg.hookAddress)).owner();
                 payoutSender = cfg.hookAddress;
             } else {
-                address owner = vm.envOr("OWNER", cfg.deployer);
-                hookFeeRecipient = vm.envOr("HOOK_FEE_ADDRESS", owner);
-                payoutSender = owner;
+                payoutRecipient = vm.envOr("OWNER", cfg.deployer);
+                payoutSender = payoutRecipient;
             }
 
-            (bool nativeRecipientOk, string memory nativeRecipientReason) = NativeRecipientValidationLib.validateHookFeeRecipientForNativePool(
-                cfg.token0, cfg.token1, hookFeeRecipient, payoutSender
+            (bool nativeRecipientOk, string memory nativeRecipientReason) = NativeRecipientValidationLib.validatePayoutRecipientForNativePool(
+                cfg.token0, cfg.token1, payoutRecipient, payoutSender
             );
             if (!nativeRecipientOk) {
                 hookValidation.ok = false;

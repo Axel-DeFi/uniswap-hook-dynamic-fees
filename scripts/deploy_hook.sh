@@ -24,11 +24,9 @@ set -euo pipefail
 #   EMERGENCY_FLOOR_CLOSEVOL_USD6, EMERGENCY_CONFIRM_PERIODS
 # Optional:
 #   OWNER            (defaults to deployer address)
-#   HOOK_FEE_ADDRESS (defaults to OWNER when unset)
 #
 # Owner behavior:
-#   - OWNER defines privileged admin account.
-#   - HOOK_FEE_ADDRESS defines payout recipient for hook fees.
+#   - OWNER defines privileged admin account and HookFee payout recipient.
 
 usage() {
   cat <<'EOF'
@@ -245,12 +243,6 @@ if [[ -z "${OWNER:-}" ]]; then
 fi
 export OWNER
 
-if [[ -z "${HOOK_FEE_ADDRESS:-}" ]]; then
-  HOOK_FEE_ADDRESS="${OWNER}"
-  echo "==> HOOK_FEE_ADDRESS not set; defaulting to OWNER: ${HOOK_FEE_ADDRESS}"
-fi
-export HOOK_FEE_ADDRESS
-
 # Optional safety: verify STABLE_DECIMALS matches on-chain decimals()
 if [[ -z "${SKIP_DECIMALS_CHECK:-}" ]]; then
   echo "==> Checking stable decimals for ${STABLE} ..."
@@ -272,7 +264,7 @@ export DEPLOY_JSON_PATH="${OUT_PATH}"
 # Pre-encode constructor args in bash to avoid IR stack issues in script-level abi.encode.
 read -r POOL_CURRENCY0 POOL_CURRENCY1 <<< "$(sort_pool_tokens "${VOLATILE}" "${STABLE}")"
 CONSTRUCTOR_ARGS_HEX="$(cast abi-encode \
-  "constructor(address,address,address,int24,address,uint8,uint24,uint24,uint24,uint32,uint8,uint16,uint32,address,address,uint16,uint64,uint16,uint8,uint64,uint16,uint8,uint8,uint16,uint8,uint16,uint8,uint64,uint8)" \
+  "constructor(address,address,address,int24,address,uint8,uint24,uint24,uint24,uint32,uint8,uint16,uint32,address,uint16,uint64,uint16,uint8,uint64,uint16,uint8,uint8,uint16,uint8,uint16,uint8,uint64,uint8)" \
   "${POOL_MANAGER}" \
   "${POOL_CURRENCY0}" \
   "${POOL_CURRENCY1}" \
@@ -287,7 +279,6 @@ CONSTRUCTOR_ARGS_HEX="$(cast abi-encode \
   "${DEADBAND_BPS}" \
   "${LULL_RESET_SECONDS}" \
   "${OWNER}" \
-  "${HOOK_FEE_ADDRESS}" \
   "${HOOK_FEE_PERCENT}" \
   "${MIN_CLOSEVOL_TO_CASH_USD6}" \
   "${UP_R_TO_CASH_BPS}" \
@@ -348,30 +339,5 @@ PY
 )"
 
 echo "==> Hook deployed at ${HOOK_ADDRESS}"
-
-if [[ "$(lower "${OWNER}")" != "$(lower "${DEPLOYER_ADDR}")" ]]; then
-  echo "WARN: OWNER=${OWNER} differs from signer ${DEPLOYER_ADDR}; skipping post-deploy on-chain setter calls."
-  echo "      Run pause/setter/unpause from the OWNER account to finish configuration."
-  echo "==> Wrote ${OUT_PATH}"
-  exit 0
-fi
-
-CONTROLLER_PARAMS_TUPLE="(${MIN_CLOSEVOL_TO_CASH_USD6},${UP_R_TO_CASH_BPS},${CASH_HOLD_PERIODS},${MIN_CLOSEVOL_TO_EXTREME_USD6},${UP_R_TO_EXTREME_BPS},${UP_EXTREME_CONFIRM_PERIODS},${EXTREME_HOLD_PERIODS},${DOWN_R_FROM_EXTREME_BPS},${DOWN_EXTREME_CONFIRM_PERIODS},${DOWN_R_FROM_CASH_BPS},${DOWN_CASH_CONFIRM_PERIODS},${EMERGENCY_FLOOR_CLOSEVOL_USD6},${EMERGENCY_CONFIRM_PERIODS})"
-
-echo "==> On-chain config: pause -> regime fees -> timing params -> controller params -> hook fee recipient -> hook fee schedule -> unpause"
-cast send "${HOOK_ADDRESS}" "pause()" --rpc-url "${RPC_URL}" --private-key "${PRIVATE_KEY}" >/dev/null
-cast send "${HOOK_ADDRESS}" "setRegimeFees(uint24,uint24,uint24)" \
-  "${FLOOR_FEE_PIPS}" "${CASH_FEE_PIPS}" "${EXTREME_FEE_PIPS}" \
-  --rpc-url "${RPC_URL}" --private-key "${PRIVATE_KEY}" >/dev/null
-cast send "${HOOK_ADDRESS}" "setTimingParams(uint32,uint8,uint32,uint16)" \
-  "${PERIOD_SECONDS}" "${EMA_PERIODS}" "${LULL_RESET_SECONDS}" "${DEADBAND_BPS}" \
-  --rpc-url "${RPC_URL}" --private-key "${PRIVATE_KEY}" >/dev/null
-cast send "${HOOK_ADDRESS}" "setControllerParams((uint64,uint16,uint8,uint64,uint16,uint8,uint8,uint16,uint8,uint16,uint8,uint64,uint8))" \
-  "${CONTROLLER_PARAMS_TUPLE}" --rpc-url "${RPC_URL}" --private-key "${PRIVATE_KEY}" >/dev/null
-cast send "${HOOK_ADDRESS}" "setHookFeeRecipient(address)" \
-  "${HOOK_FEE_ADDRESS}" --rpc-url "${RPC_URL}" --private-key "${PRIVATE_KEY}" >/dev/null
-cast send "${HOOK_ADDRESS}" "scheduleHookFeePercentChange(uint16)" \
-  "${HOOK_FEE_PERCENT}" --rpc-url "${RPC_URL}" --private-key "${PRIVATE_KEY}" >/dev/null
-cast send "${HOOK_ADDRESS}" "unpause()" --rpc-url "${RPC_URL}" --private-key "${PRIVATE_KEY}" >/dev/null
 
 echo "==> Wrote ${OUT_PATH}"

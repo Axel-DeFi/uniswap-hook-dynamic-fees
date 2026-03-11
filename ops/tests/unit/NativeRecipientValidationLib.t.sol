@@ -24,7 +24,7 @@ contract NativeRecipientValidationLibTest is Test {
     address internal constant EOA_RECIPIENT = address(0x000000000000000000000000000000000000cafE);
 
     function test_nativePool_eoaRecipient_passes() public {
-        (bool ok, string memory reason) = NativeRecipientValidationLib.validateHookFeeRecipientForNativePool(
+        (bool ok, string memory reason) = NativeRecipientValidationLib.validatePayoutRecipientForNativePool(
             address(0), TOKEN_A, EOA_RECIPIENT, SENDER
         );
 
@@ -35,19 +35,19 @@ contract NativeRecipientValidationLibTest is Test {
     function test_nativePool_rejectingContractRecipient_fails() public {
         RejectsNativeRecipient recipient = new RejectsNativeRecipient();
 
-        (bool ok, string memory reason) = NativeRecipientValidationLib.validateHookFeeRecipientForNativePool(
+        (bool ok, string memory reason) = NativeRecipientValidationLib.validatePayoutRecipientForNativePool(
             TOKEN_A, address(0), address(recipient), SENDER
         );
 
         assertFalse(ok);
-        assertEq(reason, "HOOK_FEE_ADDRESS cannot receive native payout from hook");
+        assertEq(reason, "payout recipient cannot receive native payout from hook");
     }
 
     function test_nativePool_acceptingContractRecipient_passes() public {
         AcceptsNativeRecipient recipient = new AcceptsNativeRecipient();
         uint256 beforeBalance = address(recipient).balance;
 
-        (bool ok, string memory reason) = NativeRecipientValidationLib.validateHookFeeRecipientForNativePool(
+        (bool ok, string memory reason) = NativeRecipientValidationLib.validatePayoutRecipientForNativePool(
             TOKEN_A, address(0), address(recipient), SENDER
         );
 
@@ -59,7 +59,7 @@ contract NativeRecipientValidationLibTest is Test {
     function test_nonNativePool_skips_nativeRecipientRequirement() public {
         RejectsNativeRecipient recipient = new RejectsNativeRecipient();
 
-        (bool ok, string memory reason) = NativeRecipientValidationLib.validateHookFeeRecipientForNativePool(
+        (bool ok, string memory reason) = NativeRecipientValidationLib.validatePayoutRecipientForNativePool(
             TOKEN_A, TOKEN_B, address(recipient), SENDER
         );
 

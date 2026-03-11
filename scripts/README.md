@@ -14,8 +14,7 @@ Deployment/mining must include:
 
 ## Core config concepts
 
-- `OWNER`: admin role for hook configuration and emergency actions.
-- `HOOK_FEE_ADDRESS`: claim recipient for accrued HookFees.
+- `OWNER`: admin role and claim recipient for accrued HookFees.
 - `HOOK_FEE_PERCENT`: HookFee percent (0..10, timelocked in contract).
 - `FLOOR_TIER`, `CASH_TIER`, `EXTREME_TIER`: explicit LP fee regime model.
 - `STABLE`, `STABLE_DECIMALS`: telemetry quote token and scaling mode.
@@ -30,6 +29,7 @@ Deployment/mining must include:
 
 Uses:
 - `scripts/foundry/DeployHook.s.sol`
+- Deployment is constructor-driven only; no post-deploy admin setter phase is executed.
 
 ### Create + initialize pool
 
@@ -81,9 +81,9 @@ Primary artifacts:
 - Threshold updates are pending-state only, bounded to `1e6..10e6`, and activate at next period boundary.
 - Threshold updates intentionally have no timelock; recalibration target cadence is 5 days offchain.
 - Claim payout path uses PoolManager accounting withdrawal (`unlock` -> `burn` -> `take`).
-- Full claim path is `claimAllHookFees()` only; recipient override is intentionally unavailable.
-- For native-asset pools (`token0 == address(0)` or `token1 == address(0)`), deploy/ensure/preflight validates that `HOOK_FEE_ADDRESS` can receive native payout from hook sender context.
-- Zero-address recipient checks alone are insufficient in native-asset pools; if governance changes recipient later, native compatibility must still hold.
+- Full claim path is `claimAllHookFees()` only and always pays current `owner()`.
+- For native-asset pools (`token0 == address(0)` or `token1 == address(0)`), deploy/ensure/preflight validates that current `owner()` can receive native payout from hook sender context.
+- Ownership transfer (`proposeNewOwner` -> `acceptOwner`) automatically moves payout destination without extra sync calls.
 - `approxLpFeesUsd6` is approximate analytics, not accounting output.
 - Pool key uses strict dynamic fee flag matching (`key.fee == LPFeeLibrary.DYNAMIC_FEE_FLAG`).
 - `emergencyFloorCloseVolUsd6` must satisfy `0 < emergencyFloorCloseVolUsd6 < minCloseVolToCashUsd6`.

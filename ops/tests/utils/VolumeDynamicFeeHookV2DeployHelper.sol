@@ -45,7 +45,6 @@ abstract contract VolumeDynamicFeeHookV2DeployHelper {
         uint16 deadbandBps,
         uint32 lullResetSeconds,
         address owner,
-        address hookFeeRecipient,
         uint16 hookFeePercent
     ) internal pure returns (bytes memory) {
         return abi.encode(
@@ -63,7 +62,6 @@ abstract contract VolumeDynamicFeeHookV2DeployHelper {
             deadbandBps,
             lullResetSeconds,
             owner,
-            hookFeeRecipient,
             hookFeePercent,
             V2_MIN_CLOSEVOL_TO_CASH_USD6,
             V2_UP_R_TO_CASH_BPS,
@@ -96,7 +94,6 @@ abstract contract VolumeDynamicFeeHookV2DeployHelper {
         uint16 deadbandBps,
         uint32 lullResetSeconds,
         address owner,
-        address hookFeeRecipient,
         uint16 hookFeePercent
     ) internal returns (VolumeDynamicFeeHook hook) {
         hook = new VolumeDynamicFeeHook(
@@ -114,7 +111,6 @@ abstract contract VolumeDynamicFeeHookV2DeployHelper {
             deadbandBps,
             lullResetSeconds,
             owner,
-            hookFeeRecipient,
             hookFeePercent,
             V2_MIN_CLOSEVOL_TO_CASH_USD6,
             V2_UP_R_TO_CASH_BPS,
@@ -148,7 +144,6 @@ abstract contract VolumeDynamicFeeHookV2DeployHelper {
         uint16 deadbandBps,
         uint32 lullResetSeconds,
         address owner,
-        address hookFeeRecipient,
         uint16 hookFeePercent
     ) internal returns (VolumeDynamicFeeHook hook) {
         hook = new VolumeDynamicFeeHook{salt: salt}(
@@ -166,7 +161,6 @@ abstract contract VolumeDynamicFeeHookV2DeployHelper {
             deadbandBps,
             lullResetSeconds,
             owner,
-            hookFeeRecipient,
             hookFeePercent,
             V2_MIN_CLOSEVOL_TO_CASH_USD6,
             V2_UP_R_TO_CASH_BPS,

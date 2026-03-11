@@ -73,7 +73,6 @@ contract VolumeDynamicFeeHookFuzzTest is Test, VolumeDynamicFeeHookV2DeployHelpe
             DEADBAND_BPS,
             LULL_RESET_SECONDS,
             address(this),
-            address(this),
             V2_INITIAL_HOOK_FEE_PERCENT
         );
 
@@ -95,7 +94,6 @@ contract VolumeDynamicFeeHookFuzzTest is Test, VolumeDynamicFeeHookV2DeployHelpe
             EMA_PERIODS,
             DEADBAND_BPS,
             LULL_RESET_SECONDS,
-            address(this),
             address(this),
             V2_INITIAL_HOOK_FEE_PERCENT
         );

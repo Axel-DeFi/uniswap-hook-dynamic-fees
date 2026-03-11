@@ -20,15 +20,13 @@ See `LICENSE` for full terms.
   - `afterSwap`
   - `afterSwapReturnDelta`
 - Administrative role is `Owner`.
-- `HookFeeRecipient` is a separate accounting entity from `Owner`.
+- Current `owner()` is always the HookFee payout recipient.
 - Ownership transfer is two-step; `proposeNewOwner(...)` rejects zero address and current owner.
-- `setHookFeeRecipient(...)` is immediate (no timelock) by design.
-- No-op `setHookFeeRecipient(...)` calls (same address) are ignored and do not emit `HookFeeRecipientUpdated`.
 - `HookFeePercent` is timelocked for 48 hours and capped at 10% (hard constant).
 - HookFee is based on an approximate LP-fee estimate from the unspecified side; exact-input vs exact-output can diverge by design.
 - HookFee accrual is persisted as PoolManager ERC6909 claims and claimed via `unlock` + `burn` + `take`.
-- Claim-all path is single and explicit: `claimAllHookFees()` always pays to current `hookFeeRecipient`.
-- For native-asset pools (`token0 == address(0)` or `token1 == address(0)`), deploy/ensure/preflight flows validate that `hookFeeRecipient` can accept native payout from the hook claim path.
+- Claim-all path is single and explicit: `claimAllHookFees()` always pays to current `owner()`.
+- For native-asset pools (`token0 == address(0)` or `token1 == address(0)`), deploy/ensure/preflight flows validate that current `owner()` can accept native payout from the hook claim path.
 - `pause()/unpause()` freeze/resume regulator transitions at the current LP fee regime (no automatic floor reset, no swap stop, no HookFee stop).
 - `setRegimeFees(...)` (paused-only) preserves EMA, resets hold/streak counters, starts a fresh open period, and updates current LP fee immediately if active regime fee changed.
 - `setControllerParams(...)` (paused-only) preserves active regime + EMA, clears hold/streak counters, and starts a fresh open period.
@@ -69,7 +67,6 @@ See `LICENSE` for full terms.
 
 - Dust-splitting remains a residual architectural/model risk. The configurable dust filter mitigates it, and the default `$4 / 4e6` was selected from observed v1 telemetry. This is not a formal proof against all fragmentation patterns on cheap L2.
 - Wash-trading / regime-poisoning remains a residual economic manipulation risk (more realistic as competitor-funded distortion/DoS in adversarial routing environments).
-- `setHookFeeRecipient(...)` remains immediate (owner governance/key risk, operational mitigation only).
 - HookFee percent timelock is intentionally transparent; observable pending changes mainly affect HookFee timing while LP fee ownership/accrual remains unchanged.
 - `scheduleMinCountedSwapUsd6Change(...)` has no timelock by design (pending + next-period activation only).
 - Overdue period catch-up can close multiple periods in one swap. Only the first closed period uses accumulated close volume, while subsequent closed periods use zero close volume; this can produce multi-step downward transitions in one transaction and is accepted as an architectural/economic trade-off in current scope.
@@ -79,8 +76,8 @@ See `LICENSE` for full terms.
 - Production owner must be a multisig. EOA owner is acceptable only for local/dev/test.
 - Hot-wallet owner usage is unacceptable for production.
 - Owner key material should be held in cold/hardware custody.
-- Zero-address recipient checks alone are insufficient for native-asset pools; recipient native-payout compatibility must be preserved if governance later updates `hookFeeRecipient`.
-- Monitor `PeriodClosed`, `HookFeeRecipientUpdated`, `RegimeFeesUpdated`, `ControllerParamsUpdated`, `TimingParamsUpdated`, `Paused`, `Unpaused`, and emergency-reset events; alert on repeated abnormal regime escalations.
+- For native-asset pools, ownership changes must keep native payout compatibility because payout always follows current `owner()`.
+- Monitor `PeriodClosed`, `RegimeFeesUpdated`, `ControllerParamsUpdated`, `TimingParamsUpdated`, `Paused`, `Unpaused`, and emergency-reset events; alert on repeated abnormal regime escalations.
 - Monitoring should treat repeated multi-close downward `PeriodClosed` sequences as notable routing/yield behavior.
 
 ## Build and test

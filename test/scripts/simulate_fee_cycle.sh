@@ -122,7 +122,6 @@ HOOK_EMERGENCY_FLOOR_CLOSEVOL_USD6=0
 HOOK_EMERGENCY_CONFIRM_PERIODS=0
 HOOK_MAX_HOOK_FEE_PERCENT=0
 HOOK_OWNER_ADDR=""
-HOOK_HOOK_FEE_RECIPIENT=""
 NOT_POOL_MANAGER_SELECTOR=""
 MAX_BALANCE_SPEND_PCT="${MAX_BALANCE_SPEND_PCT:-100}"
 BALANCE_ERROR_FORCE_ATTEMPTS=0
@@ -632,7 +631,6 @@ HOOK_EMERGENCY_FLOOR_CLOSEVOL_USD6="$(cast_rpc call --rpc-url "${RPC_URL}" "${HO
 HOOK_EMERGENCY_CONFIRM_PERIODS="$(cast_rpc call --rpc-url "${RPC_URL}" "${HOOK_ADDRESS}" "emergencyConfirmPeriods()(uint8)" | awk '{print $1}')"
 HOOK_MAX_HOOK_FEE_PERCENT="$(cast_rpc call --rpc-url "${RPC_URL}" "${HOOK_ADDRESS}" "MAX_HOOK_FEE_PERCENT()(uint16)" | awk '{print $1}')"
 HOOK_OWNER_ADDR="$(cast_rpc call --rpc-url "${RPC_URL}" "${HOOK_ADDRESS}" "owner()(address)" | awk '{print $1}')"
-HOOK_HOOK_FEE_RECIPIENT="$(cast_rpc call --rpc-url "${RPC_URL}" "${HOOK_ADDRESS}" "hookFeeRecipient()(address)" | awk '{print $1}')"
 if ! [[ "${HOOK_REGIME_FLOOR}" =~ ^[0-9]+$ \
      && "${HOOK_REGIME_EXTREME}" =~ ^[0-9]+$ \
      && "${HOOK_REGIME_CASH}" =~ ^[0-9]+$ \
@@ -657,8 +655,7 @@ if ! [[ "${HOOK_REGIME_FLOOR}" =~ ^[0-9]+$ \
      && "${HOOK_EMERGENCY_FLOOR_CLOSEVOL_USD6}" =~ ^[0-9]+$ \
      && "${HOOK_EMERGENCY_CONFIRM_PERIODS}" =~ ^[0-9]+$ \
      && "${HOOK_MAX_HOOK_FEE_PERCENT}" =~ ^[0-9]+$ \
-     && "${HOOK_OWNER_ADDR}" =~ ^0x[0-9a-fA-F]{40}$ \
-     && "${HOOK_HOOK_FEE_RECIPIENT}" =~ ^0x[0-9a-fA-F]{40}$ ]]; then
+     && "${HOOK_OWNER_ADDR}" =~ ^0x[0-9a-fA-F]{40}$ ]]; then
   echo "ERROR: failed to read hook runtime params."
   exit 1
 fi
@@ -1023,11 +1020,10 @@ run_cases_anomaly_checks() {
     "${CURRENCY1}" \
     1 || return 1
   expect_hook_call_revert_contains \
-    "ANOM-12 onlyOwner guard (setHookFeeRecipient)" \
+    "ANOM-12 onlyOwner guard (claimAllHookFees)" \
     "${sel_not_owner}" \
     "${outsider}" \
-    "setHookFeeRecipient(address)" \
-    "${outsider}" || return 1
+    "claimAllHookFees()" || return 1
   expect_hook_call_revert_contains \
     "ANOM-13 onlyOwner guard (pause)" \
     "${sel_not_owner}" \

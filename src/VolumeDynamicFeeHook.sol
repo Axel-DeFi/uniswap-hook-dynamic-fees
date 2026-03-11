@@ -168,9 +168,6 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
     /// @notice Emitted when accrued HookFees are claimed.
     event HookFeesClaimed(address indexed to, uint256 amount0, uint256 amount1);
 
-    /// @notice Emitted when HookFee recipient changes.
-    event HookFeeRecipientUpdated(address indexed previousRecipient, address indexed newRecipient);
-
     /// @notice Emitted when owner changes.
     event OwnerUpdated(address indexed previousOwner, address indexed newOwner);
 
@@ -260,9 +257,6 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
     error ClaimTooLarge();
     error EthTransferFailed();
     error EthReceiveRejected();
-    error HookFeesAccrued();
-
-    error HookFeeRecipientRequired();
     error HookFeePercentLimitExceeded(uint16 requestedPercent, uint16 maxAllowedPercent);
     error PendingHookFeePercentChangeExists();
     error NoPendingHookFeePercentChange();
@@ -282,8 +276,6 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
 
     address private _owner;
     address private _pendingOwner;
-
-    address private _hookFeeRecipient;
 
     bool private _hasPendingHookFeePercentChange;
     uint16 private _pendingHookFeePercent;
@@ -337,7 +329,6 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
     /// @param _deadbandBps Deadband threshold in bps.
     /// @param _lullResetSeconds Lull-reset inactivity threshold in seconds. Must be strictly greater than `_periodSeconds`.
     /// @param ownerAddr Initial owner address.
-    /// @param hookFeeRecipientAddr Recipient for claimed HookFees.
     /// @param hookFeePercent_ Initial HookFee percent of LP fee.
     /// @param _minCloseVolToCashUsd6 Minimum close volume for floor->cash transition.
     /// @param _upRToCashBps Ratio threshold for floor->cash transition.
@@ -367,7 +358,6 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
         uint16 _deadbandBps,
         uint32 _lullResetSeconds,
         address ownerAddr,
-        address hookFeeRecipientAddr,
         uint16 hookFeePercent_,
         uint64 _minCloseVolToCashUsd6,
         uint16 _upRToCashBps,
@@ -408,7 +398,6 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
 
         _setTimingParamsInternal(_periodSeconds, _emaPeriods, _lullResetSeconds, _deadbandBps);
         _setOwnerInternal(ownerAddr);
-        _setHookFeeRecipientInternal(hookFeeRecipientAddr);
         _setHookFeePercentInternal(hookFeePercent_);
         _setRegimeFeesInternal(_floorFee, _cashFee, _extremeFee);
 
@@ -432,7 +421,6 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
         _config.minCountedSwapUsd6 = DEFAULT_MIN_COUNTED_SWAP_USD6;
 
         emit OwnerUpdated(address(0), ownerAddr);
-        emit HookFeeRecipientUpdated(address(0), hookFeeRecipientAddr);
         emit HookFeePercentChanged(0, hookFeePercent_);
         emit RegimeFeesUpdated(_floorFee, _cashFee, _extremeFee);
         emit ControllerParamsUpdated(
@@ -807,11 +795,6 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
         return _pendingOwner;
     }
 
-    /// @notice Returns HookFee recipient address.
-    function hookFeeRecipient() public view returns (address) {
-        return _hookFeeRecipient;
-    }
-
     /// @notice Returns current HookFee percent of LP fee.
     function hookFeePercent() public view returns (uint16) {
         return _config.hookFeePercent;
@@ -934,22 +917,10 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
         emit OwnerUpdated(oldOwner, pending);
     }
 
-    /// @notice Updates HookFee recipient.
-    /// @dev Recipient may be zero only when HookFee percent is zero and no accrued HookFees remain.
-    /// @dev Change is immediate by design (no timelock).
-    /// @dev No-op updates are ignored and do not emit `HookFeeRecipientUpdated`.
-    function setHookFeeRecipient(address newRecipient) external onlyOwner {
-        address oldRecipient = _hookFeeRecipient;
-        if (oldRecipient == newRecipient) return;
-        _setHookFeeRecipientInternal(newRecipient);
-        emit HookFeeRecipientUpdated(oldRecipient, newRecipient);
-    }
-
     /// @notice Schedules HookFee percent change through 48h timelock.
     function scheduleHookFeePercentChange(uint16 newHookFeePercent) external onlyOwner {
         if (_hasPendingHookFeePercentChange) revert PendingHookFeePercentChangeExists();
         _validateHookFeePercent(newHookFeePercent);
-        if (newHookFeePercent > 0 && _hookFeeRecipient == address(0)) revert HookFeeRecipientRequired();
 
         uint64 executeAfter = _now64() + HOOK_FEE_PERCENT_CHANGE_DELAY;
         _hasPendingHookFeePercentChange = true;
@@ -1214,16 +1185,16 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
     }
 
     /// @notice Claims selected amounts of accrued HookFees.
-    /// @dev `to` must equal currently configured `hookFeeRecipient`.
+    /// @dev `to` must equal current `owner()`.
     /// @dev Uses PoolManager accounting withdrawal flow (`unlock` -> `burn` -> `take`) to transfer funds to recipient.
     function claimHookFees(address to, uint256 amount0, uint256 amount1) external onlyOwner {
         _claimHookFeesInternal(to, amount0, amount1);
     }
 
-    /// @notice Claims all accrued HookFees to current HookFee recipient.
+    /// @notice Claims all accrued HookFees to current `owner()`.
     /// @dev Uses PoolManager accounting withdrawal flow (`unlock` -> `burn` -> `take`) to transfer funds to recipient.
     function claimAllHookFees() external onlyOwner {
-        _claimHookFeesInternal(_hookFeeRecipient, _hookFees0, _hookFees1);
+        _claimHookFeesInternal(_owner, _hookFees0, _hookFees1);
     }
 
     /// @inheritdoc IUnlockCallback
@@ -1267,14 +1238,6 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
         _owner = newOwner;
     }
 
-    function _setHookFeeRecipientInternal(address newRecipient) internal {
-        if (newRecipient == address(0)) {
-            if (_hookFees0 > 0 || _hookFees1 > 0) revert HookFeesAccrued();
-            if (_config.hookFeePercent > 0) revert HookFeeRecipientRequired();
-        }
-        _hookFeeRecipient = newRecipient;
-    }
-
     function _validateHookFeePercent(uint16 newHookFeePercent) internal pure {
         if (newHookFeePercent > MAX_HOOK_FEE_PERCENT) {
             revert HookFeePercentLimitExceeded(newHookFeePercent, MAX_HOOK_FEE_PERCENT);
@@ -1283,7 +1246,6 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
 
     function _setHookFeePercentInternal(uint16 newHookFeePercent) internal {
         _validateHookFeePercent(newHookFeePercent);
-        if (newHookFeePercent > 0 && _hookFeeRecipient == address(0)) revert HookFeeRecipientRequired();
         _config.hookFeePercent = newHookFeePercent;
     }
 
@@ -1385,33 +1347,6 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
         _config.extremeFee = extremeFee_;
     }
 
-    function _resetOpenPeriodOnly() internal {
-        (
-            ,
-            uint96 emaVolScaled,
-            uint64 periodStart,
-            uint8 feeIdx,
-            bool paused_,
-            uint8 holdRemaining,
-            uint8 upExtremeStreak,
-            uint8 downStreak,
-            uint8 emergencyStreak
-        ) = _unpackState(_state);
-
-        uint64 nextPeriodStart = periodStart == 0 ? uint64(0) : _now64();
-        _state = _packState(
-            0,
-            emaVolScaled,
-            nextPeriodStart,
-            feeIdx,
-            paused_,
-            holdRemaining,
-            upExtremeStreak,
-            downStreak,
-            emergencyStreak
-        );
-    }
-
     function _emergencyReset(uint8 targetFeeIdx, bool toFloor) internal {
         (,, uint64 periodStart, uint8 oldFeeIdx, bool paused_,,,,) = _unpackState(_state);
 
@@ -1450,7 +1385,7 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
     /// @notice Executes HookFee claim through PoolManager unlock callback flow.
     /// @dev Internal accounting is reduced before unlock; whole operation reverts atomically on failure.
     function _claimHookFeesInternal(address to, uint256 amount0, uint256 amount1) internal {
-        if (to != _hookFeeRecipient || to == address(0)) revert InvalidRecipient();
+        if (to != _owner) revert InvalidRecipient();
         if (amount0 > _hookFees0 || amount1 > _hookFees1) revert ClaimTooLarge();
         if (amount0 == 0 && amount1 == 0) return;
 

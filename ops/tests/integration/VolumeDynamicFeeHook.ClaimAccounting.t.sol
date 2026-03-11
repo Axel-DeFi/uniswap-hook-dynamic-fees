@@ -40,8 +40,6 @@ contract VolumeDynamicFeeHookClaimAccountingIntegrationTest is Test, VolumeDynam
 
     int24 internal constant TICK_SPACING = 60;
 
-    address internal recipient = address(0xBEEF);
-
     function setUp() public {
         manager = new PoolManager(address(this));
         swapRouter = new PoolSwapTest(IPoolManager(address(manager)));
@@ -80,7 +78,6 @@ contract VolumeDynamicFeeHookClaimAccountingIntegrationTest is Test, VolumeDynam
             DEADBAND_BPS,
             LULL_RESET_SECONDS,
             address(this),
-            recipient,
             V2_INITIAL_HOOK_FEE_PERCENT
         );
 
@@ -107,7 +104,6 @@ contract VolumeDynamicFeeHookClaimAccountingIntegrationTest is Test, VolumeDynam
             DEADBAND_BPS,
             LULL_RESET_SECONDS,
             address(this),
-            recipient,
             V2_INITIAL_HOOK_FEE_PERCENT
         );
 
@@ -128,7 +124,7 @@ contract VolumeDynamicFeeHookClaimAccountingIntegrationTest is Test, VolumeDynam
         liquidityRouter.modifyLiquidity(key, addParams, "");
     }
 
-    function test_claimHookFees_token1_path_increases_recipient_balance() public {
+    function test_claimHookFees_token1_path_increases_owner_balance() public {
         _swapExactInput(true, 9_000_000);
 
         (uint256 fees0, uint256 fees1) = hook.hookFeesAccrued();
@@ -136,12 +132,12 @@ contract VolumeDynamicFeeHookClaimAccountingIntegrationTest is Test, VolumeDynam
         assertGt(fees1, 0);
         assertEq(manager.balanceOf(address(hook), key.currency1.toId()), fees1);
 
-        uint256 recipientBefore = _balanceOf(key.currency1, recipient);
+        uint256 ownerBefore = _balanceOf(key.currency1, address(this));
 
-        hook.claimHookFees(recipient, 0, fees1);
+        hook.claimHookFees(address(this), 0, fees1);
 
-        uint256 recipientAfter = _balanceOf(key.currency1, recipient);
-        assertEq(recipientAfter - recipientBefore, fees1);
+        uint256 ownerAfter = _balanceOf(key.currency1, address(this));
+        assertEq(ownerAfter - ownerBefore, fees1);
 
         (fees0, fees1) = hook.hookFeesAccrued();
         assertEq(fees0, 0);
@@ -149,7 +145,7 @@ contract VolumeDynamicFeeHookClaimAccountingIntegrationTest is Test, VolumeDynam
         assertEq(manager.balanceOf(address(hook), key.currency1.toId()), 0);
     }
 
-    function test_claimHookFees_token0_path_increases_recipient_balance() public {
+    function test_claimHookFees_token0_path_increases_owner_balance() public {
         _swapExactInput(false, 9_000_000);
 
         (uint256 fees0, uint256 fees1) = hook.hookFeesAccrued();
@@ -157,12 +153,12 @@ contract VolumeDynamicFeeHookClaimAccountingIntegrationTest is Test, VolumeDynam
         assertEq(fees1, 0);
         assertEq(manager.balanceOf(address(hook), key.currency0.toId()), fees0);
 
-        uint256 recipientBefore = _balanceOf(key.currency0, recipient);
+        uint256 ownerBefore = _balanceOf(key.currency0, address(this));
 
-        hook.claimHookFees(recipient, fees0, 0);
+        hook.claimHookFees(address(this), fees0, 0);
 
-        uint256 recipientAfter = _balanceOf(key.currency0, recipient);
-        assertEq(recipientAfter - recipientBefore, fees0);
+        uint256 ownerAfter = _balanceOf(key.currency0, address(this));
+        assertEq(ownerAfter - ownerBefore, fees0);
 
         (fees0, fees1) = hook.hookFeesAccrued();
         assertEq(fees0, 0);
@@ -170,7 +166,7 @@ contract VolumeDynamicFeeHookClaimAccountingIntegrationTest is Test, VolumeDynam
         assertEq(manager.balanceOf(address(hook), key.currency0.toId()), 0);
     }
 
-    function test_claimAllHookFees_transfers_both_tokens_to_recipient() public {
+    function test_claimAllHookFees_transfers_both_tokens_to_owner() public {
         _swapExactInput(true, 9_000_000);
         _swapExactInput(false, 9_000_000);
 
@@ -178,22 +174,54 @@ contract VolumeDynamicFeeHookClaimAccountingIntegrationTest is Test, VolumeDynam
         assertGt(fees0, 0);
         assertGt(fees1, 0);
 
-        uint256 recipient0Before = _balanceOf(key.currency0, recipient);
-        uint256 recipient1Before = _balanceOf(key.currency1, recipient);
+        uint256 owner0Before = _balanceOf(key.currency0, address(this));
+        uint256 owner1Before = _balanceOf(key.currency1, address(this));
 
         hook.claimAllHookFees();
 
-        uint256 recipient0After = _balanceOf(key.currency0, recipient);
-        uint256 recipient1After = _balanceOf(key.currency1, recipient);
+        uint256 owner0After = _balanceOf(key.currency0, address(this));
+        uint256 owner1After = _balanceOf(key.currency1, address(this));
 
-        assertEq(recipient0After - recipient0Before, fees0);
-        assertEq(recipient1After - recipient1Before, fees1);
+        assertEq(owner0After - owner0Before, fees0);
+        assertEq(owner1After - owner1Before, fees1);
 
         (fees0, fees1) = hook.hookFeesAccrued();
         assertEq(fees0, 0);
         assertEq(fees1, 0);
         assertEq(manager.balanceOf(address(hook), key.currency0.toId()), 0);
         assertEq(manager.balanceOf(address(hook), key.currency1.toId()), 0);
+    }
+
+    function test_owner_transfer_moves_claim_destination_for_previously_accrued_fees() public {
+        _swapExactInput(true, 9_000_000);
+        _swapExactInput(false, 9_000_000);
+
+        (uint256 fees0, uint256 fees1) = hook.hookFeesAccrued();
+        assertGt(fees0, 0);
+        assertGt(fees1, 0);
+
+        address newOwner = address(0xBEEF);
+        uint256 newOwner0Before = _balanceOf(key.currency0, newOwner);
+        uint256 newOwner1Before = _balanceOf(key.currency1, newOwner);
+
+        hook.proposeNewOwner(newOwner);
+        vm.prank(newOwner);
+        hook.acceptOwner();
+
+        vm.expectRevert(VolumeDynamicFeeHook.NotOwner.selector);
+        hook.claimAllHookFees();
+
+        vm.prank(newOwner);
+        hook.claimAllHookFees();
+
+        uint256 newOwner0After = _balanceOf(key.currency0, newOwner);
+        uint256 newOwner1After = _balanceOf(key.currency1, newOwner);
+        assertEq(newOwner0After - newOwner0Before, fees0);
+        assertEq(newOwner1After - newOwner1Before, fees1);
+
+        (fees0, fees1) = hook.hookFeesAccrued();
+        assertEq(fees0, 0);
+        assertEq(fees1, 0);
     }
 
     function test_pending_minCountedSwapUsd6_activates_only_on_next_period_boundary_integration() public {

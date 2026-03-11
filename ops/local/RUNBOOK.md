@@ -61,12 +61,12 @@ Timelock visibility is intentional. The main exposed effect is HookFee timing; L
 ### HookFee claim settlement
 
 - Use `claimHookFees(...)` / `claimAllHookFees(...)` as owner.
-- `claimAllHookFees(...)` has no recipient overload; full claim always pays to current `hookFeeRecipient`.
+- `claimAllHookFees(...)` has no recipient overload; full claim always pays to current `owner()`.
 - Payout path is PoolManager accounting withdrawal: `unlock` -> `burn` -> `take`.
-- Recipient must match current `hookFeeRecipient`.
+- `claimHookFees(...)` requires `to == owner()`.
 - If pool includes native currency, recipient must be compatible with native payout from hook sender context.
 - Local preflight/deploy flow validates this compatibility before deployment/ensure.
-- If governance later changes recipient in a native-asset pool, keep this compatibility invariant.
+- If ownership changes later in a native-asset pool, keep this compatibility invariant.
 
 ## Pause vs emergency reset
 
@@ -113,8 +113,6 @@ Notes:
 
 ## Accepted governance risks
 
-- `setHookFeeRecipient(...)` is immediate (no timelock) by design.
-- No-op recipient update does not emit `HookFeeRecipientUpdated`.
 - Mitigation is operational: owner key controls + monitoring/alerting.
 - Production owner must be multisig; local EOA owner is acceptable only for dev/test.
 - Hot-wallet owner usage is unacceptable for production; use cold/hardware custody.
@@ -128,5 +126,5 @@ Controller safety note:
 ## Monitoring minimums
 
 - Track `PeriodClosed` and alert on repeated abnormal regime escalations.
-- Track admin/security events: `HookFeeRecipientUpdated`, `RegimeFeesUpdated`, `ControllerParamsUpdated`, `TimingParamsUpdated`, `Paused`, `Unpaused`, emergency-reset events.
+- Track admin/security events: `RegimeFeesUpdated`, `ControllerParamsUpdated`, `TimingParamsUpdated`, `Paused`, `Unpaused`, emergency-reset events.
 - Treat wash-trading and fee-poisoning as residual economic risks in adversarial routing environments.

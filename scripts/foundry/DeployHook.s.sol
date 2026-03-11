@@ -33,8 +33,7 @@ contract DeployHook is Script {
             ,
             ,
             ,
-            ,
-            address hookFeeRecipient,
+            address owner,
             ,
             uint64 minCloseVolToCashUsd6,
             ,
@@ -65,7 +64,6 @@ contract DeployHook is Script {
                 uint16,
                 uint32,
                 address,
-                address,
                 uint16,
                 uint64,
                 uint16,
@@ -95,8 +93,8 @@ contract DeployHook is Script {
         (address minedHookAddress, bytes32 salt) =
             HookMiner.find(CREATE2_DEPLOYER, flags, type(VolumeDynamicFeeHook).creationCode, constructorArgs);
 
-        (bool nativeRecipientOk, string memory nativeRecipientReason) = NativeRecipientValidationLib.validateHookFeeRecipientForNativePool(
-            poolCurrency0, poolCurrency1, hookFeeRecipient, minedHookAddress
+        (bool nativeRecipientOk, string memory nativeRecipientReason) = NativeRecipientValidationLib.validatePayoutRecipientForNativePool(
+            poolCurrency0, poolCurrency1, owner, minedHookAddress
         );
         require(nativeRecipientOk, nativeRecipientReason);
 
