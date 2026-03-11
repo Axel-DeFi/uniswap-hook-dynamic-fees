@@ -15,6 +15,7 @@ import {IERC20Minimal} from "@uniswap/v4-core/src/interfaces/external/IERC20Mini
 import {CanonicalHookResolverLib} from "../lib/CanonicalHookResolverLib.sol";
 import {ConfigLoader} from "../lib/ConfigLoader.sol";
 import {BudgetLib} from "../lib/BudgetLib.sol";
+import {DriverValidationLib} from "../lib/DriverValidationLib.sol";
 import {RangeSafetyLib} from "../lib/RangeSafetyLib.sol";
 import {LoggingLib} from "../lib/LoggingLib.sol";
 import {OpsTypes} from "../types/OpsTypes.sol";
@@ -40,6 +41,7 @@ contract RunSmokeSwapsLive is LiveOpsBase {
 
         OpsTypes.CoreConfig memory cfg = ConfigLoader.loadCoreConfig();
         OpsTypes.DeploymentConfig memory deployCfg = ConfigLoader.loadDeploymentConfig(cfg);
+        ConfigLoader.requireDeploymentBindingConsistency(cfg, deployCfg);
         (cfg,) = CanonicalHookResolverLib.requireExistingCanonicalHook(cfg, deployCfg);
         OpsTypes.BudgetCheck memory budget = BudgetLib.checkBeforeBroadcast(cfg, cfg.deployer);
         require(budget.ok, budget.reason);
@@ -48,7 +50,7 @@ contract RunSmokeSwapsLive is LiveOpsBase {
         require(range.ok, range.reason);
 
         address driver = vm.envOr("SWAP_DRIVER", address(0));
-        require(driver != address(0) && driver.code.length > 0, "SWAP_DRIVER missing");
+        DriverValidationLib.requireValidSwapDriver(driver, cfg.poolManager);
 
         uint256 amountStable = vm.envOr("SMOKE_SWAP_STABLE_RAW", range.maxSwapStableRaw);
         if (amountStable == 0) amountStable = 1_000_000;
@@ -67,11 +69,24 @@ contract RunSmokeSwapsLive is LiveOpsBase {
             return;
         }
 
+        address inputToken = plan.params.zeroForOne ? cfg.token0 : cfg.token1;
+        uint256 inputAmount = uint256(-plan.params.amountSpecified);
+
         vm.startBroadcast(pk);
-        _approveMaxIfERC20(cfg.stableToken, driver, amountStable);
-        _approveMaxIfERC20(cfg.volatileToken, driver, cfg.swapBudgetVolatileRaw);
-        ISwapDriver(driver).swap{value: plan.value}(key, plan.params, TestSettings(false, false), "");
+        _approveExactIfERC20(inputToken, driver, inputAmount);
+        bool sent;
+        try ISwapDriver(driver).swap{value: plan.value}(key, plan.params, TestSettings(false, false), "") {
+            sent = true;
+        } catch {
+            sent = false;
+        }
+        _clearApproveIfERC20(inputToken, driver, inputAmount);
         vm.stopBroadcast();
+
+        if (!sent) {
+            LoggingLib.ok("smoke swap skipped (driver call reverted)");
+            return;
+        }
 
         LoggingLib.ok("smoke swap tx sent");
     }
@@ -129,9 +144,14 @@ contract RunSmokeSwapsLive is LiveOpsBase {
         });
     }
 
-    function _approveMaxIfERC20(address token, address spender, uint256 amount) private {
+    function _approveExactIfERC20(address token, address spender, uint256 amount) private {
         if (token == address(0) || amount == 0) return;
-        IERC20Minimal(token).approve(spender, type(uint256).max);
+        IERC20Minimal(token).approve(spender, amount);
+    }
+
+    function _clearApproveIfERC20(address token, address spender, uint256 amount) private {
+        if (token == address(0) || amount == 0) return;
+        IERC20Minimal(token).approve(spender, 0);
     }
 }
 

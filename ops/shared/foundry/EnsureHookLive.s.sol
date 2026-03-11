@@ -24,6 +24,7 @@ contract EnsureHookLive is LiveOpsBase {
         OpsTypes.CoreConfig memory runtimeCfg = ConfigLoader.loadCoreConfig();
         OpsTypes.DeploymentConfig memory deployCfg = ConfigLoader.loadDeploymentConfig(runtimeCfg);
         ConfigLoader.validateChainId(runtimeCfg.chainIdExpected);
+        ConfigLoader.requireDeploymentBindingConsistency(runtimeCfg, deployCfg);
 
         string memory statePath = _statePath();
 

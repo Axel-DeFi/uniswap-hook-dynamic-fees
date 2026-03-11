@@ -12,6 +12,7 @@ contract ValidatePoolLive is LiveOpsBase {
     function run() external view {
         OpsTypes.CoreConfig memory cfg = ConfigLoader.loadCoreConfig();
         OpsTypes.DeploymentConfig memory deployCfg = ConfigLoader.loadDeploymentConfig(cfg);
+        ConfigLoader.requireDeploymentBindingConsistency(cfg, deployCfg);
         (cfg,) = CanonicalHookResolverLib.requireExistingCanonicalHook(cfg, deployCfg);
 
         require(cfg.poolManager != address(0), "POOL_MANAGER missing");

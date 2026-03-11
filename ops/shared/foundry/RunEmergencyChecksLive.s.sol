@@ -17,6 +17,7 @@ contract RunEmergencyChecksLive is LiveOpsBase {
 
         OpsTypes.CoreConfig memory cfg = ConfigLoader.loadCoreConfig();
         OpsTypes.DeploymentConfig memory deployCfg = ConfigLoader.loadDeploymentConfig(cfg);
+        ConfigLoader.requireDeploymentBindingConsistency(cfg, deployCfg);
         (cfg,) = CanonicalHookResolverLib.requireExistingCanonicalHook(cfg, deployCfg);
 
         OpsTypes.BudgetCheck memory budget = BudgetLib.checkBeforeBroadcast(cfg, cfg.deployer);

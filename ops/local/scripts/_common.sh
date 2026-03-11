@@ -28,6 +28,15 @@ load_env_file() {
   set +a
 }
 
+assert_frozen_deploy_env() {
+  local file="$1"
+  [[ -f "$file" ]] || return 0
+  if grep -Eq '^[[:space:]]*DEPLOY_[A-Z0-9_]+=.*[$]' "$file"; then
+    echo "ERROR: deploy snapshot must use literal DEPLOY_* values only: $file" >&2
+    return 1
+  fi
+}
+
 load_state_env() {
   local state_path="${OPS_LOCAL_STATE_PATH:-$STATE_PATH_DEFAULT}"
   [[ -f "$state_path" ]] || return 0
@@ -52,7 +61,7 @@ load_local_config() {
   [[ -f "$scenario_env" ]] && load_env_file "$scenario_env"
   [[ -f "${ROOT_DIR}/.env" ]] && load_env_file "${ROOT_DIR}/.env"
   local deploy_env="${OPS_DEPLOY_ENV:-$DEPLOY_ENV_DEFAULT}"
-  [[ -f "$deploy_env" ]] && load_env_file "$deploy_env"
+  [[ -f "$deploy_env" ]] && assert_frozen_deploy_env "$deploy_env" && load_env_file "$deploy_env"
 
   export OPS_RUNTIME="local"
   export OPS_DEPLOY_ENV="${OPS_DEPLOY_ENV:-$deploy_env}"

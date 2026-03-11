@@ -1,6 +1,17 @@
 # Ops Config Schema
 
-All values are loaded from environment variables (defaults + scenario overlay + process env).
+File-backed live config is loaded in this order:
+- `defaults.env`
+- scenario overlay
+- repository root `.env`
+- `deploy.env`
+
+After file loading, wrapper scripts may hydrate runtime-only addresses from state JSON:
+- `POOL_MANAGER`, `HOOK_ADDRESS`, `VOLATILE`, `STABLE` from `ops/<network>/out/state/*.addresses.json`
+- `SWAP_DRIVER`, `LIQUIDITY_DRIVER` from `ops/<network>/out/state/*.drivers.json`
+
+Canonical hook identity is derived only from `DEPLOY_*` keys, so state hydration must not change deployment
+snapshot inputs.
 
 ## Required keys
 
@@ -61,7 +72,14 @@ All values are loaded from environment variables (defaults + scenario overlay + 
 These keys live in `ops/<network>/config/deploy.env` for live profiles. They define the constructor snapshot used to
 derive the canonical CREATE2 hook address and must not be edited after the canonical hook is deployed. The ops shell
 loaders source `deploy.env` after scenario overlays and root `.env`, so `DEPLOY_*` values win if duplicates exist.
+`DEPLOY_*` entries must be literal values in `deploy.env`; shell interpolation like `${DEFAULT_OWNER}` is rejected so
+the snapshot cannot drift with outer environment changes.
 
+- `DEPLOY_POOL_MANAGER`
+- `DEPLOY_VOLATILE`
+- `DEPLOY_STABLE`
+- `DEPLOY_STABLE_DECIMALS`
+- `DEPLOY_TICK_SPACING`
 - `DEPLOY_OWNER`
 - `DEPLOY_FLOOR_FEE_PIPS`
 - `DEPLOY_CASH_FEE_PIPS`
@@ -120,5 +138,7 @@ Controller constraint notes:
 - `PERIODS_TO_WARP`
 - `WARP_CLOSE_PERIOD`
 - `INIT_SQRT_PRICE_X96` (needed for `EnsurePoolLive` if init tx is required)
-- `SWAP_DRIVER` (external helper contract for live swaps; auto-provisioned when wrappers detect missing state)
-- `LIQUIDITY_DRIVER` (external helper contract for live liquidity actions; auto-provisioned when wrappers detect missing state)
+- `SWAP_DRIVER` (external helper contract for live swaps; reused only if runtime codehash and bound `manager()`
+  match the expected canonical helper for the current `POOL_MANAGER`, otherwise auto-reprovisioned)
+- `LIQUIDITY_DRIVER` (external helper contract for live liquidity actions; same validation/reprovision rule as
+  `SWAP_DRIVER`)

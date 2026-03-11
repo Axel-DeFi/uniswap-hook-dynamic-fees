@@ -25,13 +25,15 @@ Sepolia validation scripts mirror local phase names, with explicit read-only and
 
 ## Notes
 
-- Config layering: `defaults.env` -> scenario overlay -> `.env` -> process env.
+- Live file layering is `defaults.env` -> scenario overlay -> `.env` -> `deploy.env`; runtime state files may hydrate
+  current hook/pool/driver addresses afterward without changing `DEPLOY_*` identity inputs.
 - `SWAP_DRIVER` and `LIQUIDITY_DRIVER` are helper contracts used by live swap/liquidity phases.
-- If helper addresses are not set, wrappers auto-provision drivers via the shared `EnsureDriversLive` path and persist them in `ops/sepolia/out/state/sepolia.drivers.json`.
+- If helper addresses are missing or invalid, wrappers auto-provision canonical drivers via the shared
+  `EnsureDriversLive` path and persist them in `ops/sepolia/out/state/sepolia.drivers.json`.
 - `preflight` validates chain id, budget, token decimals, hook/pool consistency before broadcast-capable phases.
 - `smoke/full/rerun-safe/emergency` enforce preflight gate by default and stop on preflight failure.
 - `ensure-pool` and `ensure-liquidity` now also enforce the same preflight gate by default.
 - Broadcast-capable hook/pool/liquidity scripts resolve `HOOK_ADDRESS` to the canonical hook for the current
-  release/config before sending transactions.
+  release + deployment snapshot before sending transactions.
 - Set `OPS_REQUIRE_PREFLIGHT=0` only for explicit break-glass diagnostics.
 - Broadcast-capable scripts also re-check budget safety before sending transactions.

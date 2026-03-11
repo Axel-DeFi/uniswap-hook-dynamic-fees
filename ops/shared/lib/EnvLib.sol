@@ -63,6 +63,10 @@ library EnvLib {
         value = int24(raw);
     }
 
+    function requirePositiveInt24(string memory key) internal view returns (int24 value) {
+        value = toPositiveInt24Checked(requireUint(key), key);
+    }
+
     function envOrUint(string memory key, uint256 fallbackValue) internal view returns (uint256 value) {
         if (!hasKey(key)) return fallbackValue;
         value = vm.envUint(key);
@@ -91,6 +95,11 @@ library EnvLib {
     function envOrUint64(string memory key, uint64 fallbackValue) internal view returns (uint64 value) {
         if (!hasKey(key)) return fallbackValue;
         value = toUint64Checked(vm.envUint(key), key);
+    }
+
+    function envOrPositiveInt24(string memory key, int24 fallbackValue) internal view returns (int24 value) {
+        if (!hasKey(key)) return fallbackValue;
+        value = toPositiveInt24Checked(vm.envUint(key), key);
     }
 
     function envOrBool(string memory key, bool fallbackValue) internal view returns (bool value) {

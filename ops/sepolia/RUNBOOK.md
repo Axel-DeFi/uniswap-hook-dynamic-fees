@@ -37,6 +37,10 @@ is already occupied by invalid code it fails loud instead of silently repointing
 through the preflight gate by default before broadcast.
 `deploy.env` is sourced after scenario overlays and root `.env`, so `DEPLOY_*` keys remain the winning frozen
 constructor snapshot.
+`DEPLOY_*` entries in `deploy.env` must be literal values; shell interpolation is rejected. Set the exact recipient in
+`DEPLOY_OWNER` directly before first deploy/redeploy on Sepolia.
+Helper drivers are reused only if runtime codehash and bound `manager()` match the expected canonical helper for the
+configured `POOL_MANAGER`; otherwise wrappers reprovision them before liquidity/swap phases.
 
 ## Validation suite
 

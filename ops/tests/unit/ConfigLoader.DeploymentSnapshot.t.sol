@@ -12,6 +12,13 @@ contract DeploymentConfigHarness {
         OpsTypes.CoreConfig memory runtimeCfg = ConfigLoader.loadCoreConfig();
         return ConfigLoader.loadDeploymentConfig(runtimeCfg);
     }
+
+    function requireDeploymentBindingConsistency(
+        OpsTypes.CoreConfig memory runtimeCfg,
+        OpsTypes.DeploymentConfig memory deployCfg
+    ) external pure {
+        ConfigLoader.requireDeploymentBindingConsistency(runtimeCfg, deployCfg);
+    }
 }
 
 contract ConfigLoaderDeploymentSnapshotTest is Test {
@@ -25,6 +32,12 @@ contract ConfigLoaderDeploymentSnapshotTest is Test {
         _setBaseRuntimeEnv();
         OpsTypes.DeploymentConfig memory deployCfg = harness.loadDeploymentConfig();
 
+        assertEq(deployCfg.poolManager, address(0x000000000000000000000000000000000000aaaa));
+        assertEq(deployCfg.token0, address(0x0000000000000000000000000000000000007777));
+        assertEq(deployCfg.token1, address(0x0000000000000000000000000000000000009999));
+        assertEq(deployCfg.tickSpacing, 60);
+        assertEq(deployCfg.stableToken, address(0x0000000000000000000000000000000000009999));
+        assertEq(deployCfg.stableDecimals, 18);
         assertEq(deployCfg.owner, address(0xBEEF));
         assertEq(deployCfg.floorFeePips, 400);
         assertEq(deployCfg.cashFeePips, 2_500);
@@ -49,11 +62,22 @@ contract ConfigLoaderDeploymentSnapshotTest is Test {
         assertEq(deployCfg.emergencyConfirmPeriods, 3);
     }
 
-    function test_loadDeploymentConfig_live_requires_explicit_deploy_snapshot() public {
+    function test_loadDeploymentConfig_live_rejects_zero_deploy_owner() public {
         _setBaseRuntimeEnv();
-        vm.setEnv("DEPLOY_OWNER", "");
-        vm.expectRevert(abi.encodeWithSelector(ErrorLib.MissingEnv.selector, "DEPLOY_OWNER"));
+        vm.setEnv("DEPLOY_OWNER", "0x0000000000000000000000000000000000000000");
+        vm.expectRevert(abi.encodeWithSelector(ErrorLib.InvalidEnv.selector, "DEPLOY_OWNER", "zero address"));
         harness.loadDeploymentConfig();
+    }
+
+    function test_requireDeploymentBindingConsistency_rejects_runtime_binding_drift() public {
+        _setBaseRuntimeEnv();
+        OpsTypes.CoreConfig memory runtimeCfg = ConfigLoader.loadCoreConfig();
+        OpsTypes.DeploymentConfig memory deployCfg = harness.loadDeploymentConfig();
+
+        vm.expectRevert(
+            abi.encodeWithSelector(ErrorLib.InvalidEnv.selector, "POOL_MANAGER", "must match DEPLOY_POOL_MANAGER")
+        );
+        harness.requireDeploymentBindingConsistency(runtimeCfg, deployCfg);
     }
 
     function _setBaseRuntimeEnv() internal {
@@ -89,6 +113,11 @@ contract ConfigLoaderDeploymentSnapshotTest is Test {
         vm.setEnv("EMERGENCY_FLOOR_CLOSEVOL_USD6", "700000000");
         vm.setEnv("EMERGENCY_CONFIRM_PERIODS", "4");
 
+        vm.setEnv("DEPLOY_POOL_MANAGER", "0x000000000000000000000000000000000000AaAa");
+        vm.setEnv("DEPLOY_VOLATILE", "0x0000000000000000000000000000000000007777");
+        vm.setEnv("DEPLOY_STABLE", "0x0000000000000000000000000000000000009999");
+        vm.setEnv("DEPLOY_STABLE_DECIMALS", "18");
+        vm.setEnv("DEPLOY_TICK_SPACING", "60");
         vm.setEnv("DEPLOY_OWNER", "0x000000000000000000000000000000000000bEEF");
         vm.setEnv("DEPLOY_FLOOR_FEE_PIPS", "400");
         vm.setEnv("DEPLOY_CASH_FEE_PIPS", "2500");

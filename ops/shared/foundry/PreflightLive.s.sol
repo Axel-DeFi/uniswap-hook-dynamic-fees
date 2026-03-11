@@ -23,6 +23,7 @@ contract PreflightLive is LiveOpsBase {
         OpsTypes.CoreConfig memory cfg = ConfigLoader.loadCoreConfig();
         OpsTypes.DeploymentConfig memory deployCfg = ConfigLoader.loadDeploymentConfig(cfg);
         ConfigLoader.validateChainId(cfg.chainIdExpected);
+        ConfigLoader.requireDeploymentBindingConsistency(cfg, deployCfg);
 
         require(cfg.poolManager.code.length > 0, "POOL_MANAGER has no code");
 

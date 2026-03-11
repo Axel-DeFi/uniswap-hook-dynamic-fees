@@ -7,6 +7,7 @@ import {PoolSwapTest} from "@uniswap/v4-core/src/test/PoolSwapTest.sol";
 
 import {ConfigLoader} from "../lib/ConfigLoader.sol";
 import {BudgetLib} from "../lib/BudgetLib.sol";
+import {DriverValidationLib} from "../lib/DriverValidationLib.sol";
 import {LoggingLib} from "../lib/LoggingLib.sol";
 import {OpsTypes} from "../types/OpsTypes.sol";
 import {LiveOpsBase} from "./LiveOpsBase.s.sol";
@@ -22,10 +23,17 @@ contract EnsureDriversLive is LiveOpsBase {
         address liquidityDriver = vm.envOr("LIQUIDITY_DRIVER", address(0));
         address swapDriver = vm.envOr("SWAP_DRIVER", address(0));
 
-        bool needLiquidityDriver = liquidityDriver == address(0) || liquidityDriver.code.length == 0;
-        bool needSwapDriver = swapDriver == address(0) || swapDriver.code.length == 0;
+        (bool liquidityOk, string memory liquidityReason) =
+            DriverValidationLib.validateLiquidityDriver(liquidityDriver, cfg.poolManager);
+        (bool swapOk, string memory swapReason) = DriverValidationLib.validateSwapDriver(swapDriver, cfg.poolManager);
+
+        bool needLiquidityDriver = !liquidityOk;
+        bool needSwapDriver = !swapOk;
 
         if (needLiquidityDriver || needSwapDriver) {
+            if (needLiquidityDriver) LoggingLib.fail(liquidityReason);
+            if (needSwapDriver) LoggingLib.fail(swapReason);
+
             OpsTypes.BudgetCheck memory budget = BudgetLib.checkBeforeBroadcast(cfg, cfg.deployer);
             require(budget.ok, budget.reason);
 
@@ -42,8 +50,8 @@ contract EnsureDriversLive is LiveOpsBase {
             vm.stopBroadcast();
         }
 
-        require(liquidityDriver.code.length > 0, "LIQUIDITY_DRIVER deploy/reuse failed");
-        require(swapDriver.code.length > 0, "SWAP_DRIVER deploy/reuse failed");
+        DriverValidationLib.requireValidLiquidityDriver(liquidityDriver, cfg.poolManager);
+        DriverValidationLib.requireValidSwapDriver(swapDriver, cfg.poolManager);
 
         string memory statePath = _driversStatePath();
         vm.writeFile(

@@ -18,6 +18,7 @@ import {LiquidityAmounts} from "@uniswap/v4-periphery/src/libraries/LiquidityAmo
 import {CanonicalHookResolverLib} from "../lib/CanonicalHookResolverLib.sol";
 import {ConfigLoader} from "../lib/ConfigLoader.sol";
 import {BudgetLib} from "../lib/BudgetLib.sol";
+import {DriverValidationLib} from "../lib/DriverValidationLib.sol";
 import {LoggingLib} from "../lib/LoggingLib.sol";
 import {OpsTypes} from "../types/OpsTypes.sol";
 import {LiveOpsBase} from "./LiveOpsBase.s.sol";
@@ -31,10 +32,11 @@ contract EnsureLiquidityLive is LiveOpsBase {
 
         OpsTypes.CoreConfig memory cfg = ConfigLoader.loadCoreConfig();
         OpsTypes.DeploymentConfig memory deployCfg = ConfigLoader.loadDeploymentConfig(cfg);
+        ConfigLoader.requireDeploymentBindingConsistency(cfg, deployCfg);
         (cfg,) = CanonicalHookResolverLib.requireExistingCanonicalHook(cfg, deployCfg);
 
         address driver = vm.envOr("LIQUIDITY_DRIVER", address(0));
-        require(driver != address(0) && driver.code.length > 0, "LIQUIDITY_DRIVER missing");
+        DriverValidationLib.requireValidLiquidityDriver(driver, cfg.poolManager);
 
         PoolKey memory key = _poolKey(cfg);
         IPoolManager manager = IPoolManager(cfg.poolManager);
@@ -108,8 +110,8 @@ contract EnsureLiquidityLive is LiveOpsBase {
         });
 
         vm.startBroadcast(pk);
-        _approveMaxIfERC20(cfg.token0, driver, amount0);
-        _approveMaxIfERC20(cfg.token1, driver, amount1);
+        _approveExactIfERC20(cfg.token0, driver, amount0);
+        _approveExactIfERC20(cfg.token1, driver, amount1);
         bool sent;
         try ILiquidityDriver(driver).modifyLiquidity{value: _nativeValue(cfg.token0, amount0, cfg.token1, amount1)}(
             key, params, ""
@@ -118,6 +120,8 @@ contract EnsureLiquidityLive is LiveOpsBase {
         } catch {
             sent = false;
         }
+        _clearApproveIfERC20(cfg.token0, driver, amount0);
+        _clearApproveIfERC20(cfg.token1, driver, amount1);
         vm.stopBroadcast();
 
         if (sent) {
@@ -137,9 +141,14 @@ contract EnsureLiquidityLive is LiveOpsBase {
         });
     }
 
-    function _approveMaxIfERC20(address token, address spender, uint256 amount) private {
+    function _approveExactIfERC20(address token, address spender, uint256 amount) private {
         if (token == address(0) || amount == 0) return;
-        IERC20Minimal(token).approve(spender, type(uint256).max);
+        IERC20Minimal(token).approve(spender, amount);
+    }
+
+    function _clearApproveIfERC20(address token, address spender, uint256 amount) private {
+        if (token == address(0) || amount == 0) return;
+        IERC20Minimal(token).approve(spender, 0);
     }
 
     function _nativeValue(address token0, uint256 amount0, address token1, uint256 amount1)

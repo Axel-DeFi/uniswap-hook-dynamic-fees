@@ -24,6 +24,7 @@ contract PreflightLocal is Script {
         OpsTypes.CoreConfig memory cfg = ConfigLoader.loadCoreConfig();
         OpsTypes.DeploymentConfig memory deployCfg = ConfigLoader.loadDeploymentConfig(cfg);
         ConfigLoader.validateChainId(cfg.chainIdExpected);
+        ConfigLoader.requireDeploymentBindingConsistency(cfg, deployCfg);
 
         string memory scenario = vm.envOr("OPS_SCENARIO", string("bootstrap"));
         bool bootstrapScenario = keccak256(bytes(scenario)) == keccak256(bytes("bootstrap"));

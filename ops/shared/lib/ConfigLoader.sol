@@ -111,12 +111,34 @@ library ConfigLoader {
     {
         bool strict = runtimeCfg.runtime == OpsTypes.Runtime.Live;
 
-        cfg.poolManager = runtimeCfg.poolManager;
-        cfg.token0 = runtimeCfg.token0;
-        cfg.token1 = runtimeCfg.token1;
-        cfg.tickSpacing = runtimeCfg.tickSpacing;
-        cfg.stableToken = runtimeCfg.stableToken;
-        cfg.stableDecimals = runtimeCfg.stableDecimals;
+        cfg.poolManager = strict
+            ? EnvLib.requireAddress("DEPLOY_POOL_MANAGER", false)
+            : EnvLib.envOrAddress("DEPLOY_POOL_MANAGER", runtimeCfg.poolManager);
+
+        address deployVolatile = strict
+            ? EnvLib.requireAddress("DEPLOY_VOLATILE", true)
+            : EnvLib.envOrAddress("DEPLOY_VOLATILE", runtimeCfg.volatileToken);
+        cfg.stableToken = strict
+            ? EnvLib.requireAddress("DEPLOY_STABLE", false)
+            : EnvLib.envOrAddress("DEPLOY_STABLE", runtimeCfg.stableToken);
+        if (deployVolatile == cfg.stableToken) {
+            revert ErrorLib.InvalidEnv("DEPLOY_VOLATILE/DEPLOY_STABLE", "tokens must differ");
+        }
+        (cfg.token0, cfg.token1) = sortPair(deployVolatile, cfg.stableToken);
+
+        cfg.stableDecimals = strict
+            ? EnvLib.requireUint8("DEPLOY_STABLE_DECIMALS")
+            : EnvLib.envOrUint8("DEPLOY_STABLE_DECIMALS", runtimeCfg.stableDecimals);
+        if (cfg.stableDecimals != 6 && cfg.stableDecimals != 18) {
+            revert ErrorLib.InvalidEnv("DEPLOY_STABLE_DECIMALS", "must be 6 or 18");
+        }
+
+        cfg.tickSpacing = strict
+            ? EnvLib.requirePositiveInt24("DEPLOY_TICK_SPACING")
+            : EnvLib.envOrPositiveInt24("DEPLOY_TICK_SPACING", runtimeCfg.tickSpacing);
+        if (cfg.tickSpacing <= 0) {
+            revert ErrorLib.InvalidEnv("DEPLOY_TICK_SPACING", "must be > 0");
+        }
 
         cfg.owner = strict
             ? EnvLib.requireAddress("DEPLOY_OWNER", false)
@@ -184,6 +206,27 @@ library ConfigLoader {
         cfg.emergencyConfirmPeriods = strict
             ? EnvLib.requireUint8("DEPLOY_EMERGENCY_CONFIRM_PERIODS")
             : EnvLib.envOrUint8("DEPLOY_EMERGENCY_CONFIRM_PERIODS", runtimeCfg.emergencyConfirmPeriods);
+    }
+
+    function requireDeploymentBindingConsistency(
+        OpsTypes.CoreConfig memory runtimeCfg,
+        OpsTypes.DeploymentConfig memory deployCfg
+    ) internal pure {
+        if (runtimeCfg.poolManager != deployCfg.poolManager) {
+            revert ErrorLib.InvalidEnv("POOL_MANAGER", "must match DEPLOY_POOL_MANAGER");
+        }
+        if (runtimeCfg.token0 != deployCfg.token0 || runtimeCfg.token1 != deployCfg.token1) {
+            revert ErrorLib.InvalidEnv("VOLATILE/STABLE", "must match DEPLOY_VOLATILE/DEPLOY_STABLE");
+        }
+        if (runtimeCfg.stableToken != deployCfg.stableToken) {
+            revert ErrorLib.InvalidEnv("STABLE", "must match DEPLOY_STABLE");
+        }
+        if (runtimeCfg.stableDecimals != deployCfg.stableDecimals) {
+            revert ErrorLib.InvalidEnv("STABLE_DECIMALS", "must match DEPLOY_STABLE_DECIMALS");
+        }
+        if (runtimeCfg.tickSpacing != deployCfg.tickSpacing) {
+            revert ErrorLib.InvalidEnv("TICK_SPACING", "must match DEPLOY_TICK_SPACING");
+        }
     }
 
     function sortPair(address a, address b) internal pure returns (address token0, address token1) {

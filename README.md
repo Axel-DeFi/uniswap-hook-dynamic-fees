@@ -33,12 +33,19 @@ See `LICENSE` for full terms.
   come from `ops/<network>/config/defaults.env`. Reuse also requires the exact minimal callback surface
   (`afterInitialize`, `afterSwap`, `afterSwapReturnDelta` only), expected PoolManager binding, current
   `minCountedSwapUsd6`, and zero pending owner / pending config changes.
+- The frozen deployment snapshot covers the full constructor identity, including `PoolManager`, pool currencies,
+  `tickSpacing`, stable token/decimals, owner, fee tiers, and controller/timing params.
+- `deploy.env` snapshot entries are expected to be literal `DEPLOY_*` values; shell interpolation in frozen snapshot
+  files is rejected to avoid canonical address drift from outer environment changes.
 - Live deployment and validation now run only through the unified `ops/*` contours:
   - `ops/local` for deterministic Anvil lifecycle
   - `ops/sepolia` for public-testnet rehearsal
   - `ops/optimism` for production deployment and operations
   - `ops/<network>/config/deploy.env` is loaded after scenario overlays and root `.env`, so `DEPLOY_*` keys remain the
     winning frozen constructor snapshot for canonical identity
+- Live liquidity/swap helper drivers are reused only if their runtime codehash and bound `manager()` match the expected
+  canonical helper for the configured `POOL_MANAGER`; otherwise wrappers reprovision them before broadcast-capable
+  phases.
 - `pause()/unpause()` freeze/resume regulator transitions at the current LP fee regime (no automatic floor reset, no swap stop, no HookFee stop).
 - `setRegimeFees(...)` (paused-only) preserves EMA, resets hold/streak counters, starts a fresh open period, and updates current LP fee immediately if active regime fee changed.
 - `setControllerParams(...)` (paused-only) preserves active regime + EMA, clears hold/streak counters, and starts a fresh open period.

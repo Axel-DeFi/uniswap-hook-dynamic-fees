@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 pragma solidity ^0.8.26;
 
+import {ConfigLoader} from "./ConfigLoader.sol";
 import {HookIdentityLib} from "./HookIdentityLib.sol";
 import {HookValidationLib} from "./HookValidationLib.sol";
 import {OpsTypes} from "../types/OpsTypes.sol";
@@ -14,6 +15,7 @@ library CanonicalHookResolverLib {
         view
         returns (OpsTypes.CoreConfig memory resolvedCfg, address canonicalHookAddress)
     {
+        ConfigLoader.requireDeploymentBindingConsistency(runtimeCfg, deployCfg);
         (canonicalHookAddress,,) = HookIdentityLib.expectedHookAddress(deployCfg);
 
         if (runtimeCfg.hookAddress != address(0) && runtimeCfg.hookAddress != canonicalHookAddress) {

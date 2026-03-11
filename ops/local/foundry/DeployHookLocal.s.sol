@@ -22,6 +22,7 @@ contract DeployHookLocal is Script {
         OpsTypes.CoreConfig memory runtimeCfg = ConfigLoader.loadCoreConfig();
         OpsTypes.DeploymentConfig memory deployCfg = ConfigLoader.loadDeploymentConfig(runtimeCfg);
         ConfigLoader.validateChainId(runtimeCfg.chainIdExpected);
+        ConfigLoader.requireDeploymentBindingConsistency(runtimeCfg, deployCfg);
 
         string memory statePath = vm.envOr(
             "OPS_LOCAL_STATE_PATH",

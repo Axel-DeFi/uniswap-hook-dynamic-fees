@@ -15,6 +15,7 @@ import {IERC20Minimal} from "@uniswap/v4-core/src/interfaces/external/IERC20Mini
 import {CanonicalHookResolverLib} from "../lib/CanonicalHookResolverLib.sol";
 import {ConfigLoader} from "../lib/ConfigLoader.sol";
 import {BudgetLib} from "../lib/BudgetLib.sol";
+import {DriverValidationLib} from "../lib/DriverValidationLib.sol";
 import {RangeSafetyLib} from "../lib/RangeSafetyLib.sol";
 import {PoolStateLib} from "../lib/PoolStateLib.sol";
 import {JsonReportLib} from "../lib/JsonReportLib.sol";
@@ -42,6 +43,7 @@ contract RunFullValidationLive is LiveOpsBase {
 
         OpsTypes.CoreConfig memory cfg = ConfigLoader.loadCoreConfig();
         OpsTypes.DeploymentConfig memory deployCfg = ConfigLoader.loadDeploymentConfig(cfg);
+        ConfigLoader.requireDeploymentBindingConsistency(cfg, deployCfg);
         (cfg,) = CanonicalHookResolverLib.requireExistingCanonicalHook(cfg, deployCfg);
         OpsTypes.BudgetCheck memory budget = BudgetLib.checkBeforeBroadcast(cfg, cfg.deployer);
         require(budget.ok, budget.reason);
@@ -50,7 +52,7 @@ contract RunFullValidationLive is LiveOpsBase {
         require(range.ok, range.reason);
 
         address driver = vm.envOr("SWAP_DRIVER", address(0));
-        require(driver != address(0) && driver.code.length > 0, "SWAP_DRIVER missing");
+        DriverValidationLib.requireValidSwapDriver(driver, cfg.poolManager);
 
         uint256 amountStable = vm.envOr("FULL_SWAP_STABLE_RAW", range.maxSwapStableRaw);
         if (amountStable == 0) amountStable = 1_500_000;
@@ -61,22 +63,34 @@ contract RunFullValidationLive is LiveOpsBase {
 
         uint256 pk = cfg.privateKey;
         require(pk != 0, "PRIVATE_KEY missing");
+        require(
+            amountStable <= type(uint256).max / iterations
+                && cfg.swapBudgetVolatileRaw <= type(uint256).max / iterations,
+            "phase allowance overflow"
+        );
+        uint256 stableAllowance = amountStable * iterations;
+        uint256 volatileAllowance = cfg.swapBudgetVolatileRaw * iterations;
 
         PoolKey memory key = _poolKey(cfg);
         IPoolManager manager = IPoolManager(cfg.poolManager);
 
         vm.startBroadcast(pk);
-        _approveMaxIfERC20(cfg.stableToken, driver, amountStable);
-        _approveMaxIfERC20(cfg.volatileToken, driver, cfg.swapBudgetVolatileRaw);
+        _approveExactIfERC20(cfg.stableToken, driver, stableAllowance);
+        _approveExactIfERC20(cfg.volatileToken, driver, volatileAllowance);
 
         uint256 executed;
         for (uint256 i = 0; i < iterations; i++) {
             (uint160 sqrtPriceX96,,,) = manager.getSlot0(key.toId());
             SwapPlan memory plan = _selectPlan(cfg, sqrtPriceX96, amountStable);
             if (!plan.executable) break;
-            ISwapDriver(driver).swap{value: plan.value}(key, plan.params, TestSettings(false, false), "");
-            executed++;
+            try ISwapDriver(driver).swap{value: plan.value}(key, plan.params, TestSettings(false, false), "") {
+                executed++;
+            } catch {
+                break;
+            }
         }
+        _clearApproveIfERC20(cfg.stableToken, driver, stableAllowance);
+        _clearApproveIfERC20(cfg.volatileToken, driver, volatileAllowance);
         vm.stopBroadcast();
 
         OpsTypes.PoolSnapshot memory snapshot = PoolStateLib.snapshotHook(cfg.hookAddress);
@@ -143,9 +157,14 @@ contract RunFullValidationLive is LiveOpsBase {
         });
     }
 
-    function _approveMaxIfERC20(address token, address spender, uint256 amount) private {
+    function _approveExactIfERC20(address token, address spender, uint256 amount) private {
         if (token == address(0) || amount == 0) return;
-        IERC20Minimal(token).approve(spender, type(uint256).max);
+        IERC20Minimal(token).approve(spender, amount);
+    }
+
+    function _clearApproveIfERC20(address token, address spender, uint256 amount) private {
+        if (token == address(0) || amount == 0) return;
+        IERC20Minimal(token).approve(spender, 0);
     }
 }
 

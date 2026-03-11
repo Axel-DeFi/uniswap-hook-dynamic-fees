@@ -12,6 +12,7 @@ contract ValidateHookLive is LiveOpsBase {
     function run() external view {
         OpsTypes.CoreConfig memory cfg = ConfigLoader.loadCoreConfig();
         OpsTypes.DeploymentConfig memory deployCfg = ConfigLoader.loadDeploymentConfig(cfg);
+        ConfigLoader.requireDeploymentBindingConsistency(cfg, deployCfg);
         (address canonicalHookAddress,,) = HookIdentityLib.expectedHookAddress(deployCfg);
 
         if (cfg.hookAddress != address(0) && cfg.hookAddress != canonicalHookAddress) {

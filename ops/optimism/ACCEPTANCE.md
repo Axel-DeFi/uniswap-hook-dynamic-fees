@@ -6,5 +6,6 @@ Acceptance criteria mirror the shared live-ops standard:
 2. `ensure-hook.sh` reuses only the canonical valid hook for the current release plus frozen `deploy.env` snapshot, or
    deploys it if missing.
 3. `ensure-pool.sh` is idempotent and refuses non-canonical/stale hook identity.
-4. `ensure-liquidity.sh` never targets a pool outside the canonical hook-bound path.
+4. `ensure-liquidity.sh` never targets a pool outside the canonical hook-bound path and refuses invalid helper-driver
+   reuse.
 5. `smoke/full/rerun-safe/emergency` execute through the same shared Foundry layer used by Sepolia.

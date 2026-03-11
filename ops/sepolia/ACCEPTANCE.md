@@ -7,7 +7,8 @@
 3. `ensure-hook.sh` is idempotent for the canonical hook identity (reuse canonical valid hook or deploy it if missing).
 4. `ensure-pool.sh` is idempotent (skip when already initialized) and refuses non-canonical/stale hook identity.
 5. `ensure-liquidity.sh` auto-ensures helper drivers, requires preflight by default, and refuses non-canonical/stale
-   hook identity before broadcast.
+   hook identity before broadcast. Existing drivers are reused only if runtime codehash and bound `manager()` match the
+   expected canonical helper for the configured `POOL_MANAGER`.
 6. `smoke/full/rerun-safe/emergency` only run after preflight passes.
 
 ## Artifact checks
