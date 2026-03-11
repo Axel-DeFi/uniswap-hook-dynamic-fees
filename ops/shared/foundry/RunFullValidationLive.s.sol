@@ -79,6 +79,7 @@ contract RunFullValidationLive is LiveOpsBase {
         _approveExactIfERC20(cfg.volatileToken, driver, volatileAllowance);
 
         uint256 executed;
+        bool swapFailed;
         for (uint256 i = 0; i < iterations; i++) {
             (uint160 sqrtPriceX96,,,) = manager.getSlot0(key.toId());
             SwapPlan memory plan = _selectPlan(cfg, sqrtPriceX96, amountStable);
@@ -86,12 +87,15 @@ contract RunFullValidationLive is LiveOpsBase {
             try ISwapDriver(driver).swap{value: plan.value}(key, plan.params, TestSettings(false, false), "") {
                 executed++;
             } catch {
+                swapFailed = true;
                 break;
             }
         }
         _clearApproveIfERC20(cfg.stableToken, driver, stableAllowance);
         _clearApproveIfERC20(cfg.volatileToken, driver, volatileAllowance);
         vm.stopBroadcast();
+
+        require(!swapFailed, "full validation swap reverted");
 
         OpsTypes.PoolSnapshot memory snapshot = PoolStateLib.snapshotHook(cfg.hookAddress);
         string memory reportPath = _fullReportPath();

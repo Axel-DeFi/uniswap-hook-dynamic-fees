@@ -124,11 +124,8 @@ contract EnsureLiquidityLive is LiveOpsBase {
         _clearApproveIfERC20(cfg.token1, driver, amount1);
         vm.stopBroadcast();
 
-        if (sent) {
-            LoggingLib.ok("liquidity ensure tx sent");
-        } else {
-            LoggingLib.ok("liquidity ensure skipped (driver call reverted)");
-        }
+        require(sent, "liquidity ensure driver call reverted");
+        LoggingLib.ok("liquidity ensure tx sent");
     }
 
     function _poolKey(OpsTypes.CoreConfig memory cfg) private pure returns (PoolKey memory) {

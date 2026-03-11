@@ -72,6 +72,7 @@ contract RunRerunSafeValidationLive is LiveOpsBase {
         _approveExactIfERC20(cfg.volatileToken, driver, volatileAllowance);
 
         uint256 executed;
+        bool swapFailed;
         for (uint256 i = 0; i < 2; i++) {
             (uint160 sqrtPriceX96,,,) = manager.getSlot0(key.toId());
             SwapPlan memory plan = _selectPlan(cfg, sqrtPriceX96, amountStable);
@@ -79,12 +80,15 @@ contract RunRerunSafeValidationLive is LiveOpsBase {
             try ISwapDriver(driver).swap{value: plan.value}(key, plan.params, TestSettings(false, false), "") {
                 executed++;
             } catch {
+                swapFailed = true;
                 break;
             }
         }
         _clearApproveIfERC20(cfg.stableToken, driver, stableAllowance);
         _clearApproveIfERC20(cfg.volatileToken, driver, volatileAllowance);
         vm.stopBroadcast();
+
+        require(!swapFailed, "rerun-safe validation swap reverted");
 
         OpsTypes.PoolSnapshot memory snapshot = PoolStateLib.snapshotHook(cfg.hookAddress);
         // Explicit three-regime model guarantees feeIdx in [0..2].

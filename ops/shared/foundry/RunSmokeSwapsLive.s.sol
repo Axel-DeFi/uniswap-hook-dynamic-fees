@@ -83,11 +83,7 @@ contract RunSmokeSwapsLive is LiveOpsBase {
         _clearApproveIfERC20(inputToken, driver, inputAmount);
         vm.stopBroadcast();
 
-        if (!sent) {
-            LoggingLib.ok("smoke swap skipped (driver call reverted)");
-            return;
-        }
-
+        require(sent, "smoke swap driver call reverted");
         LoggingLib.ok("smoke swap tx sent");
     }
 
