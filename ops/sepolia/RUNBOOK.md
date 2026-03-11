@@ -63,7 +63,7 @@ Timelock visibility is intentional. The main exposed effect is HookFee timing; L
 - `claimAllHookFees(...)` has no recipient overload; full claim always pays to current `owner()`.
 - Payout path is PoolManager accounting withdrawal: `unlock` -> `burn` -> `take`.
 - `claimHookFees(...)` requires `to == owner()`.
-- If pool includes native currency, recipient must be compatible with native payout from hook sender context.
+- If pool includes native currency, recipient must be compatible with native payout from PoolManager sender context in the claim path.
 - Sepolia preflight/ensure flow validates this compatibility before deploy/reuse success.
 - If ownership changes later in a native-asset pool, preserve this compatibility invariant.
 

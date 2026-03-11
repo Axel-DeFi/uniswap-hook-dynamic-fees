@@ -38,7 +38,7 @@ contract EnsureHookSepolia is Script {
             if (existing.ok) {
                 address currentOwner = VolumeDynamicFeeHook(payable(cfg.hookAddress)).owner();
                 (bool reuseNativeRecipientOk, string memory reuseNativeRecipientReason) = NativeRecipientValidationLib.validatePayoutRecipientForNativePool(
-                    cfg.token0, cfg.token1, currentOwner, cfg.hookAddress
+                    cfg.token0, cfg.token1, currentOwner, cfg.poolManager
                 );
                 require(reuseNativeRecipientOk, reuseNativeRecipientReason);
 
@@ -127,7 +127,7 @@ contract EnsureHookSepolia is Script {
             HookMiner.find(CREATE2_DEPLOYER, flags, type(VolumeDynamicFeeHook).creationCode, constructorArgs);
 
         (bool nativeRecipientOk, string memory nativeRecipientReason) = NativeRecipientValidationLib.validatePayoutRecipientForNativePool(
-            cfg.token0, cfg.token1, owner, mined
+            cfg.token0, cfg.token1, owner, cfg.poolManager
         );
         require(nativeRecipientOk, nativeRecipientReason);
 

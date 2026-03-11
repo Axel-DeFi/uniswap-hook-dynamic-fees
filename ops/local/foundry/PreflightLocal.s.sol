@@ -65,13 +65,16 @@ contract PreflightLocal is Script {
 
         if (hookValidation.ok) {
             address payoutRecipient;
-            address payoutSender;
 
             if (hookDeployed) {
                 payoutRecipient = VolumeDynamicFeeHook(payable(cfg.hookAddress)).owner();
-                payoutSender = cfg.hookAddress;
             } else {
                 payoutRecipient = vm.envOr("OWNER", cfg.deployer);
+            }
+
+            address payoutSender = cfg.poolManager;
+            if (payoutSender == address(0) || payoutSender.code.length == 0) {
+                // Bootstrap stage can run before pool manager deployment and state hydration.
                 payoutSender = payoutRecipient;
             }
 

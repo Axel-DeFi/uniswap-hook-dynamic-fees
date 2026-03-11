@@ -20,7 +20,7 @@ contract DeployHook is Script {
         require(constructorArgs.length > 0, "DeployHook: CONSTRUCTOR_ARGS_HEX missing");
 
         (
-            ,
+            address poolManager,
             address poolCurrency0,
             address poolCurrency1,
             ,
@@ -94,7 +94,7 @@ contract DeployHook is Script {
             HookMiner.find(CREATE2_DEPLOYER, flags, type(VolumeDynamicFeeHook).creationCode, constructorArgs);
 
         (bool nativeRecipientOk, string memory nativeRecipientReason) = NativeRecipientValidationLib.validatePayoutRecipientForNativePool(
-            poolCurrency0, poolCurrency1, owner, minedHookAddress
+            poolCurrency0, poolCurrency1, owner, poolManager
         );
         require(nativeRecipientOk, nativeRecipientReason);
 

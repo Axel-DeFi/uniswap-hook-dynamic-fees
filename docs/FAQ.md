@@ -100,7 +100,7 @@ After `proposeNewOwner(...)` + `acceptOwner()`, payout destination moves to new 
 
 ## Do native-asset pools require a native-compatible owner?
 
-Yes. If one pool currency is native (`address(0)`), claim payout can include native transfer from the hook.
+Yes. If one pool currency is native (`address(0)`), claim payout can include native transfer from the PoolManager claim path.
 Deployment/ensure/preflight flows validate owner native-payout compatibility; zero-address checks alone are not enough.
 If ownership changes later, this compatibility requirement must still be preserved.
 

@@ -36,7 +36,7 @@ library NativeRecipientValidationLib {
         vm.prank(payoutSender);
         (bool success,) = payable(payoutRecipient).call{value: PROBE_VALUE_WEI}("");
         if (!success) {
-            return (false, "payout recipient cannot receive native payout from hook");
+            return (false, "payout recipient cannot receive native payout from pool manager");
         }
 
         return (true, "ok");

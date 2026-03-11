@@ -257,8 +257,8 @@ Claim settlement path:
 3. callback withdraws underlying currency (`take`) to current owner.
 
 Native recipient compatibility:
-- For pools with native currency in `token0` or `token1`, claim payout can include native transfer from the hook.
-- Deployment/ensure/preflight flows validate that current owner can receive native payout from hook sender context.
+- For pools with native currency in `token0` or `token1`, claim payout can include native transfer via the PoolManager claim path.
+- Deployment/ensure/preflight flows validate that current owner can receive native payout from PoolManager sender context in the claim path.
 - Owner configuration must preserve native payout compatibility in native-asset pools.
 
 Rescue surface:

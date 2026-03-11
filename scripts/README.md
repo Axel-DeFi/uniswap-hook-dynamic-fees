@@ -82,7 +82,7 @@ Primary artifacts:
 - Threshold updates intentionally have no timelock; recalibration target cadence is 5 days offchain.
 - Claim payout path uses PoolManager accounting withdrawal (`unlock` -> `burn` -> `take`).
 - Full claim path is `claimAllHookFees()` only and always pays current `owner()`.
-- For native-asset pools (`token0 == address(0)` or `token1 == address(0)`), deploy/ensure/preflight validates that current `owner()` can receive native payout from hook sender context.
+- For native-asset pools (`token0 == address(0)` or `token1 == address(0)`), deploy/ensure/preflight validates that current `owner()` can receive native payout from PoolManager sender context in the claim path.
 - Ownership transfer (`proposeNewOwner` -> `acceptOwner`) automatically moves payout destination without extra sync calls.
 - `approxLpFeesUsd6` is approximate analytics, not accounting output.
 - Pool key uses strict dynamic fee flag matching (`key.fee == LPFeeLibrary.DYNAMIC_FEE_FLAG`).

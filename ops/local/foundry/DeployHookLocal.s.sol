@@ -37,7 +37,7 @@ contract DeployHookLocal is Script {
             if (existing.ok) {
                 address currentOwner = VolumeDynamicFeeHook(payable(hookAddress)).owner();
                 (bool nativeRecipientOk, string memory nativeRecipientReason) = NativeRecipientValidationLib.validatePayoutRecipientForNativePool(
-                    cfg.token0, cfg.token1, currentOwner, hookAddress
+                    cfg.token0, cfg.token1, currentOwner, cfg.poolManager
                 );
                 require(nativeRecipientOk, nativeRecipientReason);
 
@@ -123,7 +123,7 @@ contract DeployHookLocal is Script {
             HookMiner.find(CREATE2_DEPLOYER, flags, type(VolumeDynamicFeeHook).creationCode, constructorArgs);
 
         (bool nativeRecipientOk, string memory nativeRecipientReason) = NativeRecipientValidationLib.validatePayoutRecipientForNativePool(
-            cfg.token0, cfg.token1, owner, mined
+            cfg.token0, cfg.token1, owner, cfg.poolManager
         );
         require(nativeRecipientOk, nativeRecipientReason);
 
