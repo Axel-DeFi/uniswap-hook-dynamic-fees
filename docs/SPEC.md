@@ -1,151 +1,353 @@
-# Volume-Based Dynamic Fee Hook (Uniswap v4) — Specification
+# VolumeDynamicFeeHook Specification
 
-This document is the single source of truth for the hook's design, configuration, and operational semantics.
+This document follows contract NatSpec in `src/VolumeDynamicFeeHook.sol` and is the normative operational mirror for behavior.
+If there is any mismatch, contract NatSpec takes precedence over this document, and this document takes precedence over README/FAQ/runbooks.
 
-## Goals
+## Scope
 
-- Increase LP fee revenue by adapting the LP fee tier to *volume regimes*.
-- Stateless with respect to price and external signals: **no oracles, no TWAP, no volatility state**.
-- Gas-efficient: fee decisions happen **lazily** at period boundaries (and bounded catch-up).
-- No owner-controlled fee: the hook has **no manual fee setter**.
+`VolumeDynamicFeeHook` is a single-pool Uniswap v4 hook that:
+- tracks stable-side notional volume (`USD6`) per period,
+- updates LP fee using an explicit three-regime controller,
+- charges an additional HookFee to traders via `afterSwap` return delta,
+- persists accrued HookFees in PoolManager ERC6909 claims and allows explicit owner-driven claim.
 
-## Non-goals
+## Permissions and hook flags
 
-- Impermanent loss optimization.
-- Price prediction.
-- MEV/arb filtering.
+Enabled permissions:
+- `afterInitialize = true`
+- `afterSwap = true`
+- `afterSwapReturnDelta = true`
 
-## High-level behavior
+No other hook callbacks are enabled.
 
-- Track a **USD proxy volume** per period from swap deltas:
-  - For stable-paired pools, the stable side is treated as **USD** (assume 1 stable = $1).
-  - USD proxy volume is computed as: `volumeUSD6 += abs(stableAmount)` and normalized to **USD6** (1e6).
-- Maintain an **EMA of volume** (emaVolumeUSD6) over a fixed number of periods.
-- At each period close, compare the closed volume to EMA and move the fee tier by **at most one step**.
-- Use a **deadband** (relative band) to prevent oscillation around the mean.
-- **Cap growth**: fee index is bounded by `[floorIdx, capIdx]` (cap is explicit and enforced).
-- **Lull reset**: after inactivity ≥ `lullResetSeconds`, reset to `initialFeeIdx` and clear EMA.
+Address mining must include:
+- `Hooks.AFTER_INITIALIZE_FLAG`
+- `Hooks.AFTER_SWAP_FLAG`
+- `Hooks.AFTER_SWAP_RETURNS_DELTA_FLAG`
 
-## Fee tiers
+## Roles and accounting entities
 
-The fee tier is selected from a fixed grid of discrete tiers (in **fee units** used by Uniswap v4).
-Example grid (basis points * 1e4): `95, 400, 900, 2500, 3000, 6000, 9000`.
+- `Owner`: admin role.
+- `Owner`: claim recipient in HookFee withdrawal path.
+- `LPs`: receive LP fee as part of pool accounting.
+- `Traders`: pay LP fee and optional HookFee.
 
-- `floorIdx` sets the minimum fee tier index.
-- `capIdx` sets the maximum fee tier index (explicit cap).
-- `initialFeeIdx` is used on pool initialization and on lull reset.
+## Fee model
 
-## Perioding model
+### LP fee
 
-- Period length: `periodSeconds` (e.g., 300 seconds).
-- The hook aggregates swap volume into `periodVolUSD6`.
-- When `elapsed >= periodSeconds`, the hook "closes" the current period:
-  - Update EMA with the period volume.
-  - Decide whether to move the fee index (up/down/no-change).
-  - Start a new period and count the triggering swap into it.
-- If multiple full periods elapsed (but still below `lullResetSeconds`), the hook simulates missed closes in-memory:
-  - The first closed period uses the accumulated `periodVolUSD6`.
-  - Subsequent missed periods are treated as **0 volume**.
-  - **Bounded** by `lullResetSeconds <= periodSeconds * MAX_LULL_PERIODS` (constructor enforces this).
+LP fee remains dynamic and is updated through the existing regime logic.
 
-## Decision logic
+### HookFee
 
-Let:
-- `v` = closed period volume (USD6)
-- `ema` = EMA volume (USD6)
+- HookFee is a separate trader charge returned from `afterSwap` delta path.
+- HookFee is numerically tied to currently applied LP fee for active regime.
+- HookFee is derived from an approximate LP-fee estimate, not from an exact LP-fee accounting replica.
+- Estimation base is the unspecified side selected by current execution path (exact-input vs exact-output).
+- Small systematic deviation between exact-input and exact-output paths is expected by design.
+- Per swap approximation:
+  1. infer unspecified-side absolute swap amount,
+  2. estimate LP fee on that amount,
+  3. apply `hookFeePercent` (0..10) to estimated LP fee.
 
-EMA update rule (Wilder-style smoothing):
-- `n = emaPeriods`, `alpha = 1 / n`
-- If `ema == 0` and `v == 0`: `emaNext = 0`
-- If `ema == 0` and `v > 0`: `emaNext = v` (bootstrap)
-- Otherwise: `emaNext = (ema * (n - 1) + v) / n` (integer floor)
-- This is intentionally different from the "classic EMA" form `alpha = 2 / (n + 1)`.
+Swap accrual path uses `poolManager.mint(...)` (claim accounting), not direct token withdrawal.
 
-Compute ratio-like score implicitly and apply:
-- **Dust close filter**: close volume `v` is treated as `0` when `v <= 1_000_000` (USD6 units in this hook, equivalent to `$1` under `abs(stableAmount)` accounting).
-- **Deadband**: if `v` is within `± deadbandBps` of `ema`, keep the current fee tier.
-- Otherwise:
-  - If `v` is meaningfully above EMA: **increase fee tier** by 1 step (up to cap).
-  - If `v` is meaningfully below EMA: **decrease fee tier** by 1 step (down to floor).
+### HookFee cap and timelock
 
-Additional constraint:
-- **At most one fee step per period** (hard rule).
-- **Reversal lock**:
-  - If the previous period moved fee **up**, the next immediate **down** move is blocked once.
-  - If the previous period moved fee **down**, the next immediate **up** move is blocked once.
-  - If a period is inside deadband, `lastDir` is cleared (`DIR_NONE`), so the lock window is narrow by design.
-  - If a direction signal appears at a boundary (`capIdx`/`floorIdx`) but fee cannot move, `lastDir` is also cleared.
-- **Zero-EMA fallback**:
-  - If `ema == 0` and closed volume `v == 0`, fee decays by one step toward `floorIdx`.
-  - If `ema == 0` and `v > 0`, fee is unchanged for that close.
-  - This avoids fee stalling above floor during prolonged near-zero activity.
+- Hard max `MAX_HOOK_FEE_PERCENT = 10`.
+- No runtime-configurable fee cap.
+- `hookFeePercent` changes are timelocked for 48 hours:
+  - `scheduleHookFeePercentChange(uint16)`
+  - `cancelHookFeePercentChange()`
+  - `executeHookFeePercentChange()`
+- Only one pending HookFee change can exist.
+- Timelock transparency is intentional; the main exposed effect is HookFee timing. LP fee ownership/accrual for LPs is unchanged.
 
-### "Volume regimes" in practice
+## Owner transfer flow
 
-- **Regime A (quiet):** `v < ema` for multiple periods → fee trends downward toward `floorIdx` to attract flow.
-- **Regime B (normal):** `v ≈ ema` → fee stays stable (deadband prevents “sawtooth”).
-- **Regime C (hot):** `v > ema` for multiple periods → fee trends upward toward `capIdx` to monetize heavy flow.
+Two-step transfer is mandatory:
+- `proposeNewOwner(address)`
+- `cancelOwnerTransfer()`
+- `acceptOwner()` by pending owner
 
-## Pause / Guardian
+Guardrails:
+- `proposeNewOwner(address(0))` reverts.
+- `proposeNewOwner(currentOwner)` reverts (self-pending-owner is disallowed).
 
-The guardian can pause/unpause the algorithm, but cannot set arbitrary fees.
+Events:
+- `OwnerTransferStarted`
+- `OwnerTransferCancelled`
+- `OwnerTransferAccepted`
+- `OwnerUpdated`
 
-### Pause semantics
+## Timing guardrails
 
-- `pause()`:
-  - Freezes model updates.
-  - Resets volumes/EMA and sets the **target fee tier** to `pauseFeeIdx`.
-  - If the pool is initialized, applies the fee **immediately** via `PoolManager.updateDynamicLPFee(...)` (called directly by the hook).
-  - If called before pool initialization, it only updates the hook state; `afterInitialize` will set `pauseFeeIdx` as the initial fee.
+- `lullResetSeconds` must be strictly greater than `periodSeconds`.
+- Equality (`lullResetSeconds == periodSeconds`) is rejected.
+- Upper bound remains `lullResetSeconds <= periodSeconds * MAX_LULL_PERIODS`.
+- `setTimingParams(...)` semantics are explicit:
+  - if `periodSeconds` or `emaPeriods` changes, this is a time-scale change and triggers a safe reset:
+    FLOOR regime, EMA reset, hold/streak counters reset, fresh open period, immediate LP-fee sync when active tier changes.
+  - if only `lullResetSeconds` and/or `deadbandBps` changes, regime + EMA + counters are preserved and only a fresh open period is started.
 
-- `unpause()`:
-  - Resets volumes/EMA and sets target to `initialFeeIdx`.
-  - If the pool is initialized, applies the fee **immediately** via `PoolManager.updateDynamicLPFee(...)` (called directly by the hook).
-  - If called before pool initialization, it only updates the hook state; `afterInitialize` will set `initialFeeIdx` as the initial fee.
+## Overdue catch-up semantics (accepted behavior)
 
-**Important:** There is no deferred/pending pause apply. Pause/unpause are immediate for initialized pools and deterministic for pre-init calls.
+- A single swap can close multiple overdue periods when `elapsed / periodSeconds > 1`.
+- In this catch-up path, only the first closed period uses accumulated close volume from the open period.
+- Subsequent closed periods in the same transaction use `closeVol = 0`.
+- Under these semantics, one transaction can move fee state down by multiple steps (`REASON_DOWN_TO_CASH` / `REASON_DOWN_TO_FLOOR`) depending on current counters and thresholds.
+- This is accepted in current scope as an architectural/economic trade-off, primarily affecting LP yield/routing behavior rather than LP principal ownership.
+- Operations should monitor repeated multi-close downward sequences in `PeriodClosed` as notable behavior.
 
-## Storage and packing
+## Hold semantics
 
-All per-pool state is packed into a single `uint256`:
-- `periodVolUSD6` (uint64)
-- `emaVolumeUSD6` (uint96)
-- `periodStart` (uint64)
-- `feeIdx` (uint8)
-- `lastDir` (2 bits)
-- `paused` bit
+- Hold counter is decremented at the start of each closed period, before hold protection checks.
+- Configured hold `N` therefore provides `N - 1` fully protected periods.
+- `cashHoldPeriods = 1` provides zero effective extra hold protection.
+- Automatic emergency floor evaluation has priority over hold protection.
+- If `closeVol < emergencyFloorCloseVolUsd6` for `emergencyConfirmPeriods` consecutive closes, the controller resets
+  to `FLOOR` even when `holdRemaining > 0`.
+- This behavior is intentional in the current design and is regression-tested.
 
-This keeps updates efficient and minimizes SSTOREs.
+## Controller parameter consistency
 
-## Events (no spam)
+Controller params are validated with cross-invariants:
+- `minCloseVolToCashUsd6 <= minCloseVolToExtremeUsd6`
+- `upRToCashBps <= upRToExtremeBps`
+- `downRFromCashBps >= downRFromExtremeBps`
+- `deadbandBps < downRFromExtremeBps`
+- `deadbandBps < downRFromCashBps`
+- `0 < emergencyFloorCloseVolUsd6 < minCloseVolToCashUsd6`
 
-Events are emitted only for meaningful transitions:
-- `PeriodClosed(...)` — emitted on each period close (including catch-up closes), with reason code and estimated LP fees for that close.
-  - `reasonCode = 9` is reserved strictly for deadband no-change (`ema > 0`, `v` inside band).
-  - `reasonCode = 10` is used for EMA bootstrap no-change (`ema == 0`, `v > 0`).
-- `FeeUpdated(...)` — only when fee tier changes (and also on init/pause-apply)
-- `Paused(...)`, `Unpaused()`
-- `LullReset(...)`
+Invalid combinations revert with `InvalidConfig`.
 
-## Operational guidance
+Paused maintenance behavior:
+- `setControllerParams(...)` preserves active regime id and EMA.
+- It always clears hold/streak counters (`holdRemaining`, `upExtremeStreak`, `downStreak`, `emergencyStreak`).
+- It always starts a fresh open period (`periodVol = 0`, refreshed `periodStart`).
 
-- See `./scripts/README.md` for deployment and pool creation flows.
-- Use the `.conf` files in `./config/` to parameterize deployment per chain.
-- Constructor-enforced bounds include `2 <= emaPeriods <= 64`.
-- Supported integration target is Uniswap v4 `PoolManager` semantics where `updateDynamicLPFee(...)` is callable directly by the hook (not only in `unlock` callback context), with authorization by `msg.sender == key.hooks`.
-- If a custom/forked `PoolManager` changes that behavior, `afterInitialize` and `pause()/unpause()` fee application may revert; run integration tests against the exact manager build before deployment.
+## Pause and emergency semantics
 
-## Accepted risks and runbooks
+### pause()
 
-This hook intentionally does **not** use oracles/TWAP.
-See `docs/FAQ.md` for the full rationale (“Why no oracles”).
+Freeze semantics only:
+- keeps fee regime and streak counters,
+- keeps EMA,
+- clears only open-period volume,
+- restarts period boundary (`periodStart`) for clean resume.
+- freezes regulator transitions at the last active LP fee regime until `unpause()` or explicit paused-mode emergency reset.
+- does not disable swaps,
+- does not disable HookFee accrual,
+- does not zero HookFee.
 
-### Threats we explicitly accept
+### unpause()
 
-- If a pool becomes extremely inactive, a lull reset still occurs only when a swap arrives.
-  - **Runbook:** trigger a minimal swap to force `afterSwap` and apply the reset.
+Resume semantics:
+- keeps fee regime/counters/EMA,
+- starts a fresh open period,
+- does not perform global reset.
 
-### Guardian key risk
+### Emergency resets (paused-only)
 
-- Guardian is a single EOA by default.
-  - **Recommendation:** for production / enterprise, use a multisig as guardian.
+- `emergencyResetToFloor()`
+- `emergencyResetToCash()`
+
+Both explicitly:
+- set target regime id,
+- reset EMA to zero,
+- clear hold/streak counters,
+- reset `periodVol` and restart `periodStart`,
+- keep contract paused.
+- when target regime equals current regime, reset still happens but no `FeeUpdated` event is emitted.
+
+`resetToCash` is generally preferred as default emergency option when total floor reset is not required.
+Monitoring must consume `EmergencyResetToFloorApplied` / `EmergencyResetToCashApplied`, not only `FeeUpdated`.
+
+## Volume telemetry and dust filtering
+
+- `minCountedSwapUsd6` default is `$4 / 4e6`.
+- Allowed update range is `[1e6, 10e6]`.
+- If swap stable-side notional is below threshold:
+  - swap still executes,
+  - LP fee and HookFee still apply,
+  - swap is excluded from period volume telemetry.
+
+Threshold updates are staged:
+- `scheduleMinCountedSwapUsd6Change(uint64)`
+- `cancelMinCountedSwapUsd6Change()`
+
+Scheduled threshold is activated only at next period boundary (never mid-period).
+There is no timelock for this update path by project decision.
+
+Calibration policy:
+- onchain auto-recalibration is intentionally out of scope,
+- threshold tuning is expected from offchain historical analysis,
+- operational target cadence for recalibration is 5 days.
+- default `$4 / 4e6` was selected from observed v1 telemetry.
+- this is mitigation, not a formal proof against all dust-fragmentation patterns on cheap L2.
+
+## Stable decimals and scaling
+
+Allowed stable decimals:
+- `6`
+- `18`
+
+Any other value reverts (`InvalidStableDecimals`).
+
+Scaling path is explicit and bounded for USD6 conversion.
+Configured stable decimals mode is exposed as `stableDecimals()` for deployment/reuse validation.
+
+## EMA model
+
+Stored EMA is scaled:
+- storage field: `emaVolumeUsd6Scaled`
+- scale factor: `1e6`
+
+This reduces integer precision loss versus unscaled EMA.
+
+Bootstrap behavior:
+- EMA is seeded by the first non-zero close period.
+- first periods after init/reset should be treated as a calibration window.
+
+Saturation behavior:
+- `periodVol` saturates at `uint64.max` by design under theoretical/extreme flow.
+- this is bounded behavior and not expected under ordinary trading conditions.
+
+## State model cleanup
+
+Removed legacy entities:
+- arbitrary fee-tier arrays and index-driven tier-role plumbing
+- legacy cap index field
+- legacy direction marker field
+- legacy next-fee wrapper function
+
+Controller model now uses fixed regime ids:
+- `0 = FLOOR`
+- `1 = CASH`
+- `2 = EXTREME`
+
+Bit-packing note:
+- packed `_state` layout is retained intentionally for gas/storage efficiency.
+- correctness is covered by unit/fuzz/invariant tests (field bounds and transitions).
+
+## Approximate LP fee metric
+
+`PeriodClosed` emits:
+- `approxLpFeesUsd6`
+
+This metric is approximate telemetry only, not accounting-grade LP revenue.
+
+## ETH handling
+
+- `receive()` always reverts.
+- ETH can be moved only through explicit admin rescue:
+  - `rescueETH(uint256)`
+
+## Claim and rescue
+
+HookFee accrual/claim surface:
+- `hookFeesAccrued()`
+- `claimHookFees(address,uint256,uint256)`
+- `claimAllHookFees()`
+
+Recipient semantics:
+- `claimAllHookFees()` always pays to current `owner()`.
+- `claimHookFees(address,uint256,uint256)` requires `to == owner()`.
+- Ownership transfer (`proposeNewOwner` -> `acceptOwner`) automatically moves payout destination.
+
+Claim settlement path:
+1. owner request enters `poolManager.unlock(...)`,
+2. callback burns hook ERC6909 claims (`burn`) in one or more chunks when needed,
+3. callback withdraws underlying currency (`take`) to current owner, chunked to stay within PoolManager `int128` accounting bounds.
+
+Native recipient compatibility:
+- For pools with native currency in `token0` or `token1`, claim payout can include native transfer via the PoolManager claim path.
+- Deployment/ensure/preflight flows validate that current owner can receive native payout from PoolManager sender context in the claim path.
+- Owner configuration must preserve native payout compatibility in native-asset pools.
+
+Rescue surface:
+- `rescueToken(Currency,uint256)` (non-pool currencies only)
+- `rescueETH(uint256)`
+
+## Event coverage
+
+All admin state transitions emit events, including:
+- ownership transitions,
+- timelock schedule/cancel/execute,
+- threshold schedule/cancel/apply,
+- pause/unpause,
+- emergency resets,
+- controller/regime/timing updates.
+
+Monitoring interpretation note:
+- `downStreak` is context-dependent and must be interpreted together with current `feeIdx`.
+- In CASH it tracks cash->floor confirmations; in EXTREME it tracks extreme->cash confirmations.
+
+## Accepted risks in current scope
+
+- Mitigation remains operational (key management + monitoring), not contract-level in this patch scope.
+- wash-trading / extreme-tier manipulation remains a residual economic risk (more realistic as competitor-funded distortion/DoS in adversarial routing contexts, especially on cheap environments).
+- multi-period catch-up with first-period volume + subsequent zero-volume closes remains accepted as architectural/economic behavior in this scope.
+
+## Operational requirements
+
+- production owner must be a multisig; EOA owner is acceptable only for local/dev/test.
+- hot-wallet owner usage is unacceptable for production.
+- owner key custody should use cold/hardware wallet standards.
+- deploy/ensure/preflight reuse of an existing hook is pinned to the canonical CREATE2 address derived from the
+  current release and the frozen `ops/<network>/config/deploy.env` constructor snapshot, while current runtime/admin
+  expectations come from `ops/<network>/config/defaults.env`. Reuse also requires the exact minimal callback surface
+  (`afterInitialize`, `afterSwap`, `afterSwapReturnDelta` only) plus exact PoolManager binding: owner, no pending
+  owner transfer, stable decimals mode, current `minCountedSwapUsd6`, regime fees, HookFee percent, timing params,
+  controller params, and no pending HookFee / min-counted-swap changes.
+- monitor `PeriodClosed` and alert on repeated abnormal regime escalations.
+- monitor admin/security events as a minimum set:
+  `RegimeFeesUpdated`, `ControllerParamsUpdated`, `TimingParamsUpdated`, `Paused`, `Unpaused`,
+  `EmergencyResetToFloorApplied`, `EmergencyResetToCashApplied`.
+- for native-asset pools, ownership changes must preserve native payout compatibility.
+- EMA preservation across `setRegimeFees(...)` is intentional for paused maintenance updates.
+- production guidance for hold parameters:
+  `cashHoldPeriods >= 2`, `extremeHoldPeriods >= 2`, recommended `3..4`.
+- deploy/preflight guardrails block weak hold configs in non-local runtime by default; explicit override is
+  `ALLOW_WEAK_HOLD_PERIODS=true`.
+
+## Hook key validation
+
+Pool callback key validation requires:
+- exact currencies, tick spacing, and hook address,
+- exact fee flag match: `key.fee == LPFeeLibrary.DYNAMIC_FEE_FLAG`.
+
+Any non-exact dynamic-flag encoding is rejected (`NotDynamicFeePool`).
+
+## Gas interpretation note
+
+- inactivity catch-up overhead in period-closing logic is bounded by construction (`periods = elapsed / periodSeconds` with explicit loop semantics).
+- measurement flow includes: normal swap, single-period close, lull reset, and worst-case catch-up (`MAX_LULL_PERIODS - 1` closed periods with inactivity just below lull reset).
+- gas observations in this repository are engineering measurements, environment-dependent.
+- this is not presented as a formal, exhaustive gas audit.
+- latest local observation artifacts:
+  - `ops/local/out/reports/*.json`
+  - `ops/local/out/reports/*.md`
+  - `audit_bundle/validation/gas/*.txt` (bundle workspace)
+
+## Audit boundary
+
+### Audit Scope
+
+- hardening and behavior verification for `src/VolumeDynamicFeeHook.sol` and directly related operational docs/tests.
+
+### Out of Scope
+
+- independent review of external Uniswap dependency internals.
+- independent review of PoolManager internals beyond call-site assumptions.
+- independent review of hook address mining procedure correctness as a cryptographic/system proof.
+
+### Assumptions
+
+- `BaseHook`, `LPFeeLibrary`, and related Uniswap dependencies are treated as trusted dependencies for this review scope.
+- hook deployment process verifies mined hook flags at deployment time.
+
+### Operational Measurements
+
+- local gas values are engineering measurements and environment-dependent.
+- if live-network measurements are not reproduced in a run, reports must state that explicitly.

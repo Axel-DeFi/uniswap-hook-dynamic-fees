@@ -1,5 +1,80 @@
 # CHANGELOG
 
+## v2.1.0 - 2026-03-12
+
+### Release summary
+- Release notes captured in git history and audit bundle updates.
+
+
+## v2.0.9 - 2026-03-11
+
+### Release summary
+- Release notes captured in git history and audit bundle updates.
+
+
+## v2.0.8 - 2026-03-11
+
+### Release summary
+- Release notes captured in git history and audit bundle updates.
+
+
+## v2.0.7 - 2026-03-11
+
+### Release summary
+- Release notes captured in git history and audit bundle updates.
+
+
+## v2.0.6 - 2026-03-11
+
+### Release summary
+- Release notes captured in git history and audit bundle updates.
+
+
+## v2.0.5 - 2026-03-11
+
+### Release summary
+- Fixed controller misconfiguration trap: `0 < emergencyFloorCloseVolUsd6 < minCloseVolToCashUsd6` is now enforced onchain in shared validation path.
+- Updated paused `setTimingParams(...)` semantics:
+  - time-scale updates (`periodSeconds` / `emaPeriods`) perform safe reset to FLOOR with EMA/counter reset and immediate LP-fee sync when tier changes;
+  - non-time-scale updates preserve regime + EMA + counters and only restart open period.
+- Updated paused `setControllerParams(...)` semantics:
+  - preserve active regime + EMA,
+  - clear hold/streak counters,
+  - restart fresh open period.
+- Added/updated tests for constructor/admin guards, timing reset split behavior, and stale-counter clearing after controller updates.
+- Added deploy/preflight guardrails and docs for weak hold configs in non-local runtime
+  (`ALLOW_WEAK_HOLD_PERIODS` explicit override).
+- Added explicit source-of-truth hierarchy document (`SOURCE_OF_TRUTH.md`) and aligned README/SPEC/FAQ/runbooks.
+
+
+## v2.0.4 - 2026-03-11
+
+### Release summary
+- Release notes captured in git history and audit bundle updates.
+
+
+## v2.0.3 - 2026-03-10
+
+### Release summary
+- Release notes captured in git history and audit bundle updates.
+
+
+## v2.0.2 - 2026-03-10
+
+### Release summary
+- Release notes captured in git history and audit bundle updates.
+
+
+## v2.0.1 - 2026-03-10
+
+### Packaging cleanup
+- Kept gas artifacts only inside the final audit archive bundle.
+
+## v2.0.0 - 2026-03-10
+
+### Final hardening baseline
+- Synced dust-threshold defaults, controller checks, documentation, and audit bundle state for the hardened baseline.
+
 ## v1.1.0 - 2026-02-17
 
 ### Immediate pause/unpause fee application
@@ -21,7 +96,7 @@
   - lull reset behavior
 
 ### Script and tooling hardening
-- Improved `deploy_hook.sh`, `create_pool.sh`, `deploy.sh`, and `apply_pending_pause.sh`:
+- Improved deployment and operations scripts:
   - robust config fallback (`<chain>.conf` -> default conf)
   - safer RPC resolution (CLI overrides config)
   - stricter required variable checks
@@ -47,7 +122,7 @@
 
 ### Inactivity handling
 - Added `lullResetSeconds` (immutable). On the first swap after a long lull, the hook resets
-  `feeIdx` to `initialFeeIdx` and clears `emaVolume` to re-learn quickly.
+  `feeIdx` to floor regime and clears `emaVolume` to re-learn quickly.
 
 ### License
 - Set license to Apache-2.0.

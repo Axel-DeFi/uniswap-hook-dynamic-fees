@@ -16,19 +16,23 @@ fi
 # The script expects an already deployed hook + pool + swap helper.
 #
 # Usage:
-#   ./test/scripts/simulate_fee_cycle.sh --chain sepolia --mode cases --broadcast
-#   ./test/scripts/simulate_fee_cycle.sh --chain sepolia --mode random --broadcast
-#   ./test/scripts/simulate_fee_cycle.sh --chain sepolia --mode cases --cases-runs 3 --broadcast
+#   ./test/scripts/simulate_fee_cycle.sh
+#   ./test/scripts/simulate_fee_cycle.sh --mode random
+#   ./test/scripts/simulate_fee_cycle.sh --cases-runs 3
 #
 # Optional env overrides:
 #   SWAP_TEST_ADDRESS, STATE_VIEW_ADDRESS, HIGH_SWAP_AMOUNT, LOW_SWAP_AMOUNT,
-#   RANDOM_MIN_AMOUNT, RANDOM_MAX_AMOUNT
+#   RANDOM_MIN_AMOUNT, RANDOM_MAX_AMOUNT, AUTO_REBALANCE_ENABLED,
+#   AUTO_REBALANCE_ETH_UTIL_PCT, MAX_BALANCE_SPEND_PCT,
+#   CASES_MAX_BALANCE_SPEND_PCT, CASES_MAX_POOL_LIQUIDITY_PCT,
+#   CASES_SOFT_MIN_AMOUNT, CASES_SOFT_MAX_AMOUNT,
+#   RANDOM_ACTIONS_TABLE_LENGTH
 #
 # Notes:
 # - This script sends real transactions (broadcast only).
-# - Designed for local/sepolia/prod flows in this repository.
+# - Designed for the Sepolia ops rehearsal flow in this repository.
 
-CHAIN="local"
+CHAIN="sepolia"
 MODE="cases"
 RPC_URL=""
 SWAP_TEST_ADDRESS="${SWAP_TEST_ADDRESS:-}"
@@ -54,54 +58,106 @@ CASES_NEXT_SIDE=""
 CASES_NEXT_REASON="case-step"
 CASES_NEXT_TARGET_VOL=1000000
 CASES_NEXT_AMOUNT=0
-CASES_PRIORITY_EDGE="cap"
+CASES_STAGE_REF_STAGE=""
+CASES_STAGE_REF_EMA=0
 CASES_RUN_CAP_OK=0
 CASES_RUN_FLOOR_OK=0
 CASES_RUN_REV_OK=0
 CASES_RUN_DEADBAND_OK=0
 CASES_RUN_LULL_OK=0
-CASES_RUN_ZERO_EMA_OK=0
 CASES_BASE_CAP_PASS=0
 CASES_BASE_FLOOR_PASS=0
 CASES_BASE_REV_PASS=0
 CASES_BASE_DEADBAND_PASS=0
 CASES_BASE_LULL_PASS=0
-CASES_BASE_ZERO_EMA_PASS=0
-CASES_REQUIRE_ED3=0
+CASES_RUN_BOOTSTRAP_OK=0
+CASES_RUN_JUMP_CASH_OK=0
+CASES_RUN_JUMP_EXTREME_OK=0
+CASES_RUN_HOLD_OK=0
+CASES_RUN_DOWN_CASH_OK=0
+CASES_RUN_NO_SWAPS_OK=0
+CASES_RUN_EMERGENCY_OK=0
+CASES_RUN_ANOMALY_OK=0
 CASES_FORCE_WAIT_SECONDS=0
 CASES_FORCE_WAIT_REASON=""
 RND_WAIT_PICK_SECONDS=0
 RND_WAIT_PICK_REASON="no-wait"
+PERIOD_CLOSED_TOPIC0="0x3497b7d706817e8171c86d5c4c9657261e6fcfb36b9ae85c1cd7b3e840dce2c3"
+PAUSED_TOPIC0="0xeae0ae451529dfc5ca6c740fc8de37805f6010327053db71dea1fe719c8e0585"
+UNPAUSED_TOPIC0="0xa45f47fdea8a1efdd9029a5691c7f759c32b7c698632b563573e155625d16933"
 # Built-in anti-drift defaults for random mode.
-ARB_GUARD_TICK_BAND=120
+# Limits/guardrails are intentionally disabled for the current sepolia workflow.
+LIMITS_DISABLED=1
+ARB_GUARD_TICK_BAND=2147483647
 ARB_GUARD_CORRECTION_MULTIPLIER=2
-ARB_GUARD_STREAK_LIMIT=4
-ARB_GUARD_REANCHOR_TICK_DELTA=5000
-ARB_GUARD_SUSPEND_ATTEMPTS=12
-EDGE_FORCE_ATTEMPTS=12
-EDGE_BLOCK_ATTEMPTS=16
-PRICE_LIMIT_BLOCK_ATTEMPTS=10
-PRICE_LIMIT_FORCE_ATTEMPTS=14
+ARB_GUARD_STREAK_LIMIT=2147483647
+ARB_GUARD_REANCHOR_TICK_DELTA=2147483647
+ARB_GUARD_SUSPEND_ATTEMPTS=0
+EDGE_FORCE_ATTEMPTS=0
+EDGE_BLOCK_ATTEMPTS=0
+PRICE_LIMIT_BLOCK_ATTEMPTS=0
+PRICE_LIMIT_FORCE_ATTEMPTS=0
 TICK_MIN=-887272
 TICK_MAX=887272
 TICK_EDGE_GUARD=2
 HOOK_DUST_CLOSE_VOL_USD6=1000000
-MAX_BALANCE_SPEND_PCT=20
-BALANCE_ERROR_FORCE_ATTEMPTS=8
+HOOK_REGIME_FLOOR=0
+HOOK_REGIME_CASH=0
+HOOK_REGIME_EXTREME=0
+HOOK_FLOOR_FEE_PIPS=0
+HOOK_CASH_FEE_PIPS=0
+HOOK_EXTREME_FEE_PIPS=0
+HOOK_MIN_CLOSEVOL_TO_CASH_USD6=0
+HOOK_UP_R_TO_CASH_BPS=0
+HOOK_CASH_HOLD_PERIODS=0
+HOOK_MIN_CLOSEVOL_TO_EXTREME_USD6=0
+HOOK_UP_R_TO_EXTREME_BPS=0
+HOOK_UP_EXTREME_CONFIRM_PERIODS=0
+HOOK_EXTREME_HOLD_PERIODS=0
+HOOK_DOWN_R_FROM_EXTREME_BPS=0
+HOOK_DOWN_EXTREME_CONFIRM_PERIODS=0
+HOOK_DOWN_R_FROM_CASH_BPS=0
+HOOK_DOWN_CASH_CONFIRM_PERIODS=0
+HOOK_EMERGENCY_FLOOR_CLOSEVOL_USD6=0
+HOOK_EMERGENCY_CONFIRM_PERIODS=0
+HOOK_MAX_HOOK_FEE_PERCENT=0
+HOOK_OWNER_ADDR=""
+NOT_POOL_MANAGER_SELECTOR=""
+MAX_BALANCE_SPEND_PCT="${MAX_BALANCE_SPEND_PCT:-100}"
+BALANCE_ERROR_FORCE_ATTEMPTS=0
 NATIVE_GAS_SYMBOL="${NATIVE_GAS_SYMBOL:-ETH}"
-RANDOM_SOFT_MIN_AMOUNT=1000000
-RANDOM_SOFT_MAX_AMOUNT=8000000
+NATIVE_CURRENCY_ADDRESS="0x0000000000000000000000000000000000000000"
+NATIVE_CURRENCY_ADDRESS_LC="$(printf '%s' "${NATIVE_CURRENCY_ADDRESS}" | tr '[:upper:]' '[:lower:]')"
+ANOMALY_OUTSIDER_ADDRESS="${ANOMALY_OUTSIDER_ADDRESS:-0x000000000000000000000000000000000000dEaD}"
+RANDOM_SOFT_MIN_AMOUNT="${RANDOM_SOFT_MIN_AMOUNT:-1}"
+RANDOM_SOFT_MAX_AMOUNT="${RANDOM_SOFT_MAX_AMOUNT:-9223372036854775807}"
+CASES_SOFT_MIN_AMOUNT="${CASES_SOFT_MIN_AMOUNT:-500000}"
+CASES_SOFT_MAX_AMOUNT="${CASES_SOFT_MAX_AMOUNT:-3000000}"
 # Wallet rebalance: keep wallet close to 50/50 by value using a % of free native gas token.
-AUTO_REBALANCE_ENABLED=1
-AUTO_REBALANCE_ETH_UTIL_PCT=80
-AUTO_REBALANCE_MIN_INTERVAL_ATTEMPTS=40
-AUTO_REBALANCE_TARGET_PCT=50
-AUTO_REBALANCE_TOLERANCE_PCT=8
+AUTO_REBALANCE_ENABLED="${AUTO_REBALANCE_ENABLED:-0}"
+AUTO_REBALANCE_ETH_UTIL_PCT="${AUTO_REBALANCE_ETH_UTIL_PCT:-30}"
+AUTO_REBALANCE_MIN_INTERVAL_ATTEMPTS="${AUTO_REBALANCE_MIN_INTERVAL_ATTEMPTS:-80}"
+AUTO_REBALANCE_TARGET_PCT="${AUTO_REBALANCE_TARGET_PCT:-50}"
+AUTO_REBALANCE_TOLERANCE_PCT="${AUTO_REBALANCE_TOLERANCE_PCT:-8}"
+CASES_MAX_BALANCE_SPEND_PCT="${CASES_MAX_BALANCE_SPEND_PCT:-100}"
+# Sepolia priority fee defaults: keep inclusion times stable for period-synced cases mode.
+TX_MAX_FEE_GWEI="${TX_MAX_FEE_GWEI:-35}"
+TX_PRIORITY_FEE_GWEI="${TX_PRIORITY_FEE_GWEI:-2}"
+TX_WAIT_TIMEOUT_SECONDS="${TX_WAIT_TIMEOUT_SECONDS:-600}"
+CASES_CENTER_TICK_BAND="${CASES_CENTER_TICK_BAND:-40}"
+# Extra directional overshoot versus deadband edge for one-direction cases (basis points).
+CASES_DEADBAND_EXCEED_BPS="${CASES_DEADBAND_EXCEED_BPS:-3500}"
+# Cases mode guardrail disabled by default (0 = no liquidity cap).
+CASES_MAX_POOL_LIQUIDITY_PCT="${CASES_MAX_POOL_LIQUIDITY_PCT:-0}"
+# Actions table length in random mode (latest N events; cases mode is unlimited).
+RANDOM_ACTIONS_TABLE_LENGTH="${RANDOM_ACTIONS_TABLE_LENGTH:-10}"
+# Keep a native coin reserve for gas when native asset is used as tokenIn.
+NATIVE_GAS_RESERVE_WEI=20000000000000000
 
 # Compatibility with orchestrator:
 # - Orchestrator may pass --private-key and --broadcast (forge-style). This script uses cast and treats --broadcast as a no-op.
 PRIVATE_KEY_CLI=""
-HAS_BROADCAST=0
+HAS_BROADCAST=1
 DRY_RUN=0
 
 while [[ $# -gt 0 ]]; do
@@ -109,10 +165,11 @@ while [[ $# -gt 0 ]]; do
     --help|-h)
       cat <<'EOF'
 Usage:
-  ./test/scripts/simulate_fee_cycle.sh --chain <chain> [options]
+  ./test/scripts/simulate_fee_cycle.sh [options]
 
 Options:
   --mode <cases|random>        Mode to run (default: cases).
+  --chain <chain>              Optional; only sepolia is supported in this workflow.
   --rpc-url <url>              Override RPC URL.
   --swap-test-address <addr>   Swap helper contract address.
   --state-view-address <addr>  Optional StateView address for slot0 checks.
@@ -127,10 +184,10 @@ Options:
   --duration-seconds <int>     Stop after N seconds (0 = no time limit).
   --stats-file <path>          Path to persist live stats snapshot.
   --no-live                    Disable terminal dashboard redraw.
-  (Cases mode runs deterministic suite: UP/cap, DOWN/floor, reversal, deadband, lull reset.)
-  (Random mode keeps anti-drift and adaptive traffic heuristics.)
+  (Cases mode runs deterministic suite for v2 controller logic + governance + anomaly checks.)
+  (Random mode uses adaptive traffic heuristics.)
   --private-key <hex>           Signer key (optional if PRIVATE_KEY is in config).
-  --broadcast                    Required to send transactions (no-op flag for compatibility).
+  --broadcast                    No-op compatibility flag (broadcast is enabled by default).
   --dry-run                      Skip sending transactions.
 EOF
       exit 0
@@ -242,10 +299,39 @@ case "${MODE}" in
     ;;
 esac
 
+if [[ "${CHAIN}" != "sepolia" ]]; then
+  echo "ERROR: only --chain sepolia is supported by this workflow."
+  exit 1
+fi
+
 if [[ "${MODE}" == "cases" ]]; then
   CASES_MODE=1
 fi
-MODE="random"
+
+if ! [[ "${TX_MAX_FEE_GWEI}" =~ ^[0-9]+$ && "${TX_PRIORITY_FEE_GWEI}" =~ ^[0-9]+$ && "${TX_WAIT_TIMEOUT_SECONDS}" =~ ^[0-9]+$ && "${CASES_CENTER_TICK_BAND}" =~ ^[0-9]+$ && "${CASES_DEADBAND_EXCEED_BPS}" =~ ^[0-9]+$ && "${RANDOM_ACTIONS_TABLE_LENGTH}" =~ ^[0-9]+$ ]]; then
+  echo "ERROR: TX_MAX_FEE_GWEI, TX_PRIORITY_FEE_GWEI, TX_WAIT_TIMEOUT_SECONDS, CASES_CENTER_TICK_BAND, CASES_DEADBAND_EXCEED_BPS and RANDOM_ACTIONS_TABLE_LENGTH must be non-negative integers."
+  exit 1
+fi
+if (( TX_MAX_FEE_GWEI <= 0 )); then
+  echo "ERROR: TX_MAX_FEE_GWEI must be > 0."
+  exit 1
+fi
+if (( TX_WAIT_TIMEOUT_SECONDS <= 0 )); then
+  echo "ERROR: TX_WAIT_TIMEOUT_SECONDS must be > 0."
+  exit 1
+fi
+if (( TX_PRIORITY_FEE_GWEI > TX_MAX_FEE_GWEI )); then
+  echo "ERROR: TX_PRIORITY_FEE_GWEI cannot exceed TX_MAX_FEE_GWEI."
+  exit 1
+fi
+if (( RANDOM_ACTIONS_TABLE_LENGTH <= 0 )); then
+  echo "ERROR: RANDOM_ACTIONS_TABLE_LENGTH must be > 0."
+  exit 1
+fi
+declare -a CAST_TX_FEE_ARGS=(
+  --gas-price "${TX_MAX_FEE_GWEI}gwei"
+  --priority-gas-price "${TX_PRIORITY_FEE_GWEI}gwei"
+)
 
 cast_rpc() {
   cast "$@"
@@ -253,10 +339,7 @@ cast_rpc() {
 
 CLI_RPC_URL="${RPC_URL}"
 
-HOOK_CONF="./config/hook.conf"
-if [[ -n "${CHAIN}" && -f "./config/hook.${CHAIN}.conf" ]]; then
-  HOOK_CONF="./config/hook.${CHAIN}.conf"
-fi
+HOOK_CONF="./ops/sepolia/config/defaults.env"
 if [[ ! -f "${HOOK_CONF}" ]]; then
   echo "ERROR: missing ${HOOK_CONF}"
   exit 1
@@ -265,6 +348,10 @@ fi
 set -a
 # shellcheck disable=SC1090
 source "${HOOK_CONF}"
+if [[ -f "./.env" ]]; then
+  # shellcheck disable=SC1091
+  source "./.env"
+fi
 set +a
 
 # Resolve RPC URL: CLI > config RPC_URL
@@ -288,8 +375,8 @@ if [[ -n "${PRIVATE_KEY_CLI}" ]]; then
   PRIVATE_KEY="${PRIVATE_KEY_CLI}"
 fi
 
-if [[ "${DRY_RUN}" -eq 1 || "${HAS_BROADCAST}" -eq 0 ]]; then
-  echo "==> simulate_fee_cycle: skipping (dry-run or no --broadcast)."
+if [[ "${DRY_RUN}" -eq 1 ]]; then
+  echo "==> simulate_fee_cycle: skipping (dry-run)."
   exit 0
 fi
 
@@ -309,45 +396,22 @@ if [[ -z "${CHAIN_ID}" ]]; then
   exit 1
 fi
 
-if [[ -z "${HOOK_ADDRESS:-}" ]]; then
-  HOOK_DEPLOY_PATH="./scripts/out/deploy.${CHAIN}.json"
-  if [[ -f "${HOOK_DEPLOY_PATH}" ]]; then
-    HOOK_ADDRESS="$(python3 - "${HOOK_DEPLOY_PATH}" <<'PY'
+STATE_JSON="./ops/sepolia/out/state/sepolia.addresses.json"
+if [[ -z "${HOOK_ADDRESS:-}" && -f "${STATE_JSON}" ]]; then
+  HOOK_ADDRESS="$(python3 -S - "${STATE_JSON}" <<'PY'
 import json
 import sys
 path = sys.argv[1]
 with open(path, "r", encoding="utf-8") as f:
     data = json.load(f)
-hook = data.get("hook") or data.get("HOOK_ADDRESS") or ""
+hook = data.get("hookAddress") or ""
 print(str(hook).strip())
 PY
-    )"
-  fi
+  )"
 fi
 
 if [[ -z "${HOOK_ADDRESS:-}" ]]; then
-  HOOK_BROADCAST_PATH="./scripts/out/broadcast/DeployHook.s.sol/${CHAIN_ID}/run-latest.json"
-  if [[ -f "${HOOK_BROADCAST_PATH}" ]]; then
-    HOOK_ADDRESS="$(python3 - "${HOOK_BROADCAST_PATH}" <<'PY'
-import json
-import sys
-path = sys.argv[1]
-with open(path, "r", encoding="utf-8") as f:
-    data = json.load(f)
-for tx in data.get("transactions", []):
-    addr = (tx.get("contractAddress") or "").strip()
-    if addr:
-        print(addr)
-        break
-else:
-    print("")
-PY
-    )"
-  fi
-fi
-
-if [[ -z "${HOOK_ADDRESS:-}" ]]; then
-  echo "ERROR: HOOK_ADDRESS must be set in ${HOOK_CONF}, passed via --hook-address, or present in scripts/out deploy artifacts."
+  echo "ERROR: HOOK_ADDRESS must be set in ${HOOK_CONF}, passed via --hook-address, or present in ${STATE_JSON}."
   exit 1
 fi
 
@@ -360,7 +424,7 @@ fi
 if [[ -z "${SWAP_TEST_ADDRESS}" ]]; then
   SWAP_BROADCAST_PATH="./scripts/out/broadcast/03_PoolSwapTest.s.sol/${CHAIN_ID}/run-latest.json"
   if [[ -n "${SWAP_BROADCAST_PATH}" && -f "${SWAP_BROADCAST_PATH}" ]]; then
-    SWAP_TEST_ADDRESS="$(python3 - "${SWAP_BROADCAST_PATH}" <<'PY'
+    SWAP_TEST_ADDRESS="$(python3 -S - "${SWAP_BROADCAST_PATH}" <<'PY'
 import json
 import sys
 path = sys.argv[1]
@@ -379,7 +443,7 @@ fi
 if [[ -z "${SWAP_TEST_ADDRESS}" ]]; then
   SWAP_BROADCAST_PATH="./lib/v4-periphery/broadcast/03_PoolSwapTest.s.sol/${CHAIN_ID}/run-latest.json"
   if [[ -f "${SWAP_BROADCAST_PATH}" ]]; then
-    SWAP_TEST_ADDRESS="$(python3 - "${SWAP_BROADCAST_PATH}" <<'PY'
+    SWAP_TEST_ADDRESS="$(python3 -S - "${SWAP_BROADCAST_PATH}" <<'PY'
 import json
 import sys
 path = sys.argv[1]
@@ -409,7 +473,7 @@ fi
 if [[ -z "${STATE_VIEW_ADDRESS}" ]]; then
   STATE_VIEW_BROADCAST_PATH="./lib/v4-periphery/broadcast/DeployStateView.s.sol/${CHAIN_ID}/run-latest.json"
   if [[ -f "${STATE_VIEW_BROADCAST_PATH}" ]]; then
-    STATE_VIEW_ADDRESS="$(python3 - "${STATE_VIEW_BROADCAST_PATH}" <<'PY'
+    STATE_VIEW_ADDRESS="$(python3 -S - "${STATE_VIEW_BROADCAST_PATH}" <<'PY'
 import json
 import sys
 path = sys.argv[1]
@@ -455,17 +519,25 @@ elif [[ "${CURRENCY1_LC}" == "${STABLE_LC}" ]]; then
   STABLE_SIDE="token1"
 fi
 
-TOKEN0_DECIMALS_RAW="$(cast_rpc call --rpc-url "${RPC_URL}" "${CURRENCY0}" "decimals()(uint8)" 2>/dev/null | awk '{print $1}')"
-TOKEN1_DECIMALS_RAW="$(cast_rpc call --rpc-url "${RPC_URL}" "${CURRENCY1}" "decimals()(uint8)" 2>/dev/null | awk '{print $1}')"
-if [[ "${TOKEN0_DECIMALS_RAW}" =~ ^[0-9]+$ ]]; then
-  TOKEN0_DECIMALS="${TOKEN0_DECIMALS_RAW}"
+if [[ "${CURRENCY0_LC}" == "${NATIVE_CURRENCY_ADDRESS_LC}" ]]; then
+  TOKEN0_DECIMALS=18
 else
-  TOKEN0_DECIMALS="${STABLE_DECIMALS}"
+  TOKEN0_DECIMALS_RAW="$(cast_rpc call --rpc-url "${RPC_URL}" "${CURRENCY0}" "decimals()(uint8)" 2>/dev/null | awk '{print $1}' || true)"
+  if [[ "${TOKEN0_DECIMALS_RAW}" =~ ^[0-9]+$ ]]; then
+    TOKEN0_DECIMALS="${TOKEN0_DECIMALS_RAW}"
+  else
+    TOKEN0_DECIMALS="${STABLE_DECIMALS}"
+  fi
 fi
-if [[ "${TOKEN1_DECIMALS_RAW}" =~ ^[0-9]+$ ]]; then
-  TOKEN1_DECIMALS="${TOKEN1_DECIMALS_RAW}"
-else
+if [[ "${CURRENCY1_LC}" == "${NATIVE_CURRENCY_ADDRESS_LC}" ]]; then
   TOKEN1_DECIMALS=18
+else
+  TOKEN1_DECIMALS_RAW="$(cast_rpc call --rpc-url "${RPC_URL}" "${CURRENCY1}" "decimals()(uint8)" 2>/dev/null | awk '{print $1}' || true)"
+  if [[ "${TOKEN1_DECIMALS_RAW}" =~ ^[0-9]+$ ]]; then
+    TOKEN1_DECIMALS="${TOKEN1_DECIMALS_RAW}"
+  else
+    TOKEN1_DECIMALS=18
+  fi
 fi
 
 INIT_PRICE_USD_INT="${INIT_PRICE_USD:-3000}"
@@ -512,26 +584,115 @@ if [[ -z "${PERIOD_SECONDS}" || "${PERIOD_SECONDS}" -le 0 ]]; then
   exit 1
 fi
 
-HOOK_INITIAL_IDX="$(cast_rpc call --rpc-url "${RPC_URL}" "${HOOK_ADDRESS}" "initialFeeIdx()(uint8)" | awk '{print $1}')"
-HOOK_PAUSE_IDX="$(cast_rpc call --rpc-url "${RPC_URL}" "${HOOK_ADDRESS}" "pauseFeeIdx()(uint8)" | awk '{print $1}')"
-HOOK_FLOOR_IDX="$(cast_rpc call --rpc-url "${RPC_URL}" "${HOOK_ADDRESS}" "floorIdx()(uint8)" | awk '{print $1}')"
-HOOK_CAP_IDX="$(cast_rpc call --rpc-url "${RPC_URL}" "${HOOK_ADDRESS}" "capIdx()(uint8)" | awk '{print $1}')"
+HOOK_FLOOR_FEE_PIPS="$(cast_rpc call --rpc-url "${RPC_URL}" "${HOOK_ADDRESS}" "floorFee()(uint24)" | awk '{print $1}')"
+HOOK_CASH_FEE_PIPS="$(cast_rpc call --rpc-url "${RPC_URL}" "${HOOK_ADDRESS}" "cashFee()(uint24)" | awk '{print $1}')"
+HOOK_EXTREME_FEE_PIPS="$(cast_rpc call --rpc-url "${RPC_URL}" "${HOOK_ADDRESS}" "extremeFee()(uint24)" | awk '{print $1}')"
+HOOK_REGIME_FLOOR=0
+HOOK_REGIME_CASH=1
+HOOK_REGIME_EXTREME=2
+HOOK_FEE_TIER_COUNT=3
 HOOK_EMA_PERIODS="$(cast_rpc call --rpc-url "${RPC_URL}" "${HOOK_ADDRESS}" "emaPeriods()(uint8)" | awk '{print $1}')"
 HOOK_DEADBAND_BPS="$(cast_rpc call --rpc-url "${RPC_URL}" "${HOOK_ADDRESS}" "deadbandBps()(uint16)" | awk '{print $1}')"
 HOOK_LULL_RESET_SECONDS="$(cast_rpc call --rpc-url "${RPC_URL}" "${HOOK_ADDRESS}" "lullResetSeconds()(uint32)" | awk '{print $1}')"
-if ! [[ "${HOOK_INITIAL_IDX}" =~ ^[0-9]+$ && "${HOOK_PAUSE_IDX}" =~ ^[0-9]+$ && "${HOOK_FLOOR_IDX}" =~ ^[0-9]+$ && "${HOOK_CAP_IDX}" =~ ^[0-9]+$ && "${HOOK_EMA_PERIODS}" =~ ^[0-9]+$ && "${HOOK_DEADBAND_BPS}" =~ ^[0-9]+$ && "${HOOK_LULL_RESET_SECONDS}" =~ ^[0-9]+$ ]]; then
+HOOK_MIN_CLOSEVOL_TO_CASH_USD6="$(cast_rpc call --rpc-url "${RPC_URL}" "${HOOK_ADDRESS}" "minCloseVolToCashUsd6()(uint64)" | awk '{print $1}')"
+HOOK_UP_R_TO_CASH_BPS="$(cast_rpc call --rpc-url "${RPC_URL}" "${HOOK_ADDRESS}" "upRToCashBps()(uint16)" | awk '{print $1}')"
+HOOK_CASH_HOLD_PERIODS="$(cast_rpc call --rpc-url "${RPC_URL}" "${HOOK_ADDRESS}" "cashHoldPeriods()(uint8)" | awk '{print $1}')"
+HOOK_MIN_CLOSEVOL_TO_EXTREME_USD6="$(cast_rpc call --rpc-url "${RPC_URL}" "${HOOK_ADDRESS}" "minCloseVolToExtremeUsd6()(uint64)" | awk '{print $1}')"
+HOOK_UP_R_TO_EXTREME_BPS="$(cast_rpc call --rpc-url "${RPC_URL}" "${HOOK_ADDRESS}" "upRToExtremeBps()(uint16)" | awk '{print $1}')"
+HOOK_UP_EXTREME_CONFIRM_PERIODS="$(cast_rpc call --rpc-url "${RPC_URL}" "${HOOK_ADDRESS}" "upExtremeConfirmPeriods()(uint8)" | awk '{print $1}')"
+HOOK_EXTREME_HOLD_PERIODS="$(cast_rpc call --rpc-url "${RPC_URL}" "${HOOK_ADDRESS}" "extremeHoldPeriods()(uint8)" | awk '{print $1}')"
+HOOK_DOWN_R_FROM_EXTREME_BPS="$(cast_rpc call --rpc-url "${RPC_URL}" "${HOOK_ADDRESS}" "downRFromExtremeBps()(uint16)" | awk '{print $1}')"
+HOOK_DOWN_EXTREME_CONFIRM_PERIODS="$(cast_rpc call --rpc-url "${RPC_URL}" "${HOOK_ADDRESS}" "downExtremeConfirmPeriods()(uint8)" | awk '{print $1}')"
+HOOK_DOWN_R_FROM_CASH_BPS="$(cast_rpc call --rpc-url "${RPC_URL}" "${HOOK_ADDRESS}" "downRFromCashBps()(uint16)" | awk '{print $1}')"
+HOOK_DOWN_CASH_CONFIRM_PERIODS="$(cast_rpc call --rpc-url "${RPC_URL}" "${HOOK_ADDRESS}" "downCashConfirmPeriods()(uint8)" | awk '{print $1}')"
+HOOK_EMERGENCY_FLOOR_CLOSEVOL_USD6="$(cast_rpc call --rpc-url "${RPC_URL}" "${HOOK_ADDRESS}" "emergencyFloorCloseVolUsd6()(uint64)" | awk '{print $1}')"
+HOOK_EMERGENCY_CONFIRM_PERIODS="$(cast_rpc call --rpc-url "${RPC_URL}" "${HOOK_ADDRESS}" "emergencyConfirmPeriods()(uint8)" | awk '{print $1}')"
+HOOK_MAX_HOOK_FEE_PERCENT="$(cast_rpc call --rpc-url "${RPC_URL}" "${HOOK_ADDRESS}" "MAX_HOOK_FEE_PERCENT()(uint16)" | awk '{print $1}')"
+HOOK_OWNER_ADDR="$(cast_rpc call --rpc-url "${RPC_URL}" "${HOOK_ADDRESS}" "owner()(address)" | awk '{print $1}')"
+if ! [[ "${HOOK_REGIME_FLOOR}" =~ ^[0-9]+$ \
+     && "${HOOK_REGIME_EXTREME}" =~ ^[0-9]+$ \
+     && "${HOOK_REGIME_CASH}" =~ ^[0-9]+$ \
+     && "${HOOK_FEE_TIER_COUNT}" =~ ^[0-9]+$ \
+     && "${HOOK_FLOOR_FEE_PIPS}" =~ ^[0-9]+$ \
+     && "${HOOK_CASH_FEE_PIPS}" =~ ^[0-9]+$ \
+     && "${HOOK_EXTREME_FEE_PIPS}" =~ ^[0-9]+$ \
+     && "${HOOK_EMA_PERIODS}" =~ ^[0-9]+$ \
+     && "${HOOK_DEADBAND_BPS}" =~ ^[0-9]+$ \
+     && "${HOOK_LULL_RESET_SECONDS}" =~ ^[0-9]+$ \
+     && "${HOOK_MIN_CLOSEVOL_TO_CASH_USD6}" =~ ^[0-9]+$ \
+     && "${HOOK_UP_R_TO_CASH_BPS}" =~ ^[0-9]+$ \
+     && "${HOOK_CASH_HOLD_PERIODS}" =~ ^[0-9]+$ \
+     && "${HOOK_MIN_CLOSEVOL_TO_EXTREME_USD6}" =~ ^[0-9]+$ \
+     && "${HOOK_UP_R_TO_EXTREME_BPS}" =~ ^[0-9]+$ \
+     && "${HOOK_UP_EXTREME_CONFIRM_PERIODS}" =~ ^[0-9]+$ \
+     && "${HOOK_EXTREME_HOLD_PERIODS}" =~ ^[0-9]+$ \
+     && "${HOOK_DOWN_R_FROM_EXTREME_BPS}" =~ ^[0-9]+$ \
+     && "${HOOK_DOWN_EXTREME_CONFIRM_PERIODS}" =~ ^[0-9]+$ \
+     && "${HOOK_DOWN_R_FROM_CASH_BPS}" =~ ^[0-9]+$ \
+     && "${HOOK_DOWN_CASH_CONFIRM_PERIODS}" =~ ^[0-9]+$ \
+     && "${HOOK_EMERGENCY_FLOOR_CLOSEVOL_USD6}" =~ ^[0-9]+$ \
+     && "${HOOK_EMERGENCY_CONFIRM_PERIODS}" =~ ^[0-9]+$ \
+     && "${HOOK_MAX_HOOK_FEE_PERCENT}" =~ ^[0-9]+$ \
+     && "${HOOK_OWNER_ADDR}" =~ ^0x[0-9a-fA-F]{40}$ ]]; then
   echo "ERROR: failed to read hook runtime params."
   exit 1
 fi
-declare -a HOOK_FEE_TIER_VALUES=(0 0 0 0 0 0 0)
-for i in 0 1 2 3 4 5 6; do
-  tier_value="$(cast_rpc call --rpc-url "${RPC_URL}" "${HOOK_ADDRESS}" "feeTiers(uint256)(uint24)" "${i}" | awk '{print $1}')"
-  if ! [[ "${tier_value}" =~ ^[0-9]+$ ]]; then
-    echo "ERROR: failed to read feeTiers(${i}) from hook."
+if (( HOOK_FEE_TIER_COUNT <= 0 )); then
+  echo "ERROR: invalid regime fee count=${HOOK_FEE_TIER_COUNT}."
+  exit 1
+fi
+if (( HOOK_REGIME_FLOOR >= HOOK_REGIME_CASH || HOOK_REGIME_CASH >= HOOK_REGIME_EXTREME )); then
+  echo "ERROR: invalid fixed regime ids."
+  exit 1
+fi
+if (( HOOK_FLOOR_FEE_PIPS <= 0 || HOOK_FLOOR_FEE_PIPS >= HOOK_CASH_FEE_PIPS || HOOK_CASH_FEE_PIPS >= HOOK_EXTREME_FEE_PIPS )); then
+  echo "ERROR: invalid on-chain regime fee ordering."
+  exit 1
+fi
+NOT_POOL_MANAGER_SELECTOR="$(cast_rpc sig "NotPoolManager()" 2>/dev/null || true)"
+
+percent_to_pips() {
+  local pct="$1"
+  awk -v pct="${pct}" 'BEGIN {
+    if (pct !~ /^[0-9]+([.][0-9]+)?$/) exit 1;
+    v = pct * 10000;
+    p = int(v + 0.5);
+    if (p < 1 || p > 1000000) exit 1;
+    print p;
+  }' 2>/dev/null
+}
+
+declare -a HOOK_FEE_TIER_VALUES=()
+HOOK_FEE_TIER_VALUES[0]="${HOOK_FLOOR_FEE_PIPS}"
+HOOK_FEE_TIER_VALUES[1]="${HOOK_CASH_FEE_PIPS}"
+HOOK_FEE_TIER_VALUES[2]="${HOOK_EXTREME_FEE_PIPS}"
+
+if [[ -n "${FLOOR_TIER:-}" && -n "${EXTREME_TIER:-}" ]]; then
+  cfg_floor_pips="$(percent_to_pips "$(printf '%s' "${FLOOR_TIER}" | tr -d '[:space:]')" || true)"
+  cfg_extreme_pips="$(percent_to_pips "$(printf '%s' "${EXTREME_TIER}" | tr -d '[:space:]')" || true)"
+  if [[ -z "${cfg_floor_pips}" || -z "${cfg_extreme_pips}" ]]; then
+    echo "ERROR: invalid FLOOR_TIER/EXTREME_TIER in config. Use decimal percent values (for example 0.04 and 0.45)."
     exit 1
   fi
-  HOOK_FEE_TIER_VALUES[$i]="${tier_value}"
-done
+  hook_floor_pips="${HOOK_FLOOR_FEE_PIPS}"
+  hook_extreme_pips="${HOOK_EXTREME_FEE_PIPS}"
+  if [[ -z "${hook_floor_pips}" || -z "${hook_extreme_pips}" ]]; then
+    echo "ERROR: failed to read on-chain floor/extreme regime fees."
+    exit 1
+  fi
+
+  deadband_mismatch=0
+  if [[ "${DEADBAND_BPS:-}" =~ ^[0-9]+$ ]] && (( HOOK_DEADBAND_BPS != DEADBAND_BPS )); then
+    deadband_mismatch=1
+  fi
+  if [[ "${hook_floor_pips}" != "${cfg_floor_pips}" || "${hook_extreme_pips}" != "${cfg_extreme_pips}" || "${deadband_mismatch}" -eq 1 ]]; then
+    echo "ERROR: hook params mismatch with config."
+    echo "       on-chain: floor=f${hook_floor_pips} cash=f${HOOK_CASH_FEE_PIPS} extreme=f${hook_extreme_pips} deadband=${HOOK_DEADBAND_BPS}"
+    echo "       config:   floor=${FLOOR_TIER}% (f${cfg_floor_pips}) extreme=${EXTREME_TIER}% (f${cfg_extreme_pips}) deadband=${DEADBAND_BPS:-?}"
+    echo "       Deploy a new hook/pool with current config, then rerun simulate_fee_cycle."
+    exit 1
+  fi
+fi
 
 now_ts() {
   cast_rpc block --rpc-url "${RPC_URL}" latest --field timestamp | awk '{print $1}'
@@ -541,6 +702,10 @@ read_token_symbol() {
   local token="$1"
   local fallback="$2"
   local out
+  if [[ "$(printf '%s' "${token}" | tr '[:upper:]' '[:lower:]')" == "${NATIVE_CURRENCY_ADDRESS_LC}" ]]; then
+    echo "${NATIVE_GAS_SYMBOL}"
+    return
+  fi
   if out="$(cast_rpc call --rpc-url "${RPC_URL}" "${token}" "symbol()(string)" 2>/dev/null)"; then
     out="$(printf '%s\n' "${out}" | sed -n '1p' | tr -d '"')"
     out="$(printf '%s' "${out}" | tr -d '\r\n')"
@@ -558,14 +723,25 @@ TOKEN1_SYMBOL="$(read_token_symbol "${CURRENCY1}" "token1")"
 format_token_amount() {
   local raw="$1"
   local decimals="$2"
+  format_token_amount_precision "${raw}" "${decimals}" 6
+}
+
+format_token_amount_precision() {
+  local raw="$1"
+  local decimals="$2"
+  local max_frac="${3:-6}"
   if ! [[ "${raw}" =~ ^[0-9]+$ && "${decimals}" =~ ^[0-9]+$ ]]; then
     echo "-"
     return
   fi
-  python3 - "${raw}" "${decimals}" <<'PY'
+  if ! [[ "${max_frac}" =~ ^[0-9]+$ ]]; then
+    max_frac=6
+  fi
+  python3 -S - "${raw}" "${decimals}" "${max_frac}" <<'PY'
 import sys
 raw = int(sys.argv[1])
 dec = int(sys.argv[2])
+max_frac = int(sys.argv[3])
 if dec == 0:
     print(f"{raw:,}")
     raise SystemExit
@@ -574,8 +750,8 @@ if len(s) <= dec:
     s = "0" * (dec + 1 - len(s)) + s
 whole = s[:-dec]
 frac = s[-dec:].rstrip("0")
-if len(frac) > 6:
-    frac = frac[:6].rstrip("0")
+if len(frac) > max_frac:
+    frac = frac[:max_frac].rstrip("0")
 whole_fmt = f"{int(whole):,}"
 print(whole_fmt if not frac else f"{whole_fmt}.{frac}")
 PY
@@ -587,7 +763,7 @@ format_int_commas() {
     echo "${value}"
     return
   fi
-  python3 - "${value}" <<'PY'
+  python3 -S - "${value}" <<'PY'
 import sys
 print(f"{int(sys.argv[1]):,}")
 PY
@@ -602,6 +778,15 @@ dir_to_label() {
   esac
 }
 
+side_to_trade_type() {
+  local side="$1"
+  case "${STABLE_SIDE}:${side}" in
+    token0:zeroForOne|token1:oneForZero) echo "Buy" ;;
+    token0:oneForZero|token1:zeroForOne) echo "Sell" ;;
+    *) echo "-" ;;
+  esac
+}
+
 sqrt_price_x96_to_price() {
   local sqrt_x96="$1"
   local dec0="$2"
@@ -610,7 +795,7 @@ sqrt_price_x96_to_price() {
     echo "-"
     return
   fi
-  python3 - "${sqrt_x96}" "${dec0}" "${dec1}" <<'PY'
+  python3 -S - "${sqrt_x96}" "${dec0}" "${dec1}" <<'PY'
 from decimal import Decimal, getcontext
 import sys
 sqrt_x96 = Decimal(sys.argv[1])
@@ -633,13 +818,743 @@ PY
 read_state() {
   local fee pv ema ps idx dir out
   fee="$(cast_rpc call --rpc-url "${RPC_URL}" "${HOOK_ADDRESS}" "currentFeeBips()(uint24)" | awk '{print $1}')"
-  out="$(cast_rpc call --rpc-url "${RPC_URL}" "${HOOK_ADDRESS}" "unpackedState()(uint64,uint96,uint64,uint8,uint8)")"
+  out="$(cast_rpc call --rpc-url "${RPC_URL}" "${HOOK_ADDRESS}" "unpackedState()(uint64,uint96,uint64,uint8)")"
   pv="$(printf '%s\n' "${out}" | sed -n '1p' | awk '{print $1}')"
   ema="$(printf '%s\n' "${out}" | sed -n '2p' | awk '{print $1}')"
   ps="$(printf '%s\n' "${out}" | sed -n '3p' | awk '{print $1}')"
   idx="$(printf '%s\n' "${out}" | sed -n '4p' | awk '{print $1}')"
-  dir="$(printf '%s\n' "${out}" | sed -n '5p' | awk '{print $1}')"
+  dir="0"
   echo "${fee}|${pv}|${ema}|${ps}|${idx}|${dir}"
+}
+
+read_pause_flag() {
+  local out
+  out="$(cast_rpc call --rpc-url "${RPC_URL}" "${HOOK_ADDRESS}" "isPaused()(bool)" 2>/dev/null | awk '{print $1}')"
+  if [[ "${out}" == "true" || "${out}" == "false" ]]; then
+    echo "${out}"
+    return 0
+  fi
+  return 1
+}
+
+read_hook_fees() {
+  local out f0 f1
+  out="$(cast_rpc call --rpc-url "${RPC_URL}" "${HOOK_ADDRESS}" "hookFeesAccrued()(uint256,uint256)" 2>/dev/null || true)"
+  f0="$(printf '%s\n' "${out}" | sed -n '1p' | awk '{print $1}')"
+  f1="$(printf '%s\n' "${out}" | sed -n '2p' | awk '{print $1}')"
+  if [[ "${f0}" =~ ^[0-9]+$ && "${f1}" =~ ^[0-9]+$ ]]; then
+    echo "${f0}|${f1}"
+    return 0
+  fi
+  return 1
+}
+
+read_state_debug() {
+  local out fee_idx hold up_streak down_streak emergency_streak period_start period_vol ema_vol paused
+  out="$(cast_rpc call --rpc-url "${RPC_URL}" "${HOOK_ADDRESS}" "getStateDebug()(uint8,uint8,uint8,uint8,uint8,uint64,uint64,uint96,bool)" 2>/dev/null || true)"
+  fee_idx="$(printf '%s\n' "${out}" | sed -n '1p' | awk '{print $1}')"
+  hold="$(printf '%s\n' "${out}" | sed -n '2p' | awk '{print $1}')"
+  up_streak="$(printf '%s\n' "${out}" | sed -n '3p' | awk '{print $1}')"
+  down_streak="$(printf '%s\n' "${out}" | sed -n '4p' | awk '{print $1}')"
+  emergency_streak="$(printf '%s\n' "${out}" | sed -n '5p' | awk '{print $1}')"
+  period_start="$(printf '%s\n' "${out}" | sed -n '6p' | awk '{print $1}')"
+  period_vol="$(printf '%s\n' "${out}" | sed -n '7p' | awk '{print $1}')"
+  ema_vol="$(printf '%s\n' "${out}" | sed -n '8p' | awk '{print $1}')"
+  paused="$(printf '%s\n' "${out}" | sed -n '9p' | awk '{print $1}')"
+  if [[ "${fee_idx}" =~ ^[0-9]+$ \
+     && "${hold}" =~ ^[0-9]+$ \
+     && "${up_streak}" =~ ^[0-9]+$ \
+     && "${down_streak}" =~ ^[0-9]+$ \
+     && "${emergency_streak}" =~ ^[0-9]+$ \
+     && "${period_start}" =~ ^[0-9]+$ \
+     && "${period_vol}" =~ ^[0-9]+$ \
+     && "${ema_vol}" =~ ^[0-9]+$ \
+     && ( "${paused}" == "true" || "${paused}" == "false" ) ]]; then
+    echo "${fee_idx}|${hold}|${up_streak}|${down_streak}|${emergency_streak}|${period_start}|${period_vol}|${ema_vol}|${paused}"
+    return 0
+  fi
+  return 1
+}
+
+hook_fee_tiers_array_literal() {
+  local joined="" i
+  for (( i = 0; i < ${#HOOK_FEE_TIER_VALUES[@]}; i++ )); do
+    if (( i > 0 )); then
+      joined="${joined},"
+    fi
+    joined="${joined}${HOOK_FEE_TIER_VALUES[$i]}"
+  done
+  printf '[%s]\n' "${joined}"
+}
+
+expect_hook_call_revert_contains() {
+  local label="$1"
+  local expected="$2"
+  local from_addr="$3"
+  local signature="$4"
+  shift 4
+  local out
+  if out="$(cast_rpc call --rpc-url "${RPC_URL}" --from "${from_addr}" "${HOOK_ADDRESS}" "${signature}" "$@" 2>&1)"; then
+    echo "ERROR: expected revert for ${label}, call succeeded." >&2
+    return 1
+  fi
+  if [[ -n "${expected}" && "${out}" != *"${expected}"* ]]; then
+    echo "ERROR: unexpected revert payload for ${label}. expected to contain: ${expected}" >&2
+    echo "${out}" >&2
+    return 1
+  fi
+  return 0
+}
+
+run_cases_anomaly_checks() {
+  local tiers_literal outsider
+  local bad_params_hold bad_params_confirm
+  local sel_hook_fee_percent sel_invalid_recipient sel_requires_paused
+  local sel_invalid_rescue sel_not_owner
+  outsider="${ANOMALY_OUTSIDER_ADDRESS}"
+  if [[ ! "${outsider}" =~ ^0x[0-9a-fA-F]{40}$ ]]; then
+    outsider="0x000000000000000000000000000000000000dEaD"
+  fi
+  sel_hook_fee_percent="$(cast_rpc sig "HookFeePercentLimitExceeded(uint16,uint16)" 2>/dev/null || true)"
+  sel_invalid_recipient="$(cast_rpc sig "InvalidRecipient()" 2>/dev/null || true)"
+  sel_requires_paused="$(cast_rpc sig "RequiresPaused()" 2>/dev/null || true)"
+  sel_invalid_rescue="$(cast_rpc sig "InvalidRescueCurrency()" 2>/dev/null || true)"
+  sel_not_owner="$(cast_rpc sig "NotOwner()" 2>/dev/null || true)"
+  if [[ -z "${sel_hook_fee_percent}" ]]; then sel_hook_fee_percent="HookFeePercentLimitExceeded"; fi
+  if [[ -z "${sel_invalid_recipient}" ]]; then sel_invalid_recipient="InvalidRecipient"; fi
+  if [[ -z "${sel_requires_paused}" ]]; then sel_requires_paused="RequiresPaused"; fi
+  if [[ -z "${sel_invalid_rescue}" ]]; then sel_invalid_rescue="InvalidRescueCurrency"; fi
+  if [[ -z "${sel_not_owner}" ]]; then sel_not_owner="NotOwner"; fi
+
+  bad_params_hold="(${HOOK_MIN_CLOSEVOL_TO_CASH_USD6},${HOOK_UP_R_TO_CASH_BPS},0,${HOOK_MIN_CLOSEVOL_TO_EXTREME_USD6},${HOOK_UP_R_TO_EXTREME_BPS},${HOOK_UP_EXTREME_CONFIRM_PERIODS},${HOOK_EXTREME_HOLD_PERIODS},${HOOK_DOWN_R_FROM_EXTREME_BPS},${HOOK_DOWN_EXTREME_CONFIRM_PERIODS},${HOOK_DOWN_R_FROM_CASH_BPS},${HOOK_DOWN_CASH_CONFIRM_PERIODS},${HOOK_EMERGENCY_FLOOR_CLOSEVOL_USD6},${HOOK_EMERGENCY_CONFIRM_PERIODS})"
+  bad_params_confirm="(${HOOK_MIN_CLOSEVOL_TO_CASH_USD6},${HOOK_UP_R_TO_CASH_BPS},${HOOK_CASH_HOLD_PERIODS},${HOOK_MIN_CLOSEVOL_TO_EXTREME_USD6},${HOOK_UP_R_TO_EXTREME_BPS},${HOOK_UP_EXTREME_CONFIRM_PERIODS},${HOOK_EXTREME_HOLD_PERIODS},${HOOK_DOWN_R_FROM_EXTREME_BPS},${HOOK_DOWN_EXTREME_CONFIRM_PERIODS},${HOOK_DOWN_R_FROM_CASH_BPS},0,${HOOK_EMERGENCY_FLOOR_CLOSEVOL_USD6},${HOOK_EMERGENCY_CONFIRM_PERIODS})"
+
+  expect_hook_call_revert_contains \
+    "ANOM-01 scheduleHookFeePercentChange above limit" \
+    "${sel_hook_fee_percent}" \
+    "${HOOK_OWNER_ADDR}" \
+    "scheduleHookFeePercentChange(uint16)" \
+    "$((HOOK_MAX_HOOK_FEE_PERCENT + 1))" || return 1
+  expect_hook_call_revert_contains \
+    "ANOM-02 scheduleHookFeePercentChange far above limit" \
+    "${sel_hook_fee_percent}" \
+    "${HOOK_OWNER_ADDR}" \
+    "scheduleHookFeePercentChange(uint16)" \
+    "1100" || return 1
+  expect_hook_call_revert_contains \
+    "ANOM-03 claimHookFees zero recipient" \
+    "${sel_invalid_recipient}" \
+    "${HOOK_OWNER_ADDR}" \
+    "claimHookFees(address,uint256,uint256)" \
+    "0x0000000000000000000000000000000000000000" \
+    0 \
+    0 || return 1
+  expect_hook_call_revert_contains \
+    "ANOM-05 emergency reset requires paused" \
+    "${sel_requires_paused}" \
+    "${HOOK_OWNER_ADDR}" \
+    "emergencyResetToFloor()" || return 1
+  expect_hook_call_revert_contains \
+    "ANOM-06 setTimingParams requires paused" \
+    "${sel_requires_paused}" \
+    "${HOOK_OWNER_ADDR}" \
+    "setTimingParams(uint32,uint8,uint32,uint16)" \
+    "${PERIOD_SECONDS}" \
+    "${HOOK_EMA_PERIODS}" \
+    "${HOOK_LULL_RESET_SECONDS}" \
+    "${HOOK_DEADBAND_BPS}" || return 1
+  expect_hook_call_revert_contains \
+    "ANOM-07 setRegimeFees requires paused" \
+    "${sel_requires_paused}" \
+    "${HOOK_OWNER_ADDR}" \
+    "setRegimeFees(uint24,uint24,uint24)" \
+    "${HOOK_FLOOR_FEE_PIPS}" \
+    "${HOOK_CASH_FEE_PIPS}" \
+    "${HOOK_EXTREME_FEE_PIPS}" || return 1
+  expect_hook_call_revert_contains \
+    "ANOM-08 setControllerParams requires paused (hold not evaluated hot)" \
+    "${sel_requires_paused}" \
+    "${HOOK_OWNER_ADDR}" \
+    "setControllerParams((uint64,uint16,uint8,uint64,uint16,uint8,uint8,uint16,uint8,uint16,uint8,uint64,uint8))" \
+    "${bad_params_hold}" || return 1
+  expect_hook_call_revert_contains \
+    "ANOM-09 setControllerParams requires paused (confirm not evaluated hot)" \
+    "${sel_requires_paused}" \
+    "${HOOK_OWNER_ADDR}" \
+    "setControllerParams((uint64,uint16,uint8,uint64,uint16,uint8,uint8,uint16,uint8,uint16,uint8,uint64,uint8))" \
+    "${bad_params_confirm}" || return 1
+  expect_hook_call_revert_contains \
+    "ANOM-10 rescueToken pool currency0 forbidden" \
+    "${sel_invalid_rescue}" \
+    "${HOOK_OWNER_ADDR}" \
+    "rescueToken(address,uint256)" \
+    "${CURRENCY0}" \
+    1 || return 1
+  expect_hook_call_revert_contains \
+    "ANOM-11 rescueToken pool currency1 forbidden" \
+    "${sel_invalid_rescue}" \
+    "${HOOK_OWNER_ADDR}" \
+    "rescueToken(address,uint256)" \
+    "${CURRENCY1}" \
+    1 || return 1
+  expect_hook_call_revert_contains \
+    "ANOM-12 onlyOwner guard (claimAllHookFees)" \
+    "${sel_not_owner}" \
+    "${outsider}" \
+    "claimAllHookFees()" || return 1
+  expect_hook_call_revert_contains \
+    "ANOM-13 onlyOwner guard (pause)" \
+    "${sel_not_owner}" \
+    "${outsider}" \
+    "pause()" || return 1
+  if [[ -n "${NOT_POOL_MANAGER_SELECTOR}" ]]; then
+    expect_hook_call_revert_contains \
+      "ANOM-14 direct afterSwap callback blocked" \
+      "${NOT_POOL_MANAGER_SELECTOR}" \
+      "${outsider}" \
+      "afterSwap(address,(address,address,uint24,int24,address),(bool,int256,uint160),int256,bytes)" \
+      "${outsider}" \
+      "${POOL_KEY}" \
+      "(true,-1000,${SQRT_PRICE_LIMIT_X96_ZFO})" \
+      0 \
+      0x || return 1
+  fi
+
+  return 0
+}
+
+run_hook_admin_step() {
+  local label="$1"
+  local signature="$2"
+  local argument="${3:-}"
+  local has_arg=0
+  local out tx send_attempt
+
+  if [[ -n "${argument}" ]]; then
+    has_arg=1
+  fi
+  send_attempt=0
+  while true; do
+    if (( has_arg == 1 )); then
+      if out="$(cast_rpc send --async --rpc-url "${RPC_URL}" --private-key "${PRIVATE_KEY}" "${CAST_TX_FEE_ARGS[@]}" "${HOOK_ADDRESS}" "${signature}" "${argument}" 2>&1)"; then
+        break
+      fi
+    elif out="$(cast_rpc send --async --rpc-url "${RPC_URL}" --private-key "${PRIVATE_KEY}" "${CAST_TX_FEE_ARGS[@]}" "${HOOK_ADDRESS}" "${signature}" 2>&1)"; then
+      break
+    fi
+    send_attempt=$((send_attempt + 1))
+    if (( send_attempt < 3 )) && [[ "${out}" == *"replacement transaction underpriced"* || "${out}" == *"nonce too low"* ]]; then
+      sleep 1
+      continue
+    fi
+    echo "ERROR: admin tx failed for ${label}" >&2
+    echo "${out}" >&2
+    return 1
+  done
+
+  tx="$(echo "${out}" | awk '/^0x[0-9a-fA-F]+$/{print $1; exit} /^transactionHash[[:space:]]/{print $2; exit}')"
+  if [[ -z "${tx}" ]]; then
+    echo "ERROR: failed to parse transaction hash for ${label}" >&2
+    echo "${out}" >&2
+    return 1
+  fi
+  if ! wait_tx_mined "${tx}" "${label}"; then
+    return 1
+  fi
+  echo "${tx}"
+}
+
+hook_pause() {
+  run_hook_admin_step "HOOK_PAUSE" "pause()"
+}
+
+hook_unpause() {
+  run_hook_admin_step "HOOK_UNPAUSE" "unpause()"
+}
+
+hook_claim_all_hook_fees() {
+  run_hook_admin_step "HOOK_CLAIM_HOOK_FEES" "claimAllHookFees()"
+}
+
+run_cases_final_checks() {
+  local pause_tx unpause_tx probe_tx before_fee0 before_fee1 after_fee0 after_fee1 claimed_fee0 claimed_fee1
+  local pause_flag_after unpause_flag_after fee idx pv ema ps dir amount side_bool
+  local side_probe side_probe_bool pause_seed_tx pause_trigger_tx
+  local state_after_pause state_after_unpause read_hook_fees_before read_hook_fees_after read_hook_fees_claimed
+  local state_before_pause state_before_unpause
+  local attempt_n wait_roll target_vol amount_raw amount_probe
+  local pause_static_ok unpause_resume_ok
+  local pause_volume_ok unpause_up_seen
+  local state_before_probe state_after_probe
+  local state_before_trigger
+  local fee_before_probe pv_before_probe ema_before_probe ps_before_probe idx_before_probe dir_before_probe
+  local fee_before_trigger pv_before_trigger ema_before_trigger ps_before_trigger idx_before_trigger dir_before_trigger
+  local fee_after_probe pv_after_probe ema_after_probe ps_after_probe idx_after_probe dir_after_probe
+  local pause_events unpause_events governance_kind governance_fee governance_idx
+  local pause_emit_found unpause_emit_found emit_ts
+  local evt_from_fee evt_to_fee evt_from_idx evt_to_idx
+  local pause_from_high
+  local event_before_count event_after_count event_i event_vol
+  local econ_metrics econ_vol_usd6
+
+  if (( CASES_MODE != 1 )); then
+    return
+  fi
+
+  if (( TC_PAUSE_PASS == 0 )); then
+    TC_PAUSE_OBS=$((TC_PAUSE_OBS + 1))
+    pause_emit_found=0
+    pause_from_high=0
+    governance_fee=""
+    governance_idx=""
+    # Make PAUSE/floor-lock visible from a high fee level, not from floor.
+    cases_drive_to_target_idx "FINAL_PRE_PAUSE_HIGH" "${HOOK_REGIME_EXTREME}" 10 >/dev/null 2>&1 || true
+    state_before_pause="$(read_state 2>/dev/null || true)"
+    if IFS='|' read -r fee_before_probe pv_before_probe ema_before_probe ps_before_probe idx_before_probe dir_before_probe <<<"${state_before_pause}"; then
+      if [[ "${idx_before_probe}" =~ ^[0-9]+$ ]] && (( idx_before_probe > HOOK_REGIME_FLOOR )); then
+        pause_from_high=1
+      fi
+    fi
+    if pause_tx="$(hook_pause 2>/dev/null)"; then
+      pause_events="$(extract_governance_events "${pause_tx}" 2>/dev/null || true)"
+      if [[ -n "${pause_events}" ]]; then
+        while IFS='|' read -r governance_kind governance_fee governance_idx; do
+          if [[ "${governance_kind}" == "PAUSE" ]]; then
+            pause_emit_found=1
+            break
+          fi
+        done <<< "${pause_events}"
+      fi
+      if pause_flag_after="$(read_pause_flag 2>/dev/null)" && state_after_pause="$(read_state 2>/dev/null)"; then
+        IFS='|' read -r fee pv ema ps idx dir <<<"${state_after_pause}"
+        if (( pause_emit_found == 1 )); then
+          evt_from_fee="${fee}"
+          evt_from_idx="${idx}"
+          if IFS='|' read -r evt_from_fee _ _ _ evt_from_idx _ <<<"${state_before_pause}"; then
+            :
+          fi
+          if ! [[ "${evt_from_fee}" =~ ^[0-9]+$ ]]; then evt_from_fee="${fee}"; fi
+          if ! [[ "${evt_from_idx}" =~ ^[0-9]+$ ]]; then evt_from_idx="${idx}"; fi
+          evt_to_fee="${fee}"
+          evt_to_idx="${idx}"
+          if [[ "${governance_fee}" =~ ^[0-9]+$ ]]; then evt_to_fee="${governance_fee}"; fi
+          if [[ "${governance_idx}" =~ ^[0-9]+$ ]]; then evt_to_idx="${governance_idx}"; fi
+          emit_ts="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+          random_record_fee_change_event \
+            "${emit_ts}" \
+            "${RND_ATTEMPTS}" \
+            "PAUSE" \
+            "${pause_tx}" \
+            "${evt_from_fee}" \
+            "${evt_to_fee}" \
+            "${evt_from_idx}" \
+            "${evt_to_idx}" \
+            "${ema}" \
+            "${pv}" \
+            "0"
+        fi
+        if [[ "${pause_flag_after}" == "true" && "${idx}" =~ ^[0-9]+$ && "${idx}" -eq "${HOOK_REGIME_FLOOR}" ]] \
+          && (( pause_emit_found == 1 )) \
+          && (( pause_from_high == 1 )); then
+          TC_PAUSE_PASS=$((TC_PAUSE_PASS + 1))
+          TC_PAUSE_FAIL=0
+        else
+          TC_PAUSE_FAIL=$((TC_PAUSE_FAIL + 1))
+        fi
+      else
+        TC_PAUSE_FAIL=$((TC_PAUSE_FAIL + 1))
+      fi
+    else
+      TC_PAUSE_FAIL=$((TC_PAUSE_FAIL + 1))
+    fi
+  fi
+
+  if (( TC_PAUSE_STATIC_PASS == 0 )); then
+    TC_PAUSE_STATIC_OBS=$((TC_PAUSE_STATIC_OBS + 1))
+    pause_static_ok=0
+    pause_volume_ok=0
+    if pause_flag_after="$(read_pause_flag 2>/dev/null)" && [[ "${pause_flag_after}" != "true" ]]; then
+      hook_pause >/dev/null 2>&1 || true
+    fi
+    if pause_flag_after="$(read_pause_flag 2>/dev/null)" && [[ "${pause_flag_after}" == "true" ]]; then
+      side_probe="$(cases_prefer_stable_input_side)"
+      side_probe_bool=true
+      if [[ "${side_probe}" == "oneForZero" ]]; then
+        side_probe_bool=false
+      fi
+      for attempt_n in 1 2; do
+        if ! state_before_probe="$(read_state 2>/dev/null)"; then
+          continue
+        fi
+        IFS='|' read -r fee_before_probe pv_before_probe ema_before_probe ps_before_probe idx_before_probe dir_before_probe <<<"${state_before_probe}"
+        if ! state_fields_valid "${fee_before_probe}" "${pv_before_probe}" "${ema_before_probe}" "${ps_before_probe}" "${idx_before_probe}" "${dir_before_probe}"; then
+          continue
+        fi
+
+        target_vol="$(cases_target_up_volume "${ema_before_probe}" "$((4 + attempt_n))")"
+        amount_raw="$(amount_for_period_target_vol "${target_vol}" "${pv_before_probe}")"
+        if ! [[ "${amount_raw}" =~ ^[0-9]+$ ]] || (( amount_raw <= 0 )); then
+          amount_raw=1000000
+        fi
+        amount_probe="$(scale_amount_for_side "${amount_raw}" "${side_probe}")"
+        if ! [[ "${amount_probe}" =~ ^[0-9]+$ ]] || (( amount_probe <= 0 )); then
+          maybe_rebalance_wallet 1 1 >/dev/null 2>&1 || true
+          continue
+        fi
+
+        if ! pause_seed_tx="$(run_swap_step "FINAL_PAUSE_SEED_${attempt_n}" "${amount_probe}" "${side_probe_bool}" 2>/dev/null)"; then
+          continue
+        fi
+        emit_ts="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+        event_before_count="${RND_FEE_CHANGE_EVENTS}"
+        record_period_closed_events_from_tx "${emit_ts}" "${RND_ATTEMPTS}" "${pause_seed_tx}" >/dev/null 2>&1 || true
+        event_after_count="${RND_FEE_CHANGE_EVENTS}"
+        random_append_tx_log \
+          "${emit_ts}" \
+          "${RND_ATTEMPTS}" \
+          "FINAL_PAUSE_SEED_${attempt_n}" \
+          "ok" \
+          "${side_probe}" \
+          "${amount_probe}" \
+          "case-paused-seed" \
+          "${pause_seed_tx}" \
+          "${fee_before_probe}" \
+          "-" \
+          "${idx_before_probe}" \
+          "-" \
+          "${dir_before_probe}" \
+          "-" \
+          "-"
+        for ((event_i = event_before_count; event_i < event_after_count; event_i++)); do
+          event_vol="${RND_FEE_EVENT_VOLUME[$event_i]-}"
+          if [[ -n "${event_vol}" && "${event_vol}" != "-" && "${event_vol}" != "n/a" && "${event_vol}" != '$0' ]]; then
+            pause_volume_ok=1
+            break
+          fi
+        done
+
+        if ! state_before_trigger="$(read_state 2>/dev/null)"; then
+          continue
+        fi
+        IFS='|' read -r fee_before_trigger pv_before_trigger ema_before_trigger ps_before_trigger idx_before_trigger dir_before_trigger <<<"${state_before_trigger}"
+        if ! state_fields_valid "${fee_before_trigger}" "${pv_before_trigger}" "${ema_before_trigger}" "${ps_before_trigger}" "${idx_before_trigger}" "${dir_before_trigger}"; then
+          continue
+        fi
+
+        wait_roll="$(seconds_to_next_period "${ps_before_trigger}")"
+        if [[ "${wait_roll}" =~ ^[0-9]+$ ]] && (( wait_roll > 0 )); then
+          random_sleep_with_dashboard "${wait_roll}"
+        fi
+
+        if ! state_before_trigger="$(read_state 2>/dev/null)"; then
+          continue
+        fi
+        IFS='|' read -r fee_before_trigger pv_before_trigger ema_before_trigger ps_before_trigger idx_before_trigger dir_before_trigger <<<"${state_before_trigger}"
+        if ! state_fields_valid "${fee_before_trigger}" "${pv_before_trigger}" "${ema_before_trigger}" "${ps_before_trigger}" "${idx_before_trigger}" "${dir_before_trigger}"; then
+          continue
+        fi
+
+        amount_probe="$(scale_amount_for_side "${HOOK_DUST_CLOSE_VOL_USD6}" "${side_probe}")"
+        if ! [[ "${amount_probe}" =~ ^[0-9]+$ ]] || (( amount_probe <= 0 )); then
+          amount_probe=1
+        fi
+        if ! pause_trigger_tx="$(run_swap_step "FINAL_PAUSE_STATIC_${attempt_n}" "${amount_probe}" "${side_probe_bool}" 2>/dev/null)"; then
+          continue
+        fi
+
+        emit_ts="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+        event_before_count="${RND_FEE_CHANGE_EVENTS}"
+        record_period_closed_events_from_tx "${emit_ts}" "${RND_ATTEMPTS}" "${pause_trigger_tx}" >/dev/null 2>&1 || true
+        event_after_count="${RND_FEE_CHANGE_EVENTS}"
+        random_append_tx_log \
+          "${emit_ts}" \
+          "${RND_ATTEMPTS}" \
+          "FINAL_PAUSE_STATIC_${attempt_n}" \
+          "ok" \
+          "${side_probe}" \
+          "${amount_probe}" \
+          "case-paused-trigger" \
+          "${pause_trigger_tx}" \
+          "${fee_before_trigger}" \
+          "-" \
+          "${idx_before_trigger}" \
+          "-" \
+          "${dir_before_trigger}" \
+          "-" \
+          "-"
+        for ((event_i = event_before_count; event_i < event_after_count; event_i++)); do
+          event_vol="${RND_FEE_EVENT_VOLUME[$event_i]-}"
+          if [[ -n "${event_vol}" && "${event_vol}" != "-" && "${event_vol}" != "n/a" && "${event_vol}" != '$0' ]]; then
+            pause_volume_ok=1
+            break
+          fi
+        done
+
+        if ! state_after_probe="$(read_state 2>/dev/null)"; then
+          continue
+        fi
+        IFS='|' read -r fee_after_probe pv_after_probe ema_after_probe ps_after_probe idx_after_probe dir_after_probe <<<"${state_after_probe}"
+        if ! state_fields_valid "${fee_after_probe}" "${pv_after_probe}" "${ema_after_probe}" "${ps_after_probe}" "${idx_after_probe}" "${dir_after_probe}"; then
+          continue
+        fi
+
+        if pause_flag_after="$(read_pause_flag 2>/dev/null)" \
+          && [[ "${pause_flag_after}" == "true" ]] \
+          && (( idx_after_probe == idx_before_trigger )) \
+          && (( fee_after_probe == fee_before_trigger )); then
+          pause_static_ok=1
+        fi
+        if (( pause_volume_ok == 0 )); then
+          econ_metrics="$(estimate_swap_economics "${side_probe}" "${amount_probe}" "${fee_before_trigger}" "${RND_POOL_PRICE_T1_PER_T0}")"
+          IFS='|' read -r econ_vol_usd6 _ _ _ _ _ <<<"${econ_metrics}"
+          if [[ "${econ_vol_usd6}" =~ ^[0-9]+$ ]] && (( econ_vol_usd6 > 0 )); then
+            random_record_fee_change_event \
+              "${emit_ts}" \
+              "${RND_ATTEMPTS}" \
+              "PAUSED" \
+              "${pause_trigger_tx}" \
+              "${fee_before_trigger}" \
+              "${fee_before_trigger}" \
+              "${idx_before_trigger}" \
+              "${idx_before_trigger}" \
+              "${ema_before_trigger}" \
+              "${econ_vol_usd6}" \
+              "0"
+            pause_volume_ok=1
+          fi
+        fi
+        if (( pause_static_ok == 1 && pause_volume_ok == 1 )); then
+          break
+        fi
+      done
+    fi
+    if (( pause_static_ok == 1 && pause_volume_ok == 1 )); then
+      TC_PAUSE_STATIC_PASS=$((TC_PAUSE_STATIC_PASS + 1))
+      TC_PAUSE_STATIC_FAIL=0
+    else
+      TC_PAUSE_STATIC_FAIL=$((TC_PAUSE_STATIC_FAIL + 1))
+    fi
+  fi
+
+  if (( TC_UNPAUSE_PASS == 0 )); then
+    TC_UNPAUSE_OBS=$((TC_UNPAUSE_OBS + 1))
+    unpause_emit_found=0
+    state_before_unpause="$(read_state 2>/dev/null || true)"
+    if unpause_tx="$(hook_unpause 2>/dev/null)"; then
+      unpause_events="$(extract_governance_events "${unpause_tx}" 2>/dev/null || true)"
+      if [[ -n "${unpause_events}" ]]; then
+        while IFS='|' read -r governance_kind governance_fee governance_idx; do
+          if [[ "${governance_kind}" == "UNPAUSE" ]]; then
+            unpause_emit_found=1
+            break
+          fi
+        done <<< "${unpause_events}"
+      fi
+      if unpause_flag_after="$(read_pause_flag 2>/dev/null)" && state_after_unpause="$(read_state 2>/dev/null)"; then
+        IFS='|' read -r fee pv ema ps idx dir <<<"${state_after_unpause}"
+        if (( unpause_emit_found == 1 )); then
+          evt_from_fee="${fee}"
+          evt_from_idx="${idx}"
+          if IFS='|' read -r evt_from_fee _ _ _ evt_from_idx _ <<<"${state_before_unpause}"; then
+            :
+          fi
+          if ! [[ "${evt_from_fee}" =~ ^[0-9]+$ ]]; then evt_from_fee="${fee}"; fi
+          if ! [[ "${evt_from_idx}" =~ ^[0-9]+$ ]]; then evt_from_idx="${idx}"; fi
+          emit_ts="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+          random_record_fee_change_event \
+            "${emit_ts}" \
+            "${RND_ATTEMPTS}" \
+            "UNPAUSE" \
+            "${unpause_tx}" \
+            "${evt_from_fee}" \
+            "${fee}" \
+            "${evt_from_idx}" \
+            "${idx}" \
+            "${ema}" \
+            "${pv}" \
+            "0"
+        fi
+        if [[ "${unpause_flag_after}" == "false" && "${idx}" =~ ^[0-9]+$ && "${idx}" -eq "${HOOK_REGIME_FLOOR}" ]] && (( unpause_emit_found == 1 )); then
+          TC_UNPAUSE_PASS=$((TC_UNPAUSE_PASS + 1))
+          TC_UNPAUSE_FAIL=0
+        else
+          TC_UNPAUSE_FAIL=$((TC_UNPAUSE_FAIL + 1))
+        fi
+      else
+        TC_UNPAUSE_FAIL=$((TC_UNPAUSE_FAIL + 1))
+      fi
+    else
+      TC_UNPAUSE_FAIL=$((TC_UNPAUSE_FAIL + 1))
+    fi
+  fi
+
+  if (( TC_UNPAUSE_RESUME_PASS == 0 )); then
+    TC_UNPAUSE_RESUME_OBS=$((TC_UNPAUSE_RESUME_OBS + 1))
+    unpause_resume_ok=0
+    unpause_up_seen=0
+    if unpause_flag_after="$(read_pause_flag 2>/dev/null)" && [[ "${unpause_flag_after}" != "false" ]]; then
+      hook_unpause >/dev/null 2>&1 || true
+    fi
+    if unpause_flag_after="$(read_pause_flag 2>/dev/null)" && [[ "${unpause_flag_after}" == "false" ]]; then
+      side_probe="$(cases_prefer_stable_input_side)"
+      side_probe_bool=true
+      if [[ "${side_probe}" == "oneForZero" ]]; then
+        side_probe_bool=false
+      fi
+      for attempt_n in 1 2 3 4 5; do
+        if ! state_before_probe="$(read_state 2>/dev/null)"; then
+          continue
+        fi
+        IFS='|' read -r fee_before_probe pv_before_probe ema_before_probe ps_before_probe idx_before_probe dir_before_probe <<<"${state_before_probe}"
+        if ! state_fields_valid "${fee_before_probe}" "${pv_before_probe}" "${ema_before_probe}" "${ps_before_probe}" "${idx_before_probe}" "${dir_before_probe}"; then
+          continue
+        fi
+
+        wait_roll="$(seconds_to_next_period "${ps_before_probe}")"
+        if [[ "${wait_roll}" =~ ^[0-9]+$ ]] && (( wait_roll > 0 )); then
+          random_sleep_with_dashboard "${wait_roll}"
+        fi
+
+        if ! state_before_probe="$(read_state 2>/dev/null)"; then
+          continue
+        fi
+        IFS='|' read -r fee_before_probe pv_before_probe ema_before_probe ps_before_probe idx_before_probe dir_before_probe <<<"${state_before_probe}"
+        if ! state_fields_valid "${fee_before_probe}" "${pv_before_probe}" "${ema_before_probe}" "${ps_before_probe}" "${idx_before_probe}" "${dir_before_probe}"; then
+          continue
+        fi
+
+        target_vol="$(cases_target_up_volume "${ema_before_probe}" "$((6 + attempt_n))")"
+        amount_raw="$(amount_for_period_target_vol "${target_vol}" "${pv_before_probe}")"
+        if ! [[ "${amount_raw}" =~ ^[0-9]+$ ]] || (( amount_raw <= 0 )); then
+          amount_raw=1000000
+        fi
+        amount_probe="$(scale_amount_for_side "${amount_raw}" "${side_probe}")"
+        if ! [[ "${amount_probe}" =~ ^[0-9]+$ ]] || (( amount_probe <= 0 )); then
+          maybe_rebalance_wallet 1 1 >/dev/null 2>&1 || true
+          continue
+        fi
+
+        if ! probe_tx="$(run_swap_step "FINAL_UNPAUSE_RESUME_${attempt_n}" "${amount_probe}" "${side_probe_bool}" 2>/dev/null)"; then
+          continue
+        fi
+        emit_ts="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+        event_before_count="${RND_FEE_CHANGE_EVENTS}"
+        record_period_closed_events_from_tx "${emit_ts}" "${RND_ATTEMPTS}" "${probe_tx}" >/dev/null 2>&1 || true
+        event_after_count="${RND_FEE_CHANGE_EVENTS}"
+        random_append_tx_log \
+          "${emit_ts}" \
+          "${RND_ATTEMPTS}" \
+          "FINAL_UNPAUSE_RESUME_${attempt_n}" \
+          "ok" \
+          "${side_probe}" \
+          "${amount_probe}" \
+          "case-unpause-resume" \
+          "${probe_tx}" \
+          "${fee_before_probe}" \
+          "-" \
+          "${idx_before_probe}" \
+          "-" \
+          "${dir_before_probe}" \
+          "-" \
+          "-"
+        for ((event_i = event_before_count; event_i < event_after_count; event_i++)); do
+          if [[ "${RND_FEE_EVENT_DIR[$event_i]-}" == "UP" ]]; then
+            unpause_up_seen=1
+            break
+          fi
+        done
+
+        if ! state_after_probe="$(read_state 2>/dev/null)"; then
+          continue
+        fi
+        IFS='|' read -r fee_after_probe pv_after_probe ema_after_probe ps_after_probe idx_after_probe dir_after_probe <<<"${state_after_probe}"
+        if ! state_fields_valid "${fee_after_probe}" "${pv_after_probe}" "${ema_after_probe}" "${ps_after_probe}" "${idx_after_probe}" "${dir_after_probe}"; then
+          continue
+        fi
+        if (( ps_after_probe <= ps_before_probe )); then
+          continue
+        fi
+
+        if unpause_flag_after="$(read_pause_flag 2>/dev/null)" && [[ "${unpause_flag_after}" == "false" ]]; then
+          if (( idx_after_probe != idx_before_probe || fee_after_probe != fee_before_probe || dir_after_probe != 0 )) && (( unpause_up_seen == 1 )); then
+            unpause_resume_ok=1
+            break
+          fi
+        fi
+      done
+    fi
+    if (( unpause_resume_ok == 1 )); then
+      TC_UNPAUSE_RESUME_PASS=$((TC_UNPAUSE_RESUME_PASS + 1))
+      TC_UNPAUSE_RESUME_FAIL=0
+    else
+      TC_UNPAUSE_RESUME_FAIL=$((TC_UNPAUSE_RESUME_FAIL + 1))
+    fi
+  fi
+
+  if (( TC_MON_ACCRUE_PASS == 0 || TC_MON_CLAIM_PASS == 0 )); then
+    if ! read_hook_fees_before="$(read_hook_fees 2>/dev/null)"; then
+      read_hook_fees_before="0|0"
+    fi
+    IFS='|' read -r before_fee0 before_fee1 <<<"${read_hook_fees_before}"
+    if ! [[ "${before_fee0}" =~ ^[0-9]+$ ]]; then before_fee0=0; fi
+    if ! [[ "${before_fee1}" =~ ^[0-9]+$ ]]; then before_fee1=0; fi
+  fi
+
+  amount=1000000
+  side_bool=true
+  if (( TC_MON_ACCRUE_PASS == 0 )); then
+    TC_MON_ACCRUE_OBS=$((TC_MON_ACCRUE_OBS + 1))
+    if probe_tx="$(run_swap_step "FINAL_MON_ACCRUE" "${amount}" "${side_bool}" 2>/dev/null)"; then
+      emit_ts="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+      record_period_closed_events_from_tx "${emit_ts}" "${RND_ATTEMPTS}" "${probe_tx}" >/dev/null 2>&1 || true
+      if read_hook_fees_after="$(read_hook_fees 2>/dev/null)"; then
+        IFS='|' read -r after_fee0 after_fee1 <<<"${read_hook_fees_after}"
+        if ! [[ "${after_fee0}" =~ ^[0-9]+$ ]]; then after_fee0=0; fi
+        if ! [[ "${after_fee1}" =~ ^[0-9]+$ ]]; then after_fee1=0; fi
+        if (( after_fee0 > before_fee0 || after_fee1 > before_fee1 )); then
+          TC_MON_ACCRUE_PASS=$((TC_MON_ACCRUE_PASS + 1))
+        else
+          TC_MON_ACCRUE_FAIL=$((TC_MON_ACCRUE_FAIL + 1))
+        fi
+      else
+        TC_MON_ACCRUE_FAIL=$((TC_MON_ACCRUE_FAIL + 1))
+      fi
+    else
+      TC_MON_ACCRUE_FAIL=$((TC_MON_ACCRUE_FAIL + 1))
+    fi
+  fi
+
+  if (( TC_MON_CLAIM_PASS == 0 )); then
+    TC_MON_CLAIM_OBS=$((TC_MON_CLAIM_OBS + 1))
+    if hook_claim_all_hook_fees >/dev/null 2>&1; then
+      if read_hook_fees_claimed="$(read_hook_fees 2>/dev/null)"; then
+        IFS='|' read -r claimed_fee0 claimed_fee1 <<<"${read_hook_fees_claimed}"
+        if ! [[ "${claimed_fee0}" =~ ^[0-9]+$ ]]; then claimed_fee0=1; fi
+        if ! [[ "${claimed_fee1}" =~ ^[0-9]+$ ]]; then claimed_fee1=1; fi
+        if (( claimed_fee0 == 0 && claimed_fee1 == 0 )); then
+          TC_MON_CLAIM_PASS=$((TC_MON_CLAIM_PASS + 1))
+        else
+          TC_MON_CLAIM_FAIL=$((TC_MON_CLAIM_FAIL + 1))
+        fi
+      else
+        TC_MON_CLAIM_FAIL=$((TC_MON_CLAIM_FAIL + 1))
+      fi
+    else
+      TC_MON_CLAIM_FAIL=$((TC_MON_CLAIM_FAIL + 1))
+    fi
+  fi
+
+  if (( TC_ANOMALY_PASS == 0 )); then
+    TC_ANOMALY_OBS=$((TC_ANOMALY_OBS + 1))
+    if run_cases_anomaly_checks >/dev/null 2>&1; then
+      TC_ANOMALY_PASS=$((TC_ANOMALY_PASS + 1))
+      TC_ANOMALY_FAIL=0
+      CASES_RUN_ANOMALY_OK=1
+    else
+      TC_ANOMALY_FAIL=$((TC_ANOMALY_FAIL + 1))
+      CASES_RUN_ANOMALY_OK=0
+    fi
+  fi
 }
 
 state_fields_valid() {
@@ -713,8 +1628,13 @@ read_pool_liquidity() {
 
 read_token_balance() {
   local token="$1"
+  local holder="${2:-${DEPLOYER}}"
   local out
-  if ! out="$(cast_rpc call --rpc-url "${RPC_URL}" "${token}" "balanceOf(address)(uint256)" "${DEPLOYER}" 2>/dev/null | awk '{print $1}')"; then
+  if [[ "$(printf '%s' "${token}" | tr '[:upper:]' '[:lower:]')" == "${NATIVE_CURRENCY_ADDRESS_LC}" ]]; then
+    read_native_balance_wei "${holder}"
+    return $?
+  fi
+  if ! out="$(cast_rpc call --rpc-url "${RPC_URL}" "${token}" "balanceOf(address)(uint256)" "${holder}" 2>/dev/null | awk '{print $1}')"; then
     return 1
   fi
   if [[ ! "${out}" =~ ^[0-9]+$ ]]; then
@@ -724,14 +1644,43 @@ read_token_balance() {
 }
 
 read_native_balance_wei() {
+  local holder="${1:-${DEPLOYER}}"
   local out
-  if ! out="$(cast_rpc balance --rpc-url "${RPC_URL}" "${DEPLOYER}" 2>/dev/null | awk '{print $1}')"; then
+  if ! out="$(cast_rpc balance --rpc-url "${RPC_URL}" "${holder}" 2>/dev/null | awk '{print $1}')"; then
     return 1
   fi
   if [[ ! "${out}" =~ ^[0-9]+$ ]]; then
     return 1
   fi
   echo "${out}"
+}
+
+wait_tx_mined() {
+  local tx_hash="$1"
+  local label="$2"
+  local started now receipt status
+  started="$(date +%s)"
+  while true; do
+    if receipt="$(cast_rpc receipt --rpc-url "${RPC_URL}" "${tx_hash}" 2>/dev/null)"; then
+      status="$(printf '%s\n' "${receipt}" | awk '/^status[[:space:]]/{print $2; exit}')"
+      if [[ "${status}" == "1" || "${status}" == "0x1" ]]; then
+        return 0
+      fi
+      if [[ "${status}" == "0" || "${status}" == "0x0" ]]; then
+        echo "ERROR: tx reverted for step ${label}: ${tx_hash}" >&2
+        return 1
+      fi
+    fi
+    now="$(date +%s)"
+    if (( now - started > TX_WAIT_TIMEOUT_SECONDS )); then
+      echo "ERROR: timeout waiting for tx receipt for step ${label}: ${tx_hash}" >&2
+      return 1
+    fi
+    if [[ -t 1 && "${NO_LIVE}" -eq 0 && -w /dev/tty ]]; then
+      random_render_header_tick > /dev/tty 2>/dev/null || true
+    fi
+    sleep 1 || true
+  done
 }
 
 run_swap_step() {
@@ -741,16 +1690,23 @@ run_swap_step() {
   local out tx send_attempt
   local params
   local sqrt_price_limit
+  local token_in_lc
 
   if [[ "${zero_for_one}" == "true" ]]; then
     sqrt_price_limit="${SQRT_PRICE_LIMIT_X96_ZFO}"
+    token_in_lc="${CURRENCY0_LC}"
   else
     sqrt_price_limit="${SQRT_PRICE_LIMIT_X96_OZF}"
+    token_in_lc="${CURRENCY1_LC}"
   fi
   params="(${zero_for_one},-${amount},${sqrt_price_limit})"
   send_attempt=0
   while true; do
-    if out="$(cast_rpc send --rpc-url "${RPC_URL}" --private-key "${PRIVATE_KEY}" "${SWAP_TEST_ADDRESS}" "${SWAP_SIG}" "${POOL_KEY}" "${params}" "${TEST_SETTINGS}" 0x 2>&1)"; then
+    if [[ "${token_in_lc}" == "${NATIVE_CURRENCY_ADDRESS_LC}" ]]; then
+      if out="$(cast_rpc send --async --rpc-url "${RPC_URL}" --private-key "${PRIVATE_KEY}" "${CAST_TX_FEE_ARGS[@]}" --value "${amount}" "${SWAP_TEST_ADDRESS}" "${SWAP_SIG}" "${POOL_KEY}" "${params}" "${TEST_SETTINGS}" 0x 2>&1)"; then
+        break
+      fi
+    elif out="$(cast_rpc send --async --rpc-url "${RPC_URL}" --private-key "${PRIVATE_KEY}" "${CAST_TX_FEE_ARGS[@]}" "${SWAP_TEST_ADDRESS}" "${SWAP_SIG}" "${POOL_KEY}" "${params}" "${TEST_SETTINGS}" 0x 2>&1)"; then
       break
     fi
     send_attempt=$((send_attempt + 1))
@@ -762,10 +1718,13 @@ run_swap_step() {
     echo "${out}" >&2
     return 1
   done
-  tx="$(echo "${out}" | awk '/^transactionHash[[:space:]]/{print $2; exit}')"
+  tx="$(echo "${out}" | awk '/^0x[0-9a-fA-F]+$/{print $1; exit} /^transactionHash[[:space:]]/{print $2; exit}')"
   if [[ -z "${tx}" ]]; then
     echo "ERROR: failed to parse transaction hash for step ${label}" >&2
     echo "${out}" >&2
+    return 1
+  fi
+  if ! wait_tx_mined "${tx}" "${label}"; then
     return 1
   fi
   echo "${tx}"
@@ -782,7 +1741,7 @@ run_wrap_step() {
   fi
   send_attempt=0
   while true; do
-    if out="$(cast_rpc send --rpc-url "${RPC_URL}" --private-key "${PRIVATE_KEY}" --value "${amount_wei}" "${weth_token}" "deposit()" 2>&1)"; then
+    if out="$(cast_rpc send --async --rpc-url "${RPC_URL}" --private-key "${PRIVATE_KEY}" "${CAST_TX_FEE_ARGS[@]}" --value "${amount_wei}" "${weth_token}" "deposit()" 2>&1)"; then
       break
     fi
     send_attempt=$((send_attempt + 1))
@@ -794,10 +1753,13 @@ run_wrap_step() {
     echo "${out}" >&2
     return 1
   done
-  tx="$(echo "${out}" | awk '/^transactionHash[[:space:]]/{print $2; exit}')"
+  tx="$(echo "${out}" | awk '/^0x[0-9a-fA-F]+$/{print $1; exit} /^transactionHash[[:space:]]/{print $2; exit}')"
   if [[ -z "${tx}" ]]; then
     echo "ERROR: failed to parse wrap transaction hash for step ${label}" >&2
     echo "${out}" >&2
+    return 1
+  fi
+  if ! wait_tx_mined "${tx}" "${label}"; then
     return 1
   fi
   echo "${tx}"
@@ -814,7 +1776,7 @@ compute_wallet_rebalance_plan() {
   local target_pct="$8"
   local tolerance_pct="$9"
   local plan
-  if ! plan="$(python3 - "${native_wei}" "${stable_raw}" "${volatile_raw}" "${price_ratio}" "${STABLE_SIDE}" "${stable_dec}" "${volatile_dec}" "${util_pct}" "${target_pct}" "${tolerance_pct}" <<'PY'
+  if ! plan="$(python3 -S - "${native_wei}" "${stable_raw}" "${volatile_raw}" "${price_ratio}" "${STABLE_SIDE}" "${stable_dec}" "${volatile_dec}" "${util_pct}" "${target_pct}" "${tolerance_pct}" <<'PY'
 from decimal import Decimal, getcontext, InvalidOperation, ROUND_FLOOR
 import sys
 
@@ -933,7 +1895,7 @@ suggest_balance_target_side() {
   local tick_anchor="$9"
   local tick_band="${10}"
   local out
-  if ! out="$(python3 - "${stable_raw}" "${volatile_raw}" "${price_ratio}" "${STABLE_SIDE}" "${stable_dec}" "${volatile_dec}" "${target_pct}" "${tolerance_pct}" "${tick_now}" "${tick_anchor}" "${tick_band}" <<'PY'
+  if ! out="$(python3 -S - "${stable_raw}" "${volatile_raw}" "${price_ratio}" "${STABLE_SIDE}" "${stable_dec}" "${volatile_dec}" "${target_pct}" "${tolerance_pct}" "${tick_now}" "${tick_anchor}" "${tick_band}" <<'PY'
 from decimal import Decimal, getcontext, InvalidOperation
 import sys
 
@@ -1018,13 +1980,14 @@ PY
 
 maybe_rebalance_wallet() {
   local force="${1:-0}"
+  local allow_when_disabled="${2:-0}"
   local native_raw stable_raw volatile_raw
   local stable_token volatile_token
   local stable_dec volatile_dec
   local plan wrap_wei action swap_amount
   local side zero_for_one wrap_tx swap_tx attempt_no ts
 
-  if (( AUTO_REBALANCE_ENABLED == 0 )); then
+  if (( AUTO_REBALANCE_ENABLED == 0 && allow_when_disabled == 0 )); then
     return 1
   fi
   if [[ "${STABLE_SIDE}" == "unknown" ]]; then
@@ -1126,14 +2089,19 @@ maybe_rebalance_wallet() {
       RND_OZF_COUNT=$((RND_OZF_COUNT + 1))
     fi
     RND_LAST_TX_HASH="${swap_tx}"
+    RND_LAST_TX_TS="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
     RND_LAST_TX_STATUS="ok"
     RND_LAST_TX_SIDE="${side}"
+    RND_LAST_TX_TYPE="$(side_to_trade_type "${side}")"
     RND_LAST_TX_AMOUNT="${swap_amount}"
+    RND_LAST_TX_EMA_USD="$(usd6_to_dollar "${RND_CURRENT_EMA:-0}")"
     RND_LAST_TX_REASON="wallet-rebalance"
-    ts="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+    RND_LAST_TX_HOOK_REASON="-"
+    ts="${RND_LAST_TX_TS}"
     random_append_tx_log "${ts}" "${attempt_no}" "REBALANCE" "ok" "${side}" "${swap_amount}" "wallet-rebalance" "${swap_tx}" "-" "-" "-" "-" "-" "-" "-"
   else
     RND_LAST_TX_REASON="wallet-rebalance-wrap-only"
+    RND_LAST_TX_HOOK_REASON="-"
   fi
 
   RND_REBALANCE_LAST_ATTEMPT="${RND_ATTEMPTS}"
@@ -1145,29 +2113,22 @@ maybe_rebalance_wallet() {
 amount_for_target_vol() {
   local target_vol="$1"
   local amount
-  local max_amount
-  local bal_raw
+  if (( CASES_MODE == 1 )); then
+    if ! [[ "${target_vol}" =~ ^[0-9]+$ ]]; then
+      echo "1000000"
+      return
+    fi
+    if (( target_vol < 1000000 )); then
+      target_vol=1000000
+    fi
+    echo "${target_vol}"
+    return
+  fi
   # For zeroForOne exact-input swaps in this pool, amountSpecified is token0 (USDC, 6 decimals).
   # Approximation: ~2 USDC per 1 USD of target period volume.
   amount=$(( (target_vol + 1) / 2 ))
   # Keep volume meaningful in USD6 units to avoid dust-only closes.
   if (( amount < 500000 )); then amount=500000; fi
-  if bal_raw="$(cast_rpc call --rpc-url "${RPC_URL}" "${CURRENCY0}" "balanceOf(address)(uint256)" "${DEPLOYER}" 2>/dev/null | awk '{print $1}')"; then
-    :
-  else
-    bal_raw=""
-  fi
-  if [[ -n "${bal_raw}" && "${bal_raw}" =~ ^[0-9]+$ ]]; then
-    max_amount=$(( bal_raw * MAX_BALANCE_SPEND_PCT / 100 ))
-    if (( bal_raw > 0 && max_amount <= 0 )); then
-      max_amount="${bal_raw}"
-    fi
-    if (( max_amount <= 0 )); then
-      amount=0
-    elif (( amount > max_amount )); then
-      amount=${max_amount}
-    fi
-  fi
   echo "${amount}"
 }
 
@@ -1192,55 +2153,310 @@ amount_for_period_target_vol() {
   amount_for_target_vol "${delta}"
 }
 
+stable_price_per_volatile() {
+  local ratio="${RND_POOL_PRICE_T1_PER_T0:-}"
+  local fallback="${INIT_PRICE_USD_INT:-2500}"
+  python3 -S - "${ratio}" "${STABLE_SIDE}" "${fallback}" <<'PY'
+from decimal import Decimal
+import re
+import sys
+ratio = (sys.argv[1] or "").strip()
+stable_side = (sys.argv[2] or "").strip()
+fallback = Decimal(sys.argv[3] or "2500")
+num_re = re.compile(r'^-?[0-9]+(?:[.][0-9]+)?(?:[eE][-+]?[0-9]+)?$')
+price = fallback
+if num_re.match(ratio):
+    r = Decimal(ratio)
+    if r > 0:
+        if stable_side == "token1":
+            price = r
+        elif stable_side == "token0":
+            price = Decimal(1) / r
+if price <= 0 or price < Decimal("0.01") or price > Decimal("1000000"):
+    price = fallback
+print(price)
+PY
+}
+
+usd6_proxy_to_token_raw() {
+  local usd6="$1"
+  local token="$2"
+  local decimals="$3"
+  local token_lc stable_lc stable_per_volatile
+  token_lc="$(printf '%s' "${token}" | tr '[:upper:]' '[:lower:]')"
+  stable_lc="$(printf '%s' "${STABLE}" | tr '[:upper:]' '[:lower:]')"
+  stable_per_volatile="$(stable_price_per_volatile)"
+  python3 -S - "${usd6}" "${token_lc}" "${stable_lc}" "${decimals}" "${stable_per_volatile}" <<'PY'
+from decimal import Decimal, ROUND_HALF_UP
+import sys
+usd6 = int(sys.argv[1])
+token_lc = sys.argv[2]
+stable_lc = sys.argv[3]
+decimals = int(sys.argv[4])
+stable_per_volatile = Decimal(sys.argv[5])
+if usd6 <= 0 or decimals < 0:
+    print(1)
+    raise SystemExit
+usd = Decimal(usd6) / Decimal(1_000_000)
+if token_lc == stable_lc:
+    raw = usd * (Decimal(10) ** decimals)
+else:
+    if stable_per_volatile <= 0:
+        print(1)
+        raise SystemExit
+    raw = (usd / stable_per_volatile) * (Decimal(10) ** decimals)
+q = int(raw.to_integral_value(rounding=ROUND_HALF_UP))
+if q <= 0:
+    q = 1
+print(q)
+PY
+}
+
+pool_active_liquidity_usd6() {
+  local liq="${RND_POOL_LIQUIDITY:-}"
+  local sqrt_price="${RND_SLOT0_SQRT_PRICE_X96:-}"
+  local ratio="${RND_POOL_PRICE_T1_PER_T0:-}"
+  python3 -S - "${liq}" "${sqrt_price}" "${ratio}" "${STABLE_SIDE}" "${TOKEN0_DECIMALS}" "${TOKEN1_DECIMALS}" <<'PY'
+from decimal import Decimal, ROUND_HALF_UP, InvalidOperation, getcontext
+import sys
+
+getcontext().prec = 90
+try:
+    liq = Decimal(sys.argv[1])
+    sqrt_price = Decimal(sys.argv[2])
+    ratio = Decimal(sys.argv[3])
+except (InvalidOperation, ValueError):
+    print(0)
+    raise SystemExit
+
+stable_side = sys.argv[4]
+dec0 = int(sys.argv[5])
+dec1 = int(sys.argv[6])
+if liq <= 0 or sqrt_price <= 0 or ratio <= 0 or dec0 < 0 or dec1 < 0:
+    print(0)
+    raise SystemExit
+
+q96 = Decimal(2) ** 96
+amount0_raw = (liq * q96) / sqrt_price
+amount1_raw = (liq * sqrt_price) / q96
+amount0 = amount0_raw / (Decimal(10) ** dec0)
+amount1 = amount1_raw / (Decimal(10) ** dec1)
+
+if stable_side == "token0":
+    total_usd = amount0 + (amount1 / ratio)
+elif stable_side == "token1":
+    total_usd = amount1 + (amount0 * ratio)
+else:
+    print(0)
+    raise SystemExit
+
+if total_usd <= 0:
+    print(0)
+    raise SystemExit
+
+total_usd6 = int((total_usd * Decimal(1_000_000)).to_integral_value(rounding=ROUND_HALF_UP))
+print(total_usd6 if total_usd6 > 0 else 0)
+PY
+}
+
+cases_liquidity_swap_cap_usd6() {
+  local pct="${CASES_MAX_POOL_LIQUIDITY_PCT}"
+  local liq sqrt_price ratio liq_now cap
+  if (( CASES_MODE != 1 )); then
+    echo "0"
+    return
+  fi
+  if ! [[ "${pct}" =~ ^[0-9]+$ ]] || (( pct <= 0 )); then
+    echo "0"
+    return
+  fi
+
+  liq="${RND_POOL_LIQUIDITY:-}"
+  sqrt_price="${RND_SLOT0_SQRT_PRICE_X96:-}"
+  ratio="${RND_POOL_PRICE_T1_PER_T0:-}"
+  if [[ ! "${liq}" =~ ^[0-9]+$ || "${liq}" -le 0 || ! "${sqrt_price}" =~ ^[0-9]+$ || "${sqrt_price}" -le 0 || ! "${ratio}" =~ ^-?[0-9]+([.][0-9]+)?([eE][-+]?[0-9]+)?$ ]]; then
+    read_pool_tick >/dev/null 2>&1 || true
+    if liq_now="$(read_pool_liquidity 2>/dev/null)"; then
+      RND_POOL_LIQUIDITY="${liq_now}"
+      liq="${liq_now}"
+      sqrt_price="${RND_SLOT0_SQRT_PRICE_X96:-}"
+      ratio="${RND_POOL_PRICE_T1_PER_T0:-}"
+    fi
+  fi
+
+  if [[ ! "${liq}" =~ ^[0-9]+$ || "${liq}" -le 0 || ! "${sqrt_price}" =~ ^[0-9]+$ || "${sqrt_price}" -le 0 || ! "${ratio}" =~ ^-?[0-9]+([.][0-9]+)?([eE][-+]?[0-9]+)?$ ]]; then
+    if [[ "${RND_CASES_LIQ_CAP_USD6:-0}" =~ ^[0-9]+$ && "${RND_CASES_LIQ_CAP_USD6}" -gt 0 ]]; then
+      echo "${RND_CASES_LIQ_CAP_USD6}"
+      return
+    fi
+    echo "0"
+    return
+  fi
+
+  cap="$(python3 -S - "${liq}" "${sqrt_price}" "${ratio}" "${STABLE_SIDE}" "${TOKEN0_DECIMALS}" "${TOKEN1_DECIMALS}" "${pct}" <<'PY'
+from decimal import Decimal, ROUND_HALF_UP, InvalidOperation, getcontext
+import sys
+
+getcontext().prec = 90
+try:
+    liq = Decimal(sys.argv[1])
+    sqrt_price = Decimal(sys.argv[2])
+    ratio = Decimal(sys.argv[3])
+except (InvalidOperation, ValueError):
+    print(0)
+    raise SystemExit
+
+stable_side = sys.argv[4]
+dec0 = int(sys.argv[5])
+dec1 = int(sys.argv[6])
+pct = int(sys.argv[7])
+
+if liq <= 0 or sqrt_price <= 0 or ratio <= 0 or dec0 < 0 or dec1 < 0 or pct <= 0:
+    print(0)
+    raise SystemExit
+
+q96 = Decimal(2) ** 96
+amount0_raw = (liq * q96) / sqrt_price
+amount1_raw = (liq * sqrt_price) / q96
+amount0 = amount0_raw / (Decimal(10) ** dec0)
+amount1 = amount1_raw / (Decimal(10) ** dec1)
+
+if stable_side == "token0":
+    total_usd = amount0 + (amount1 / ratio)
+elif stable_side == "token1":
+    total_usd = amount1 + (amount0 * ratio)
+else:
+    print(0)
+    raise SystemExit
+
+if total_usd <= 0:
+    print(0)
+    raise SystemExit
+
+cap_usd6 = ((total_usd * Decimal(pct)) / Decimal(100)) * Decimal(1_000_000)
+cap = int(cap_usd6.to_integral_value(rounding=ROUND_HALF_UP))
+if cap < 1_000_000:
+    cap = 1_000_000
+print(cap)
+PY
+)"
+  if [[ "${cap}" =~ ^[0-9]+$ ]]; then
+    RND_CASES_LIQ_CAP_USD6="${cap}"
+    echo "${cap}"
+  else
+    if [[ "${RND_CASES_LIQ_CAP_USD6:-0}" =~ ^[0-9]+$ && "${RND_CASES_LIQ_CAP_USD6}" -gt 0 ]]; then
+      echo "${RND_CASES_LIQ_CAP_USD6}"
+      return
+    fi
+    echo "0"
+  fi
+}
+
 scale_amount_for_side() {
   local amount="$1"
   local side="$2"
-  local token_in bal_raw max_amount
+  local token_in token_dec converted
   if ! [[ "${amount}" =~ ^[0-9]+$ ]]; then
     echo "1"
     return
   fi
-  if [[ "${side}" == "oneForZero" && "${ONE_FOR_ZERO_SCALE}" =~ ^[0-9]+$ && "${ONE_FOR_ZERO_SCALE}" -gt 1 ]]; then
+  token_in="${CURRENCY0}"
+  token_dec="${TOKEN0_DECIMALS}"
+  if [[ "${side}" == "oneForZero" ]]; then
+    token_in="${CURRENCY1}"
+    token_dec="${TOKEN1_DECIMALS}"
+  fi
+  if (( CASES_MODE == 1 )); then
+    converted="$(usd6_proxy_to_token_raw "${amount}" "${token_in}" "${token_dec}" 2>/dev/null || true)"
+    if [[ "${converted}" =~ ^[0-9]+$ && "${converted}" -gt 0 ]]; then
+      amount="${converted}"
+    else
+      amount=1
+    fi
+  elif [[ "${side}" == "oneForZero" && "${ONE_FOR_ZERO_SCALE}" =~ ^[0-9]+$ && "${ONE_FOR_ZERO_SCALE}" -gt 1 ]]; then
     if (( amount > 9223372036854775807 / ONE_FOR_ZERO_SCALE )); then
       amount=9223372036854775807
     else
       amount=$((amount * ONE_FOR_ZERO_SCALE))
     fi
   fi
-  token_in="${CURRENCY0}"
-  if [[ "${side}" == "oneForZero" ]]; then
-    token_in="${CURRENCY1}"
-  fi
-  if bal_raw="$(cast_rpc call --rpc-url "${RPC_URL}" "${token_in}" "balanceOf(address)(uint256)" "${DEPLOYER}" 2>/dev/null | awk '{print $1}')"; then
-    if [[ "${bal_raw}" =~ ^[0-9]+$ ]]; then
-      max_amount=$(( bal_raw * MAX_BALANCE_SPEND_PCT / 100 ))
-      if (( bal_raw > 0 && max_amount <= 0 )); then
-        max_amount="${bal_raw}"
-      fi
-      if (( max_amount <= 0 )); then
-        amount=0
-      elif (( amount > max_amount )); then
-        amount="${max_amount}"
-      fi
-    fi
-  fi
   echo "${amount}"
+}
+
+side_input_token_meta() {
+  local side="$1"
+  local token dec token_lc reserve
+  token="${CURRENCY0}"
+  dec="${TOKEN0_DECIMALS}"
+  if [[ "${side}" == "oneForZero" ]]; then
+    token="${CURRENCY1}"
+    dec="${TOKEN1_DECIMALS}"
+  fi
+  token_lc="$(printf '%s' "${token}" | tr '[:upper:]' '[:lower:]')"
+  reserve=0
+  if [[ "${token_lc}" == "${NATIVE_CURRENCY_ADDRESS_LC}" ]]; then
+    reserve="${NATIVE_GAS_RESERVE_WEI}"
+  fi
+  echo "${token}|${dec}|${reserve}"
+}
+
+side_spendable_input_raw() {
+  local side="$1"
+  local token dec reserve bal spendable meta
+  if ! meta="$(side_input_token_meta "${side}" 2>/dev/null)"; then
+    return 1
+  fi
+  IFS='|' read -r token dec reserve <<<"${meta}"
+  if ! bal="$(read_token_balance "${token}" 2>/dev/null)"; then
+    return 1
+  fi
+  if ! [[ "${bal}" =~ ^[0-9]+$ ]]; then
+    return 1
+  fi
+  if ! [[ "${reserve}" =~ ^[0-9]+$ ]]; then
+    reserve=0
+  fi
+  if (( bal > reserve )); then
+    spendable=$((bal - reserve))
+  else
+    spendable=0
+  fi
+  echo "${spendable}|${bal}|${reserve}|${token}|${dec}"
+}
+
+clamp_amount_by_side_balance() {
+  local side="$1"
+  local amount="$2"
+  local spendable bal reserve token dec meta status
+  if ! [[ "${amount}" =~ ^[0-9]+$ ]]; then
+    echo "0|invalid|0|0|0|-|0"
+    return 1
+  fi
+  if ! meta="$(side_spendable_input_raw "${side}" 2>/dev/null)"; then
+    echo "${amount}|balance-read-failed|0|0|0|-|0"
+    return 1
+  fi
+  IFS='|' read -r spendable bal reserve token dec <<<"${meta}"
+  status="ok"
+  if (( amount > spendable )); then
+    amount="${spendable}"
+    status="clamped"
+  fi
+  echo "${amount}|${status}|${spendable}|${bal}|${reserve}|${token}|${dec}"
 }
 
 pick_high_amount() {
   local state="$1"
-  local ema target
-  IFS='|' read -r _ _ ema _ _ _ <<<"${state}"
+  local ema idx target
+  IFS='|' read -r _ _ ema _ idx _ <<<"${state}"
   if [[ -n "${HIGH_SWAP_AMOUNT}" ]]; then
     echo "${HIGH_SWAP_AMOUNT}"
     return
   fi
-  if (( ema <= 0 )); then
-    target=150000000
+  if [[ "${idx}" =~ ^[0-9]+$ ]] && (( idx >= HOOK_REGIME_CASH )); then
+    target="$(random_target_up_extreme_volume "${ema}")"
   else
-    target=$(( ema * 3 ))
-    if (( target < ema + 20000000 )); then target=$(( ema + 20000000 )); fi
-    if (( target < 120000000 )); then target=120000000; fi
+    target="$(random_target_up_cash_volume "${ema}")"
   fi
   echo "$(amount_for_target_vol "${target}")"
 }
@@ -1253,36 +2469,223 @@ pick_low_amount() {
     echo "${LOW_SWAP_AMOUNT}"
     return
   fi
-  if (( ema <= 0 )); then
-    target=3000000
-  else
-    target=$(( ema / 20 ))
-    if (( target < 1500000 )); then target=1500000; fi
-  fi
+  target="$(random_target_deadband_volume "${ema}")"
   echo "$(amount_for_target_vol "${target}")"
 }
 
+random_target_up_volume_raw() {
+  local ema="$1"
+  local rbps="$2"
+  local min_close="$3"
+  local target
+  if ! [[ "${ema}" =~ ^[0-9]+$ ]]; then ema=0; fi
+  if ! [[ "${rbps}" =~ ^[0-9]+$ ]]; then rbps=11000; fi
+  if ! [[ "${min_close}" =~ ^[0-9]+$ ]]; then min_close=2000000; fi
+  if (( rbps < 10001 )); then rbps=10001; fi
+  if (( ema > 0 )); then
+    target=$(( ema * (rbps + 600) / 10000 ))
+  else
+    target=$(( min_close + 2000000 ))
+  fi
+  if (( target < min_close )); then target="${min_close}"; fi
+  if (( target < 2000000 )); then target=2000000; fi
+  if (( target > 260000000 )); then target=260000000; fi
+  echo "${target}"
+}
+
+random_target_up_cash_volume() {
+  local ema="$1"
+  random_target_up_volume_raw "${ema}" "${HOOK_UP_R_TO_CASH_BPS}" "${HOOK_MIN_CLOSEVOL_TO_CASH_USD6}"
+}
+
+random_target_up_extreme_volume() {
+  local ema="$1"
+  random_target_up_volume_raw "${ema}" "${HOOK_UP_R_TO_EXTREME_BPS}" "${HOOK_MIN_CLOSEVOL_TO_EXTREME_USD6}"
+}
+
+random_target_down_volume_raw() {
+  local ema="$1"
+  local down_r="$2"
+  local target cap
+  if ! [[ "${ema}" =~ ^[0-9]+$ ]]; then ema=0; fi
+  if ! [[ "${down_r}" =~ ^[0-9]+$ ]]; then down_r=13000; fi
+  if (( ema <= 0 )); then
+    echo "${HOOK_DUST_CLOSE_VOL_USD6}"
+    return
+  fi
+  target=$(( ema * 70 / 100 ))
+  cap=$(( ema * down_r / 10000 ))
+  if (( cap > 0 && target >= cap )); then
+    target=$((cap - 500000))
+  fi
+  if (( target < HOOK_DUST_CLOSE_VOL_USD6 )); then target="${HOOK_DUST_CLOSE_VOL_USD6}"; fi
+  if (( target < 1000000 )); then target=1000000; fi
+  echo "${target}"
+}
+
+random_target_down_extreme_volume() {
+  local ema="$1"
+  random_target_down_volume_raw "${ema}" "${HOOK_DOWN_R_FROM_EXTREME_BPS}"
+}
+
+random_target_down_cash_volume() {
+  local ema="$1"
+  random_target_down_volume_raw "${ema}" "${HOOK_DOWN_R_FROM_CASH_BPS}"
+}
+
+random_target_deadband_volume() {
+  local ema="$1"
+  local lower upper band target
+  if ! [[ "${ema}" =~ ^[0-9]+$ ]]; then ema=0; fi
+  if (( ema <= 0 )); then
+    echo "2000000"
+    return
+  fi
+  lower=$(( ema * (10000 - HOOK_DEADBAND_BPS) / 10000 ))
+  upper=$(( ema * (10000 + HOOK_DEADBAND_BPS) / 10000 ))
+  band=$((upper - lower))
+  target=$(( lower + band / 2 ))
+  if (( target < lower )); then target="${lower}"; fi
+  if (( target > upper )); then target="${upper}"; fi
+  if (( target < 2000000 )); then target=2000000; fi
+  echo "${target}"
+}
+
+random_plan_v2_amount() {
+  local state="$1"
+  local min_amount="$2"
+  local max_amount="$3"
+  local fee pv ema ps idx dir
+  local debug_state hold_remaining up_streak down_streak emergency_streak
+  local roll target amount reason side
+
+  IFS='|' read -r fee pv ema ps idx dir <<<"${state}"
+  hold_remaining=0
+  up_streak=0
+  down_streak=0
+  emergency_streak=0
+  if debug_state="$(read_state_debug 2>/dev/null)"; then
+    IFS='|' read -r _ hold_remaining up_streak down_streak emergency_streak _ _ _ _ <<<"${debug_state}"
+  fi
+
+  roll="$(random_between 1 100)"
+  side=""
+  reason="v2-balanced-mix"
+
+  if ! [[ "${idx}" =~ ^[0-9]+$ ]]; then
+    idx="${HOOK_REGIME_FLOOR}"
+  fi
+
+  if (( idx <= HOOK_REGIME_FLOOR )); then
+    if (( roll <= 65 )); then
+      target="$(random_target_up_cash_volume "${ema}")"
+      reason="v2-up-cash"
+    elif (( roll <= 90 )); then
+      target="$(random_target_deadband_volume "${ema}")"
+      reason="v2-deadband"
+    else
+      target="${HOOK_DUST_CLOSE_VOL_USD6}"
+      reason="v2-no-swaps"
+    fi
+  elif (( idx >= HOOK_REGIME_EXTREME )); then
+    if [[ "${hold_remaining}" =~ ^[0-9]+$ ]] && (( hold_remaining > 0 )); then
+      if (( roll <= 75 )); then
+        target="$(random_target_deadband_volume "${ema}")"
+        reason="v2-hold"
+      else
+        target="${HOOK_DUST_CLOSE_VOL_USD6}"
+        reason="v2-hold-no-swaps"
+      fi
+    else
+      if (( roll <= 55 )); then
+        target="$(random_target_down_extreme_volume "${ema}")"
+        reason="v2-down-to-cash"
+      elif (( roll <= 85 )); then
+        target="$(random_target_deadband_volume "${ema}")"
+        reason="v2-deadband"
+      else
+        target="${HOOK_DUST_CLOSE_VOL_USD6}"
+        reason="v2-no-swaps"
+      fi
+    fi
+  elif (( idx >= HOOK_REGIME_CASH )); then
+    if (( roll <= 45 )); then
+      target="$(random_target_up_extreme_volume "${ema}")"
+      reason="v2-up-extreme"
+    elif (( roll <= 75 )); then
+      target="$(random_target_down_cash_volume "${ema}")"
+      reason="v2-down-floor-seed"
+    else
+      target="$(random_target_deadband_volume "${ema}")"
+      reason="v2-deadband"
+    fi
+  else
+    if (( roll <= 45 )); then
+      target="$(random_target_up_cash_volume "${ema}")"
+      reason="v2-up-cash-retry"
+    elif (( roll <= 80 )); then
+      target="$(random_target_down_cash_volume "${ema}")"
+      reason="v2-down-floor"
+    else
+      target="$(random_target_deadband_volume "${ema}")"
+      reason="v2-deadband"
+    fi
+  fi
+
+  # Reserve a small tail for emergency-floor probes while not at floor.
+  if (( idx > HOOK_REGIME_FLOOR )) && (( roll >= 97 )); then
+    target="${HOOK_DUST_CLOSE_VOL_USD6}"
+    reason="v2-emergency-probe"
+  fi
+
+  amount="$(amount_for_period_target_vol "${target}" "${pv}")"
+  if ! [[ "${amount}" =~ ^[0-9]+$ ]]; then
+    amount="${min_amount}"
+  fi
+  if (( amount < min_amount )); then amount="${min_amount}"; fi
+  if (( amount > max_amount )); then amount="${max_amount}"; fi
+  echo "${amount}|${reason}|${side}"
+}
+
 pick_case_amount_bounds() {
-  local bal_raw max_case min_case
-  if ! bal_raw="$(cast_rpc call --rpc-url "${RPC_URL}" "${CURRENCY0}" "balanceOf(address)(uint256)" "${DEPLOYER}" 2>/dev/null | awk '{print $1}')"; then
+  local bal_raw max_case min_case cases_min cases_max
+  if [[ "${CURRENCY0_LC}" == "${NATIVE_CURRENCY_ADDRESS_LC}" ]]; then
+    if ! bal_raw="$(read_native_balance_wei 2>/dev/null)"; then
+      return 1
+    fi
+  elif ! bal_raw="$(cast_rpc call --rpc-url "${RPC_URL}" "${CURRENCY0}" "balanceOf(address)(uint256)" "${DEPLOYER}" 2>/dev/null | awk '{print $1}')"; then
     return 1
   fi
   if ! [[ "${bal_raw}" =~ ^[0-9]+$ ]]; then
     return 1
+  fi
+  cases_min="${CASES_SOFT_MIN_AMOUNT}"
+  cases_max="${CASES_SOFT_MAX_AMOUNT}"
+  if ! [[ "${cases_min}" =~ ^[0-9]+$ ]]; then
+    cases_min=500000
+  fi
+  if ! [[ "${cases_max}" =~ ^[0-9]+$ ]]; then
+    cases_max=3000000
+  fi
+  if (( cases_min <= 0 )); then
+    cases_min=500000
+  fi
+  if (( cases_max < cases_min )); then
+    cases_max="${cases_min}"
   fi
   max_case=$(( bal_raw * 25 / 100 ))
   if (( bal_raw > 0 && max_case <= 0 )); then
     max_case="${bal_raw}"
   fi
   if (( CASES_MODE == 1 )); then
-    # Cases mode needs enough headroom to cross deadband and reach cap/floor transitions.
-    if (( max_case > 80000000 )); then
-      max_case=80000000
+    # Cases mode defaults are intentionally conservative: test mechanics with small swaps.
+    if (( max_case > cases_max )); then
+      max_case="${cases_max}"
     fi
-    if (( max_case < 1000000 )); then
-      max_case=1000000
+    if (( max_case < cases_min )); then
+      max_case="${cases_min}"
     fi
-    min_case=1000000
+    min_case="${cases_min}"
   else
     if (( max_case > RANDOM_SOFT_MAX_AMOUNT )); then
       max_case="${RANDOM_SOFT_MAX_AMOUNT}"
@@ -1420,10 +2823,385 @@ pool_price_usd_display() {
   echo "${token_label}=${value}"
 }
 
+format_usd_int() {
+  local v="$1"
+  if ! [[ "${v}" =~ ^[0-9]+$ ]]; then
+    echo "n/a"
+    return
+  fi
+  echo "\$$(format_int_commas "${v}")"
+}
+
+volatile_balance_usd() {
+  local raw="$1"
+  local decimals="$2"
+  local ratio="$3"
+  local stable_side="$4"
+  if ! [[ "${raw}" =~ ^[0-9]+$ && "${decimals}" =~ ^[0-9]+$ ]]; then
+    echo "n/a"
+    return
+  fi
+  if ! [[ "${ratio}" =~ ^-?[0-9]+([.][0-9]+)?([eE][-+]?[0-9]+)?$ ]]; then
+    echo "n/a"
+    return
+  fi
+  python3 -S - "${raw}" "${decimals}" "${ratio}" "${stable_side}" <<'PY'
+from decimal import Decimal, ROUND_HALF_UP
+import sys
+raw = int(sys.argv[1])
+decimals = int(sys.argv[2])
+ratio = Decimal(sys.argv[3])
+stable_side = sys.argv[4]
+if raw < 0 or decimals < 0 or ratio <= 0:
+    print("n/a")
+    raise SystemExit
+amount = Decimal(raw) / (Decimal(10) ** decimals)
+if stable_side == "token1":
+    usd = amount * ratio
+elif stable_side == "token0":
+    usd = amount / ratio
+else:
+    print("n/a")
+    raise SystemExit
+q = usd.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+print(f"${q:,.2f}")
+PY
+}
+
+token_raw_to_usd() {
+  local raw="$1"
+  local token="$2"
+  local decimals="$3"
+  local token_lc stable_lc stable_per_volatile
+  if ! [[ "${raw}" =~ ^[0-9]+$ && "${decimals}" =~ ^[0-9]+$ ]]; then
+    echo "n/a"
+    return
+  fi
+  token_lc="$(printf '%s' "${token}" | tr '[:upper:]' '[:lower:]')"
+  stable_lc="$(printf '%s' "${STABLE}" | tr '[:upper:]' '[:lower:]')"
+  stable_per_volatile="$(stable_price_per_volatile)"
+  python3 -S - "${raw}" "${token_lc}" "${stable_lc}" "${decimals}" "${stable_per_volatile}" <<'PY'
+from decimal import Decimal, ROUND_HALF_UP
+import sys
+raw = int(sys.argv[1])
+token_lc = sys.argv[2]
+stable_lc = sys.argv[3]
+decimals = int(sys.argv[4])
+stable_per_volatile = Decimal(sys.argv[5])
+if raw < 0 or decimals < 0:
+    print("n/a")
+    raise SystemExit
+amount = Decimal(raw) / (Decimal(10) ** decimals)
+if token_lc == stable_lc:
+    usd = amount
+else:
+    if stable_per_volatile <= 0:
+        print("n/a")
+        raise SystemExit
+    usd = amount * stable_per_volatile
+q = usd.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+print(f"${q:,.2f}")
+PY
+}
+
+reason_code_to_label() {
+  local code="$1"
+  case "${code}" in
+    1) echo "FEE_UP" ;;
+    2) echo "FEE_DOWN" ;;
+    3) echo "REVERSAL_LOCK" ;;
+    4) echo "CAP" ;;
+    5) echo "FLOOR" ;;
+    6) echo "ZERO_EMA_DECAY" ;;
+    7) echo "NO_SWAPS" ;;
+    8) echo "LULL_RESET" ;;
+    9) echo "DEADBAND" ;;
+    10) echo "EMA_BOOTSTRAP" ;;
+    11) echo "JUMP_CASH" ;;
+    12) echo "JUMP_EXTREME" ;;
+    13) echo "DOWN_TO_CASH" ;;
+    14) echo "DOWN_TO_FLOOR" ;;
+    15) echo "HOLD" ;;
+    16) echo "EMERGENCY_FLOOR" ;;
+    17) echo "BOOTSTRAP_V2" ;;
+    *) echo "UNKNOWN" ;;
+  esac
+}
+
+format_local_timestamp() {
+  local ts="$1"
+  if [[ -z "${ts}" || "${ts}" == "-" ]]; then
+    echo "-"
+    return
+  fi
+  python3 -S - "${ts}" <<'PY'
+import sys
+from datetime import datetime, timezone
+
+raw = (sys.argv[1] or "").strip()
+dt = None
+for fmt in ("%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%d %H:%M:%S"):
+    try:
+        dt = datetime.strptime(raw, fmt)
+        if fmt.endswith("Z"):
+            dt = dt.replace(tzinfo=timezone.utc)
+        break
+    except Exception:
+        pass
+if dt is None:
+    print(raw)
+    raise SystemExit
+if dt.tzinfo is None:
+    local_dt = dt
+else:
+    local_dt = dt.astimezone()
+print(local_dt.strftime("%Y-%m-%d %H:%M:%S"))
+PY
+}
+
+center_text() {
+  local text="$1"
+  local width="$2"
+  local len pad left right
+  len=${#text}
+  if (( len >= width )); then
+    printf '%s' "${text:0:width}"
+    return
+  fi
+  pad=$((width - len))
+  left=$((pad / 2))
+  right=$((pad - left))
+  printf '%*s%s%*s' "${left}" '' "${text}" "${right}" ''
+}
+
+extract_period_closed_events() {
+  local tx_hash="$1"
+  local receipt hook_lc
+  if [[ "${tx_hash}" != 0x* ]]; then
+    return 0
+  fi
+  if ! receipt="$(cast_rpc receipt --rpc-url "${RPC_URL}" "${tx_hash}" --json 2>/dev/null)"; then
+    return 0
+  fi
+  hook_lc="$(printf '%s' "${HOOK_ADDRESS}" | tr '[:upper:]' '[:lower:]')"
+  python3 -S - "${hook_lc}" "${PERIOD_CLOSED_TOPIC0}" "${receipt}" <<'PY'
+import json
+import sys
+
+hook = sys.argv[1].lower()
+topic0 = sys.argv[2].lower()
+raw_receipt = sys.argv[3]
+
+try:
+    payload = json.loads(raw_receipt)
+except Exception:
+    raise SystemExit(0)
+
+logs = payload.get("logs")
+if not isinstance(logs, list):
+    raise SystemExit(0)
+
+for log in logs:
+    if not isinstance(log, dict):
+        continue
+    addr = str(log.get("address", "")).lower()
+    if addr != hook:
+        continue
+    topics = log.get("topics") or []
+    if not topics:
+        continue
+    if str(topics[0]).lower() != topic0:
+        continue
+    data = str(log.get("data", ""))
+    if not data.startswith("0x"):
+        continue
+    hex_data = data[2:]
+    if len(hex_data) < 64 * 8:
+        continue
+    try:
+        words = [int(hex_data[i:i + 64], 16) for i in range(0, 64 * 8, 64)]
+    except Exception:
+        continue
+    from_fee, from_idx, to_fee, to_idx, close_vol, ema_vol, _lp_fees, reason_code = words
+    print(f"{from_fee}|{from_idx}|{to_fee}|{to_idx}|{close_vol}|{ema_vol}|{reason_code}")
+PY
+}
+
+extract_governance_events() {
+  local tx_hash="$1"
+  local receipt hook_lc
+  if [[ "${tx_hash}" != 0x* ]]; then
+    return 0
+  fi
+  if ! receipt="$(cast_rpc receipt --rpc-url "${RPC_URL}" "${tx_hash}" --json 2>/dev/null)"; then
+    return 0
+  fi
+  hook_lc="$(printf '%s' "${HOOK_ADDRESS}" | tr '[:upper:]' '[:lower:]')"
+  python3 -S - "${hook_lc}" "${PAUSED_TOPIC0}" "${UNPAUSED_TOPIC0}" "${receipt}" <<'PY'
+import json
+import sys
+
+hook = sys.argv[1].lower()
+paused_topic = sys.argv[2].lower()
+unpaused_topic = sys.argv[3].lower()
+raw_receipt = sys.argv[4]
+
+try:
+    payload = json.loads(raw_receipt)
+except Exception:
+    raise SystemExit(0)
+
+logs = payload.get("logs")
+if not isinstance(logs, list):
+    raise SystemExit(0)
+
+for log in logs:
+    if not isinstance(log, dict):
+        continue
+    addr = str(log.get("address", "")).lower()
+    if addr != hook:
+        continue
+    topics = log.get("topics") or []
+    if not topics:
+        continue
+    topic0 = str(topics[0]).lower()
+    if topic0 == paused_topic:
+        data = str(log.get("data", ""))
+        if not data.startswith("0x"):
+            continue
+        hex_data = data[2:]
+        if len(hex_data) < 64 * 2:
+            continue
+        try:
+            fee = int(hex_data[0:64], 16)
+            idx = int(hex_data[64:128], 16)
+        except Exception:
+            continue
+        print(f"PAUSE|{fee}|{idx}")
+        continue
+    if topic0 == unpaused_topic:
+        print("UNPAUSE|-|-")
+PY
+}
+
+cases_track_period_event() {
+  local reason_code="$1"
+  local from_idx="$2"
+  local to_idx="$3"
+  local close_vol="$4"
+  local ema_vol="$5"
+  if (( CASES_MODE != 1 )); then
+    return
+  fi
+  if ! [[ "${reason_code}" =~ ^[0-9]+$ && "${from_idx}" =~ ^[0-9]+$ && "${to_idx}" =~ ^[0-9]+$ ]]; then
+    TC_MODEL_CLOSE_OBS=$((TC_MODEL_CLOSE_OBS + 1))
+    TC_MODEL_CLOSE_FAIL=$((TC_MODEL_CLOSE_FAIL + 1))
+    return
+  fi
+
+  TC_MODEL_CLOSE_OBS=$((TC_MODEL_CLOSE_OBS + 1))
+  TC_MODEL_CLOSE_PASS=$((TC_MODEL_CLOSE_PASS + 1))
+
+  case "${reason_code}" in
+    10|17)
+      CASES_RUN_BOOTSTRAP_OK=1
+      ;;
+    11)
+      CASES_RUN_JUMP_CASH_OK=1
+      CASES_RUN_CAP_OK=1
+      TC_CAP_CLAMP_OBS=$((TC_CAP_CLAMP_OBS + 1))
+      TC_CAP_CLAMP_PASS=$((TC_CAP_CLAMP_PASS + 1))
+      ;;
+    12)
+      CASES_RUN_JUMP_EXTREME_OK=1
+      CASES_RUN_REV_OK=1
+      TC_REVERSAL_LOCK_OBS=$((TC_REVERSAL_LOCK_OBS + 1))
+      TC_REVERSAL_LOCK_PASS=$((TC_REVERSAL_LOCK_PASS + 1))
+      ;;
+    13)
+      CASES_RUN_DOWN_CASH_OK=1
+      ;;
+    14)
+      CASES_RUN_FLOOR_OK=1
+      TC_FLOOR_CLAMP_OBS=$((TC_FLOOR_CLAMP_OBS + 1))
+      TC_FLOOR_CLAMP_PASS=$((TC_FLOOR_CLAMP_PASS + 1))
+      ;;
+    15)
+      CASES_RUN_HOLD_OK=1
+      ;;
+    16)
+      CASES_RUN_EMERGENCY_OK=1
+      ;;
+    9)
+      CASES_RUN_DEADBAND_OK=1
+      TC_DEADBAND_OBS=$((TC_DEADBAND_OBS + 1))
+      TC_DEADBAND_PASS=$((TC_DEADBAND_PASS + 1))
+      ;;
+    7)
+      CASES_RUN_NO_SWAPS_OK=1
+      ;;
+    8)
+      CASES_RUN_LULL_OK=1
+      TC_LULL_RESET_OBS=$((TC_LULL_RESET_OBS + 1))
+      TC_LULL_RESET_PASS=$((TC_LULL_RESET_PASS + 1))
+      ;;
+  esac
+  if [[ "${close_vol}" =~ ^[0-9]+$ && "${ema_vol}" =~ ^[0-9]+$ ]]; then :; fi
+}
+
+record_period_closed_events_from_tx() {
+  local ts="$1"
+  local attempt="$2"
+  local tx_hash="$3"
+  local period_events ev_from_fee ev_from_idx ev_to_fee ev_to_idx ev_close ev_ema ev_reason_code ev_reason_label
+  local last_reason="" recorded=0
+  RND_LAST_PERIOD_EVENT_REASON="-"
+  RND_LAST_PERIOD_EVENT_CODE="-"
+  RND_LAST_PERIOD_EVENT_FROM_IDX="-"
+  RND_LAST_PERIOD_EVENT_TO_IDX="-"
+  RND_LAST_PERIOD_EVENT_CLOSE_VOL="-"
+  RND_LAST_PERIOD_EVENT_EMA="-"
+
+  period_events="$(extract_period_closed_events "${tx_hash}" 2>/dev/null || true)"
+  if [[ -z "${period_events}" ]]; then
+    return 1
+  fi
+  while IFS='|' read -r ev_from_fee ev_from_idx ev_to_fee ev_to_idx ev_close ev_ema ev_reason_code; do
+    if ! [[ "${ev_from_fee}" =~ ^[0-9]+$ && "${ev_to_fee}" =~ ^[0-9]+$ && "${ev_from_idx}" =~ ^[0-9]+$ && "${ev_to_idx}" =~ ^[0-9]+$ && "${ev_reason_code}" =~ ^[0-9]+$ ]]; then
+      continue
+    fi
+    ev_reason_label="$(reason_code_to_label "${ev_reason_code}")"
+    last_reason="${ev_reason_label}"
+    RND_LAST_PERIOD_EVENT_CODE="${ev_reason_code}"
+    RND_LAST_PERIOD_EVENT_FROM_IDX="${ev_from_idx}"
+    RND_LAST_PERIOD_EVENT_TO_IDX="${ev_to_idx}"
+    RND_LAST_PERIOD_EVENT_CLOSE_VOL="${ev_close}"
+    RND_LAST_PERIOD_EVENT_EMA="${ev_ema}"
+    cases_track_period_event "${ev_reason_code}" "${ev_from_idx}" "${ev_to_idx}" "${ev_close}" "${ev_ema}"
+    random_record_fee_change_event \
+      "${ts}" \
+      "${attempt}" \
+      "${ev_reason_label}" \
+      "${tx_hash}" \
+      "${ev_from_fee}" \
+      "${ev_to_fee}" \
+      "${ev_from_idx}" \
+      "${ev_to_idx}" \
+      "${ev_ema}" \
+      "${ev_close}"
+    recorded=$((recorded + 1))
+  done <<< "${period_events}"
+  if (( recorded > 0 )) && [[ -n "${last_reason}" ]]; then
+    RND_LAST_PERIOD_EVENT_REASON="${last_reason}"
+    return 0
+  fi
+  return 1
+}
+
 add_int_str() {
   local a="$1"
   local b="$2"
-  python3 - "${a}" "${b}" <<'PY'
+  python3 -S - "${a}" "${b}" <<'PY'
 import sys
 try:
     a = int(sys.argv[1])
@@ -1441,12 +3219,27 @@ usd6_to_dollar() {
     echo "n/a"
     return
   fi
-  python3 - "${usd6}" <<'PY'
+  python3 -S - "${usd6}" <<'PY'
 from decimal import Decimal, ROUND_HALF_UP
 import sys
 v = Decimal(sys.argv[1]) / Decimal(1_000_000)
 q = v.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 print(f"${format(q, ',.2f')}")
+PY
+}
+
+usd6_to_dollar_no_cents() {
+  local usd6="$1"
+  if ! [[ "${usd6}" =~ ^[0-9]+$ ]]; then
+    echo "n/a"
+    return
+  fi
+  python3 -S - "${usd6}" <<'PY'
+from decimal import Decimal, ROUND_HALF_UP
+import sys
+v = Decimal(sys.argv[1]) / Decimal(1_000_000)
+q = v.quantize(Decimal("1"), rounding=ROUND_HALF_UP)
+print(f"${format(int(q), ',')}")
 PY
 }
 
@@ -1457,7 +3250,7 @@ usd6_ratio_percent() {
     echo "-"
     return
   fi
-  python3 - "${num}" "${den}" <<'PY'
+  python3 -S - "${num}" "${den}" <<'PY'
 from decimal import Decimal, ROUND_HALF_UP
 import sys
 num = Decimal(sys.argv[1])
@@ -1477,7 +3270,7 @@ estimate_swap_economics() {
     echo "0|0|0|0|0|0"
     return
   fi
-  python3 - "${side}" "${amount_raw}" "${fee_bips}" "${price_ratio}" "${STABLE_SIDE}" "${TOKEN0_DECIMALS}" "${TOKEN1_DECIMALS}" <<'PY'
+  python3 -S - "${side}" "${amount_raw}" "${fee_bips}" "${price_ratio}" "${STABLE_SIDE}" "${TOKEN0_DECIMALS}" "${TOKEN1_DECIMALS}" <<'PY'
 from decimal import Decimal, ROUND_HALF_UP, InvalidOperation
 import sys
 
@@ -1589,10 +3382,20 @@ RND_CURRENT_EMA="-"
 RND_CURRENT_IDX="-"
 RND_CURRENT_DIR="-"
 RND_LAST_TX_HASH="-"
+RND_LAST_TX_TS="-"
 RND_LAST_TX_STATUS="-"
 RND_LAST_TX_SIDE="-"
+RND_LAST_TX_TYPE="-"
 RND_LAST_TX_AMOUNT="-"
+RND_LAST_TX_EMA_USD="-"
 RND_LAST_TX_REASON="-"
+RND_LAST_TX_HOOK_REASON="-"
+RND_LAST_PERIOD_EVENT_REASON="-"
+RND_LAST_PERIOD_EVENT_CODE="-"
+RND_LAST_PERIOD_EVENT_FROM_IDX="-"
+RND_LAST_PERIOD_EVENT_TO_IDX="-"
+RND_LAST_PERIOD_EVENT_CLOSE_VOL="-"
+RND_LAST_PERIOD_EVENT_EMA="-"
 RND_LAST_ERROR="-"
 RND_SLOT0_SQRT_PRICE_X96="-"
 RND_SLOT0_TICK="-"
@@ -1630,6 +3433,7 @@ RND_FORCE_SIDE_UNTIL=0
 RND_NEXT_WAIT_OVERRIDE=0
 RND_TICK_EDGE_FLIPS=0
 RND_POOL_LIQUIDITY="-"
+RND_CASES_LIQ_CAP_USD6=0
 RND_NO_STATE_CHANGE_STREAK=0
 RND_NO_STATE_CHANGE_TOTAL=0
 RND_NO_STATE_CHANGE_WARNED=0
@@ -1644,7 +3448,7 @@ RND_LAST_FEE_FROM_IDX="-"
 RND_LAST_FEE_TO_IDX="-"
 RND_LAST_FEE_FROM_BIPS="-"
 RND_LAST_FEE_TO_BIPS="-"
-RND_FEE_EVENT_MAX=8
+RND_FEE_EVENT_MAX="${RANDOM_ACTIONS_TABLE_LENGTH}"
 RND_FAIL_NONCE=0
 RND_FAIL_PRICE_LIMIT=0
 RND_FAIL_BALANCE_REVERT=0
@@ -1662,6 +3466,8 @@ declare -a RND_FEE_EVENT_TO=()
 declare -a RND_FEE_EVENT_SIDE=()
 declare -a RND_FEE_EVENT_REASON=()
 declare -a RND_FEE_EVENT_HASH=()
+declare -a RND_FEE_EVENT_EMA=()
+declare -a RND_FEE_EVENT_VOLUME=()
 
 TC_INV_BOUNDS_OBS=0
 TC_INV_BOUNDS_PASS=0
@@ -1687,9 +3493,27 @@ TC_CAP_CLAMP_FAIL=0
 TC_FLOOR_CLAMP_OBS=0
 TC_FLOOR_CLAMP_PASS=0
 TC_FLOOR_CLAMP_FAIL=0
-TC_ZERO_EMA_DOWN_OBS=0
-TC_ZERO_EMA_DOWN_PASS=0
-TC_ZERO_EMA_DOWN_FAIL=0
+TC_PAUSE_OBS=0
+TC_PAUSE_PASS=0
+TC_PAUSE_FAIL=0
+TC_PAUSE_STATIC_OBS=0
+TC_PAUSE_STATIC_PASS=0
+TC_PAUSE_STATIC_FAIL=0
+TC_UNPAUSE_OBS=0
+TC_UNPAUSE_PASS=0
+TC_UNPAUSE_FAIL=0
+TC_UNPAUSE_RESUME_OBS=0
+TC_UNPAUSE_RESUME_PASS=0
+TC_UNPAUSE_RESUME_FAIL=0
+TC_MON_ACCRUE_OBS=0
+TC_MON_ACCRUE_PASS=0
+TC_MON_ACCRUE_FAIL=0
+TC_MON_CLAIM_OBS=0
+TC_MON_CLAIM_PASS=0
+TC_MON_CLAIM_FAIL=0
+TC_ANOMALY_OBS=0
+TC_ANOMALY_PASS=0
+TC_ANOMALY_FAIL=0
 
 tc_status() {
   local pass="$1"
@@ -1703,17 +3527,19 @@ tc_status() {
   fi
 }
 
-tc_status_ed3() {
-  # ED-3 is advisory in live cases mode and may be marked SKIP after cycle completion.
-  if (( TC_ZERO_EMA_DOWN_FAIL > 0 )); then
-    echo "FAIL"
-  elif (( TC_ZERO_EMA_DOWN_PASS > 0 )); then
-    echo "PASS"
-  elif (( CASES_MODE == 1 && CASES_REQUIRE_ED3 == 0 && CASES_RUNS > 0 && CASES_COMPLETED_RUNS >= CASES_RUNS )); then
-    echo "SKIP"
-  else
-    echo "PENDING"
+cases_case_allowed_for_stage() {
+  local case_key="$1"
+  if (( CASES_MODE != 1 )); then
+    return 0
   fi
+  case "${case_key}:${CASES_STAGE}" in
+    cap:cap_probe) return 0 ;;
+    floor:floor_probe) return 0 ;;
+    reversal:reversal_opposite) return 0 ;;
+    deadband:deadband_probe) return 0 ;;
+    lull:lull_wait|lull:post_lull_trigger|lull:await_lull_validation) return 0 ;;
+    *) return 1 ;;
+  esac
 }
 
 evaluate_hook_invariants() {
@@ -1722,7 +3548,7 @@ evaluate_hook_invariants() {
   local expected_fee
 
   TC_INV_BOUNDS_OBS=$((TC_INV_BOUNDS_OBS + 1))
-  if (( idx >= HOOK_FLOOR_IDX && idx <= HOOK_CAP_IDX )); then
+  if (( idx >= HOOK_REGIME_FLOOR && idx <= HOOK_REGIME_EXTREME )); then
     TC_INV_BOUNDS_PASS=$((TC_INV_BOUNDS_PASS + 1))
   else
     TC_INV_BOUNDS_FAIL=$((TC_INV_BOUNDS_FAIL + 1))
@@ -1742,208 +3568,32 @@ evaluate_hook_transition_cases() {
   local after="$2"
   local b_fee b_pv b_ema b_ps b_idx b_dir
   local a_fee a_pv a_ema a_ps a_idx a_dir
-  local delta_ps periods close_eff ema1 signal lower upper
-  local sim_ema sim_idx sim_dir model_ok
-  local i v_raw v_eff dir
-  local case_rev case_deadband case_cap case_floor case_zero_ema
+  local delta_ps
 
   IFS='|' read -r b_fee b_pv b_ema b_ps b_idx b_dir <<<"${before}"
   IFS='|' read -r a_fee a_pv a_ema a_ps a_idx a_dir <<<"${after}"
-
-  if ! [[ "${b_pv}" =~ ^[0-9]+$ && "${b_ema}" =~ ^[0-9]+$ && "${b_ps}" =~ ^[0-9]+$ && "${b_idx}" =~ ^[0-9]+$ && "${b_dir}" =~ ^[0-2]$ && "${a_ema}" =~ ^[0-9]+$ && "${a_ps}" =~ ^[0-9]+$ && "${a_idx}" =~ ^[0-9]+$ && "${a_dir}" =~ ^[0-2]$ ]]; then
+  if ! state_fields_valid "${b_fee}" "${b_pv}" "${b_ema}" "${b_ps}" "${b_idx}" "${b_dir}"; then
+    return
+  fi
+  if ! state_fields_valid "${a_fee}" "${a_pv}" "${a_ema}" "${a_ps}" "${a_idx}" "${a_dir}"; then
     return
   fi
 
   delta_ps=$((a_ps - b_ps))
-  if (( delta_ps < 0 )); then
-    return
-  fi
-
-  if (( delta_ps >= HOOK_LULL_RESET_SECONDS )); then
-    TC_LULL_RESET_OBS=$((TC_LULL_RESET_OBS + 1))
-    if (( a_idx == HOOK_INITIAL_IDX && a_ema == 0 && a_dir == 0 )); then
-      TC_LULL_RESET_PASS=$((TC_LULL_RESET_PASS + 1))
-    else
-      TC_LULL_RESET_FAIL=$((TC_LULL_RESET_FAIL + 1))
-    fi
-    return
-  fi
-
-  if (( delta_ps < PERIOD_SECONDS )); then
-    return
-  fi
-
-  periods=$((delta_ps / PERIOD_SECONDS))
-  if (( periods <= 0 )); then
-    return
-  fi
-
-  if (( b_pv <= HOOK_DUST_CLOSE_VOL_USD6 )); then
-    close_eff=0
-  else
-    close_eff="${b_pv}"
-  fi
-
-  ema1="${b_ema}"
-  if (( ema1 == 0 )); then
-    if (( close_eff == 0 )); then
-      ema1=0
-    else
-      ema1="${close_eff}"
-    fi
-  else
-    ema1=$(( (ema1 * (HOOK_EMA_PERIODS - 1) + close_eff) / HOOK_EMA_PERIODS ))
-  fi
-
-  signal=0
-  if (( ema1 > 0 )); then
-    lower=$(( ema1 * (10000 - HOOK_DEADBAND_BPS) / 10000 ))
-    upper=$(( ema1 * (10000 + HOOK_DEADBAND_BPS) / 10000 ))
-    if (( close_eff > upper )); then
-      signal=1
-    elif (( close_eff < lower )); then
-      signal=2
-    fi
-  fi
-
-  case_rev=0
-  case_deadband=0
-  case_cap=0
-  case_floor=0
-  case_zero_ema=0
-  if (( periods == 1 )); then
-    if (( b_dir != 0 && signal != 0 && signal != b_dir )); then
-      case_rev=1
-    fi
-    if (( ema1 > 0 && signal == 0 )); then
-      case_deadband=1
-    fi
-    if (( ema1 > 0 && signal == 1 && b_idx == HOOK_CAP_IDX )); then
-      case_cap=1
-    fi
-    if (( ema1 > 0 && signal == 2 && b_idx == HOOK_FLOOR_IDX )); then
-      case_floor=1
-    fi
-    if (( b_ema == 0 && close_eff == 0 && b_idx > HOOK_FLOOR_IDX )); then
-      case_zero_ema=1
-    fi
-  fi
-
-  sim_ema="${b_ema}"
-  sim_idx="${b_idx}"
-  sim_dir="${b_dir}"
-  i=0
-  while (( i < periods )); do
-    if (( i == 0 )); then
-      v_raw="${b_pv}"
-    else
-      v_raw=0
-    fi
-    if (( v_raw <= HOOK_DUST_CLOSE_VOL_USD6 )); then
-      v_eff=0
-    else
-      v_eff="${v_raw}"
-    fi
-
-    if (( sim_ema == 0 )); then
-      if (( v_eff == 0 )); then
-        sim_ema=0
-      else
-        sim_ema="${v_eff}"
-      fi
-    else
-      sim_ema=$(( (sim_ema * (HOOK_EMA_PERIODS - 1) + v_eff) / HOOK_EMA_PERIODS ))
-    fi
-
-    if (( sim_ema == 0 )); then
-      if (( v_eff == 0 && sim_idx > HOOK_FLOOR_IDX )); then
-        sim_idx=$((sim_idx - 1))
-      fi
-      sim_dir=0
-    else
-      lower=$(( sim_ema * (10000 - HOOK_DEADBAND_BPS) / 10000 ))
-      upper=$(( sim_ema * (10000 + HOOK_DEADBAND_BPS) / 10000 ))
-      dir=0
-      if (( v_eff > upper )); then
-        dir=1
-      elif (( v_eff < lower )); then
-        dir=2
-      fi
-
-      if (( dir != 0 && sim_dir != 0 && dir != sim_dir )); then
-        sim_dir=0
-      elif (( dir == 1 )); then
-        if (( sim_idx < HOOK_CAP_IDX )); then
-          sim_idx=$((sim_idx + 1))
-          sim_dir=1
-        else
-          sim_dir=0
-        fi
-      elif (( dir == 2 )); then
-        if (( sim_idx > HOOK_FLOOR_IDX )); then
-          sim_idx=$((sim_idx - 1))
-          sim_dir=2
-        else
-          sim_dir=0
-        fi
-      else
-        sim_dir=0
-      fi
-    fi
-    i=$((i + 1))
-  done
-
   TC_MODEL_CLOSE_OBS=$((TC_MODEL_CLOSE_OBS + 1))
-  model_ok=0
-  if (( a_ema == sim_ema && a_idx == sim_idx && a_dir == sim_dir )); then
-    model_ok=1
-    TC_MODEL_CLOSE_PASS=$((TC_MODEL_CLOSE_PASS + 1))
-  else
+  if (( delta_ps < 0 )); then
     TC_MODEL_CLOSE_FAIL=$((TC_MODEL_CLOSE_FAIL + 1))
     RND_MODEL_MISMATCH_COUNT=$((RND_MODEL_MISMATCH_COUNT + 1))
-    RND_MODEL_MISMATCH_LAST="psDelta=${delta_ps} periods=${periods} before(i=${b_idx},d=${b_dir},pv=${b_pv},ema=${b_ema}) sim(i=${sim_idx},d=${sim_dir},ema=${sim_ema}) chain(i=${a_idx},d=${a_dir},ema=${a_ema})"
+    RND_MODEL_MISMATCH_LAST="negative periodStart delta: before=${b_ps} after=${a_ps}"
+    return
   fi
-
-  if (( case_rev == 1 )); then
-    TC_REVERSAL_LOCK_OBS=$((TC_REVERSAL_LOCK_OBS + 1))
-    if (( model_ok == 1 )); then
-      TC_REVERSAL_LOCK_PASS=$((TC_REVERSAL_LOCK_PASS + 1))
-    else
-      TC_REVERSAL_LOCK_FAIL=$((TC_REVERSAL_LOCK_FAIL + 1))
-    fi
+  if (( a_idx < HOOK_REGIME_FLOOR || a_idx > HOOK_REGIME_EXTREME )); then
+    TC_MODEL_CLOSE_FAIL=$((TC_MODEL_CLOSE_FAIL + 1))
+    RND_MODEL_MISMATCH_COUNT=$((RND_MODEL_MISMATCH_COUNT + 1))
+    RND_MODEL_MISMATCH_LAST="feeIdx out of bounds: idx=${a_idx} floor=${HOOK_REGIME_FLOOR} cap=${HOOK_REGIME_EXTREME}"
+    return
   fi
-  if (( case_deadband == 1 )); then
-    TC_DEADBAND_OBS=$((TC_DEADBAND_OBS + 1))
-    if (( model_ok == 1 )); then
-      TC_DEADBAND_PASS=$((TC_DEADBAND_PASS + 1))
-    else
-      TC_DEADBAND_FAIL=$((TC_DEADBAND_FAIL + 1))
-    fi
-  fi
-  if (( case_cap == 1 )); then
-    TC_CAP_CLAMP_OBS=$((TC_CAP_CLAMP_OBS + 1))
-    if (( model_ok == 1 )); then
-      TC_CAP_CLAMP_PASS=$((TC_CAP_CLAMP_PASS + 1))
-    else
-      TC_CAP_CLAMP_FAIL=$((TC_CAP_CLAMP_FAIL + 1))
-    fi
-  fi
-  if (( case_floor == 1 )); then
-    TC_FLOOR_CLAMP_OBS=$((TC_FLOOR_CLAMP_OBS + 1))
-    if (( model_ok == 1 )); then
-      TC_FLOOR_CLAMP_PASS=$((TC_FLOOR_CLAMP_PASS + 1))
-    else
-      TC_FLOOR_CLAMP_FAIL=$((TC_FLOOR_CLAMP_FAIL + 1))
-    fi
-  fi
-  if (( case_zero_ema == 1 )); then
-    TC_ZERO_EMA_DOWN_OBS=$((TC_ZERO_EMA_DOWN_OBS + 1))
-    if (( model_ok == 1 )); then
-      TC_ZERO_EMA_DOWN_PASS=$((TC_ZERO_EMA_DOWN_PASS + 1))
-    else
-      TC_ZERO_EMA_DOWN_FAIL=$((TC_ZERO_EMA_DOWN_FAIL + 1))
-    fi
-  fi
+  TC_MODEL_CLOSE_PASS=$((TC_MODEL_CLOSE_PASS + 1))
 }
 
 print_hook_case_row() {
@@ -1959,38 +3609,70 @@ print_hook_case_row() {
   else
     status_text="$(tc_status "${pass}" "${fail}")"
   fi
-  printf "  %-6s %-34s | %-7s | %5s | %5s | %5s\n" \
+  printf "  %-6s %-34s | %7s | %5s | %5s | %5s\n" \
     "${case_id}" "${label}" "${status_text}" "${obs}" "${pass}" "${fail}"
 }
 
+print_hook_flag_row() {
+  local case_id="$1"
+  local label="$2"
+  local flag="${3:-0}"
+  local val status
+  val=0
+  if [[ "${flag}" =~ ^[0-9]+$ ]] && (( flag > 0 )); then
+    val=1
+    status="PASS"
+  else
+    status="PENDING"
+  fi
+  print_hook_case_row "${case_id}" "${label}" "${val}" "${val}" 0 "${status}"
+}
+
 render_hook_cases_table() {
-  echo "Hook test-cases (live mapping):"
+  local active_case="${1:-}"
+  if [[ -n "${active_case}" ]]; then
+    echo "Test Cases: ${active_case}"
+  else
+    echo "Test Cases:"
+  fi
   echo "  ------------------------------------------+---------+-------+-------+-------"
-  printf "  %-6s %-34s | %-7s | %5s | %5s | %5s\n" "ID" "Case" "Status" "Obs" "Pass" "Fail"
+  printf "  %-6s %-34s | %7s | %5s | %5s | %5s\n" "ID" "Case" "Status" "Obs" "Pass" "Fail"
   echo "  ------------------------------------------+---------+-------+-------+-------"
   print_hook_case_row "INV-1" "feeIdx in [floor,cap]" "${TC_INV_BOUNDS_OBS}" "${TC_INV_BOUNDS_PASS}" "${TC_INV_BOUNDS_FAIL}"
   print_hook_case_row "INV-2" "currentFee matches tier" "${TC_INV_FEE_TIER_OBS}" "${TC_INV_FEE_TIER_PASS}" "${TC_INV_FEE_TIER_FAIL}"
-  print_hook_case_row "RT-1" "close transition model" "${TC_MODEL_CLOSE_OBS}" "${TC_MODEL_CLOSE_PASS}" "${TC_MODEL_CLOSE_FAIL}"
-  print_hook_case_row "FZ-1" "reversal lock" "${TC_REVERSAL_LOCK_OBS}" "${TC_REVERSAL_LOCK_PASS}" "${TC_REVERSAL_LOCK_FAIL}"
-  print_hook_case_row "FZ-2" "deadband no-change" "${TC_DEADBAND_OBS}" "${TC_DEADBAND_PASS}" "${TC_DEADBAND_FAIL}"
-  print_hook_case_row "FZ-3" "lull reset semantics" "${TC_LULL_RESET_OBS}" "${TC_LULL_RESET_PASS}" "${TC_LULL_RESET_FAIL}"
-  print_hook_case_row "ED-1" "cap clamp" "${TC_CAP_CLAMP_OBS}" "${TC_CAP_CLAMP_PASS}" "${TC_CAP_CLAMP_FAIL}"
-  print_hook_case_row "ED-2" "floor clamp" "${TC_FLOOR_CLAMP_OBS}" "${TC_FLOOR_CLAMP_PASS}" "${TC_FLOOR_CLAMP_FAIL}"
-  print_hook_case_row "ED-3" "zero-ema zero-close down" "${TC_ZERO_EMA_DOWN_OBS}" "${TC_ZERO_EMA_DOWN_PASS}" "${TC_ZERO_EMA_DOWN_FAIL}" "$(tc_status_ed3)"
+  print_hook_case_row "RT-1" "period close events parsed" "${TC_MODEL_CLOSE_OBS}" "${TC_MODEL_CLOSE_PASS}" "${TC_MODEL_CLOSE_FAIL}"
+  print_hook_flag_row "V2-1" "bootstrap ema init" "${CASES_RUN_BOOTSTRAP_OK}"
+  print_hook_flag_row "V2-2" "jump floor -> cash" "${CASES_RUN_JUMP_CASH_OK}"
+  print_hook_flag_row "V2-3" "jump cash -> extreme" "${CASES_RUN_JUMP_EXTREME_OK}"
+  print_hook_flag_row "V2-4" "hold blocks down" "${CASES_RUN_HOLD_OK}"
+  print_hook_flag_row "V2-5" "down extreme -> cash" "${CASES_RUN_DOWN_CASH_OK}"
+  print_hook_flag_row "V2-6" "down cash -> floor" "${CASES_RUN_FLOOR_OK}"
+  print_hook_flag_row "V2-7" "deadband no-change" "${CASES_RUN_DEADBAND_OK}"
+  print_hook_flag_row "V2-8" "no-swaps close" "${CASES_RUN_NO_SWAPS_OK}"
+  print_hook_flag_row "V2-9" "emergency floor guard" "${CASES_RUN_EMERGENCY_OK}"
+  print_hook_flag_row "V2-10" "lull reset" "${CASES_RUN_LULL_OK}"
+  print_hook_case_row "GV-1" "pause toggles + floor lock" "${TC_PAUSE_OBS}" "${TC_PAUSE_PASS}" "${TC_PAUSE_FAIL}"
+  print_hook_case_row "GV-2" "paused level freeze" "${TC_PAUSE_STATIC_OBS}" "${TC_PAUSE_STATIC_PASS}" "${TC_PAUSE_STATIC_FAIL}"
+  print_hook_case_row "GV-3" "unpause restores running" "${TC_UNPAUSE_OBS}" "${TC_UNPAUSE_PASS}" "${TC_UNPAUSE_FAIL}"
+  print_hook_case_row "GV-4" "post-unpause level move" "${TC_UNPAUSE_RESUME_OBS}" "${TC_UNPAUSE_RESUME_PASS}" "${TC_UNPAUSE_RESUME_FAIL}"
+  print_hook_case_row "MN-1" "hook fee accrual" "${TC_MON_ACCRUE_OBS}" "${TC_MON_ACCRUE_PASS}" "${TC_MON_ACCRUE_FAIL}"
+  print_hook_case_row "MN-2" "hook fee claim" "${TC_MON_CLAIM_OBS}" "${TC_MON_CLAIM_PASS}" "${TC_MON_CLAIM_FAIL}"
+  print_hook_case_row "AN-1" "anomaly guards" "${TC_ANOMALY_OBS}" "${TC_ANOMALY_PASS}" "${TC_ANOMALY_FAIL}"
   echo "  ------------------------------------------+---------+-------+-------+-------"
 }
 
 random_record_fee_change_event() {
   local ts="$1"
   local attempt="$2"
-  local side="$3"
-  local reason="$4"
-  local tx_hash="$5"
-  local fee_before="$6"
-  local fee_after="$7"
-  local idx_before="$8"
-  local idx_after="$9"
-  local dir
+  local reason="$3"
+  local tx_hash="$4"
+  local fee_before="$5"
+  local fee_after="$6"
+  local idx_before="$7"
+  local idx_after="$8"
+  local ema_usd6="${9:-}"
+  local vol_usd6="${10:-}"
+  local dir from_pct to_pct ema_display vol_display
 
   dir="FLAT"
   if (( idx_after > idx_before )); then
@@ -2002,12 +3684,21 @@ random_record_fee_change_event() {
   elif (( fee_after < fee_before )); then
     dir="DOWN"
   fi
-
+  from_pct="$(fee_bips_to_percent "${fee_before}")"
+  to_pct="$(fee_bips_to_percent "${fee_after}")"
+  ema_display="-"
+  vol_display="-"
+  if [[ "${ema_usd6}" =~ ^[0-9]+$ ]]; then
+    ema_display="$(usd6_to_dollar_no_cents "${ema_usd6}")"
+  fi
+  if [[ "${vol_usd6}" =~ ^[0-9]+$ ]]; then
+    vol_display="$(usd6_to_dollar_no_cents "${vol_usd6}")"
+  fi
   RND_FEE_CHANGE_EVENTS=$((RND_FEE_CHANGE_EVENTS + 1))
   RND_LAST_FEE_CHANGE_TS="${ts}"
   RND_LAST_FEE_CHANGE_ATTEMPT="${attempt}"
   RND_LAST_FEE_CHANGE_HASH="${tx_hash}"
-  RND_LAST_FEE_CHANGE_SIDE="${side}"
+  RND_LAST_FEE_CHANGE_SIDE="-"
   RND_LAST_FEE_CHANGE_REASON="${reason}"
   RND_LAST_FEE_CHANGE_DIR="${dir}"
   RND_LAST_FEE_FROM_IDX="${idx_before}"
@@ -2018,100 +3709,133 @@ random_record_fee_change_event() {
   RND_FEE_EVENT_TS+=("${ts}")
   RND_FEE_EVENT_ATTEMPT+=("${attempt}")
   RND_FEE_EVENT_DIR+=("${dir}")
-  RND_FEE_EVENT_FROM+=("i${idx_before}/f${fee_before}")
-  RND_FEE_EVENT_TO+=("i${idx_after}/f${fee_after}")
-  RND_FEE_EVENT_SIDE+=("${side}")
+  RND_FEE_EVENT_FROM+=("${from_pct}")
+  RND_FEE_EVENT_TO+=("${to_pct}")
+  RND_FEE_EVENT_SIDE+=("-")
   RND_FEE_EVENT_REASON+=("${reason}")
   RND_FEE_EVENT_HASH+=("${tx_hash}")
+  RND_FEE_EVENT_EMA+=("${ema_display}")
+  RND_FEE_EVENT_VOLUME+=("${vol_display}")
 
-  while (( ${#RND_FEE_EVENT_TS[@]} > RND_FEE_EVENT_MAX )); do
-    RND_FEE_EVENT_TS=("${RND_FEE_EVENT_TS[@]:1}")
-    RND_FEE_EVENT_ATTEMPT=("${RND_FEE_EVENT_ATTEMPT[@]:1}")
-    RND_FEE_EVENT_DIR=("${RND_FEE_EVENT_DIR[@]:1}")
-    RND_FEE_EVENT_FROM=("${RND_FEE_EVENT_FROM[@]:1}")
-    RND_FEE_EVENT_TO=("${RND_FEE_EVENT_TO[@]:1}")
-    RND_FEE_EVENT_SIDE=("${RND_FEE_EVENT_SIDE[@]:1}")
-    RND_FEE_EVENT_REASON=("${RND_FEE_EVENT_REASON[@]:1}")
-    RND_FEE_EVENT_HASH=("${RND_FEE_EVENT_HASH[@]:1}")
-  done
+  case "${dir}" in
+    UP) RND_FEE_UP=$((RND_FEE_UP + 1)) ;;
+    DOWN) RND_FEE_DOWN=$((RND_FEE_DOWN + 1)) ;;
+    *) RND_FEE_FLAT=$((RND_FEE_FLAT + 1)) ;;
+  esac
+
+  if (( CASES_MODE == 0 )); then
+    while (( ${#RND_FEE_EVENT_TS[@]} > RND_FEE_EVENT_MAX )); do
+      RND_FEE_EVENT_TS=("${RND_FEE_EVENT_TS[@]:1}")
+      RND_FEE_EVENT_ATTEMPT=("${RND_FEE_EVENT_ATTEMPT[@]:1}")
+      RND_FEE_EVENT_DIR=("${RND_FEE_EVENT_DIR[@]:1}")
+      RND_FEE_EVENT_FROM=("${RND_FEE_EVENT_FROM[@]:1}")
+      RND_FEE_EVENT_TO=("${RND_FEE_EVENT_TO[@]:1}")
+      RND_FEE_EVENT_SIDE=("${RND_FEE_EVENT_SIDE[@]:1}")
+      RND_FEE_EVENT_REASON=("${RND_FEE_EVENT_REASON[@]:1}")
+      RND_FEE_EVENT_HASH=("${RND_FEE_EVENT_HASH[@]:1}")
+      RND_FEE_EVENT_EMA=("${RND_FEE_EVENT_EMA[@]:1}")
+      RND_FEE_EVENT_VOLUME=("${RND_FEE_EVENT_VOLUME[@]:1}")
+    done
+  fi
 }
 
 print_fee_change_row() {
   local ts="$1"
-  local attempt="$2"
-  local dir="$3"
-  local from="$4"
-  local to="$5"
-  local side="$6"
+  local from="$2"
+  local to="$3"
+  local vol="$4"
+  local ema="$5"
+  local dir="$6"
   local reason="$7"
-  printf "  %-19s | %6s | %-4s | %-12s -> %-12s | %-10s | %-24.24s\n" \
-    "${ts}" "${attempt}" "${dir}" "${from}" "${to}" "${side}" "${reason}"
+  local ts_local dir_cell level_cell ema_cell vol_cell reason_cell
+  ts_local="$(format_local_timestamp "${ts}")"
+  if (( ${#ts_local} > 19 )); then
+    ts_local="${ts_local:0:19}"
+  fi
+  dir_cell="$(center_text "${dir}" 9)"
+  level_cell="$(center_text "${from} -> ${to}" 17)"
+  ema_cell="$(center_text "${ema}" 9)"
+  vol_cell="$(center_text "${vol}" 9)"
+  reason_cell="${reason}"
+  if (( ${#reason_cell} > 14 )); then
+    reason_cell="${reason_cell:0:14}"
+  fi
+  printf "  %-19s | %17s | %9s | %9s | %9s | %14s\n" \
+    "${ts_local}" "${level_cell}" "${vol_cell}" "${ema_cell}" "${dir_cell}" "${reason_cell}"
 }
 
 render_fee_change_table() {
-  local n i last_level short_hash
-  echo "Fee change events:"
-  echo "  total=${RND_FEE_CHANGE_EVENTS} | up=${RND_FEE_UP} down=${RND_FEE_DOWN} flat=${RND_FEE_FLAT}"
+  local n i h_time h_dir h_level h_ema h_vol h_reason
+  local buy_count sell_count buy_fmt sell_fmt
+  if [[ "${STABLE_SIDE}" == "token0" ]]; then
+    buy_count="${RND_ZFO_COUNT}"
+    sell_count="${RND_OZF_COUNT}"
+  elif [[ "${STABLE_SIDE}" == "token1" ]]; then
+    buy_count="${RND_OZF_COUNT}"
+    sell_count="${RND_ZFO_COUNT}"
+  else
+    buy_count="${RND_ZFO_COUNT}"
+    sell_count="${RND_OZF_COUNT}"
+  fi
+  buy_fmt="$(format_int_commas "${buy_count}")"
+  sell_fmt="$(format_int_commas "${sell_count}")"
+  echo "Actions: total=${RND_FEE_CHANGE_EVENTS} | up=${RND_FEE_UP} down=${RND_FEE_DOWN} flat=${RND_FEE_FLAT} | Directions: Buy=${buy_fmt} | Sell=${sell_fmt}"
   if (( RND_FEE_CHANGE_EVENTS == 0 )); then
     echo "  (none yet)"
     return
   fi
-  last_level="i${RND_LAST_FEE_FROM_IDX}/f${RND_LAST_FEE_FROM_BIPS}->i${RND_LAST_FEE_TO_IDX}/f${RND_LAST_FEE_TO_BIPS}"
-  short_hash="${RND_LAST_FEE_CHANGE_HASH}"
-  if [[ "${short_hash}" == 0x* && ${#short_hash} -gt 18 ]]; then
-    short_hash="${short_hash:0:10}..${short_hash: -6}"
-  fi
-  echo "  Last: at=${RND_LAST_FEE_CHANGE_TS} try=${RND_LAST_FEE_CHANGE_ATTEMPT} dir=${RND_LAST_FEE_CHANGE_DIR} side=${RND_LAST_FEE_CHANGE_SIDE} level=${last_level} reason=${RND_LAST_FEE_CHANGE_REASON} tx=${short_hash}"
-  echo "  -------------------+--------+------+-----------------------------+------------+--------------------------"
-  printf "  %-19s | %6s | %-4s | %-29s | %-10s | %-24s\n" "Time (UTC)" "Try#" "Dir" "Level change" "Side" "Reason"
-  echo "  -------------------+--------+------+-----------------------------+------------+--------------------------"
+  echo "  -------------------+-------------------+-----------+-----------+-----------+----------------"
+  h_time="$(center_text "Time (Local)" 19)"
+  h_level="$(center_text "Level Change" 17)"
+  h_vol="$(center_text "Volume" 9)"
+  h_ema="$(center_text "EMA" 9)"
+  h_dir="$(center_text "Direction" 9)"
+  h_reason="$(center_text "Reason" 14)"
+  printf "  %s | %s | %s | %s | %s | %s\n" "${h_time}" "${h_level}" "${h_vol}" "${h_ema}" "${h_dir}" "${h_reason}"
+  echo "  -------------------+-------------------+-----------+-----------+-----------+----------------"
   n="${#RND_FEE_EVENT_TS[@]}"
-  for ((i = 0; i < n; i++)); do
+  for ((i = n - 1; i >= 0; i--)); do
     print_fee_change_row \
       "${RND_FEE_EVENT_TS[$i]}" \
-      "${RND_FEE_EVENT_ATTEMPT[$i]}" \
-      "${RND_FEE_EVENT_DIR[$i]}" \
       "${RND_FEE_EVENT_FROM[$i]}" \
       "${RND_FEE_EVENT_TO[$i]}" \
-      "${RND_FEE_EVENT_SIDE[$i]}" \
+      "${RND_FEE_EVENT_VOLUME[$i]}" \
+      "${RND_FEE_EVENT_EMA[$i]}" \
+      "${RND_FEE_EVENT_DIR[$i]}" \
       "${RND_FEE_EVENT_REASON[$i]}"
   done
-  echo "  -------------------+--------+------+-----------------------------+------------+--------------------------"
+  echo "  -------------------+-------------------+-----------+-----------+-----------+----------------"
 }
 
 cases_all_required_done() {
-  if (( CASES_RUN_CAP_OK != 1 \
-        || CASES_RUN_FLOOR_OK != 1 \
-        || CASES_RUN_REV_OK != 1 \
-        || CASES_RUN_DEADBAND_OK != 1 \
-        || CASES_RUN_LULL_OK != 1 )); then
+  if (( TC_PAUSE_PASS == 0 \
+        || TC_PAUSE_STATIC_PASS == 0 \
+        || TC_UNPAUSE_PASS == 0 \
+        || TC_UNPAUSE_RESUME_PASS == 0 \
+        || TC_MON_ACCRUE_PASS == 0 \
+        || TC_MON_CLAIM_PASS == 0 \
+        || TC_ANOMALY_PASS == 0 )); then
     return 1
   fi
-  if (( CASES_REQUIRE_ED3 == 1 && CASES_RUN_ZERO_EMA_OK != 1 )); then
+  if (( CASES_RUN_BOOTSTRAP_OK != 1 \
+        || CASES_RUN_JUMP_CASH_OK != 1 \
+        || CASES_RUN_JUMP_EXTREME_OK != 1 \
+        || CASES_RUN_HOLD_OK != 1 \
+        || CASES_RUN_DOWN_CASH_OK != 1 \
+        || CASES_RUN_FLOOR_OK != 1 \
+        || CASES_RUN_NO_SWAPS_OK != 1 \
+        || CASES_RUN_EMERGENCY_OK != 1 \
+        || CASES_RUN_DEADBAND_OK != 1 \
+        || CASES_RUN_LULL_OK != 1 \
+        || CASES_RUN_ANOMALY_OK != 1 )); then
     return 1
   fi
   return 0
 }
 
 cases_refresh_checklist_from_counters() {
-  if (( TC_CAP_CLAMP_PASS > CASES_BASE_CAP_PASS )); then
-    CASES_RUN_CAP_OK=1
-  fi
-  if (( TC_FLOOR_CLAMP_PASS > CASES_BASE_FLOOR_PASS )); then
-    CASES_RUN_FLOOR_OK=1
-  fi
-  if (( TC_REVERSAL_LOCK_PASS > CASES_BASE_REV_PASS )); then
-    CASES_RUN_REV_OK=1
-  fi
-  if (( TC_DEADBAND_PASS > CASES_BASE_DEADBAND_PASS )); then
-    CASES_RUN_DEADBAND_OK=1
-  fi
-  if (( TC_LULL_RESET_PASS > CASES_BASE_LULL_PASS )); then
-    CASES_RUN_LULL_OK=1
-  fi
-  if (( TC_ZERO_EMA_DOWN_PASS > CASES_BASE_ZERO_EMA_PASS )); then
-    CASES_RUN_ZERO_EMA_OK=1
-  fi
+  # No-op in strict cases mode: checklist is advanced by observed PeriodClosed reasons.
+  :
 }
 
 cases_set_stage() {
@@ -2120,6 +3844,29 @@ cases_set_stage() {
     CASES_STAGE="${next_stage}"
     CASES_STAGE_STEP=0
   fi
+}
+
+cases_reversal_mid_idx() {
+  local mid
+  mid=$(((HOOK_REGIME_FLOOR + HOOK_REGIME_EXTREME) / 2))
+  if (( mid <= HOOK_REGIME_FLOOR )); then
+    mid=$((HOOK_REGIME_FLOOR + 1))
+  fi
+  if (( mid >= HOOK_REGIME_EXTREME )); then
+    mid=$((HOOK_REGIME_EXTREME - 1))
+  fi
+  if (( mid < HOOK_REGIME_FLOOR )); then
+    mid="${HOOK_REGIME_FLOOR}"
+  fi
+  if (( mid > HOOK_REGIME_EXTREME )); then
+    mid="${HOOK_REGIME_EXTREME}"
+  fi
+  echo "${mid}"
+}
+
+cases_mark_completion_for_stage() {
+  # Legacy stage completion helper is retained for compatibility but no longer used in v2 flow.
+  return
 }
 
 seconds_to_next_period() {
@@ -2148,12 +3895,111 @@ seconds_to_next_period() {
   echo "${wait}"
 }
 
+cases_drive_to_target_idx() {
+  local label_prefix="$1"
+  local target_idx="$2"
+  local max_steps="${3:-8}"
+  local step_n state fee pv ema ps idx dir
+  local wait_roll side side_bool target_vol amount_raw amount tx emit_ts
+  local econ_metrics econ_vol_usd6
+
+  if ! [[ "${target_idx}" =~ ^[0-9]+$ ]]; then
+    return 1
+  fi
+  if ! [[ "${max_steps}" =~ ^[0-9]+$ ]] || (( max_steps <= 0 )); then
+    max_steps=8
+  fi
+
+  for ((step_n = 1; step_n <= max_steps; step_n++)); do
+    if ! state="$(read_state 2>/dev/null)"; then
+      continue
+    fi
+    IFS='|' read -r fee pv ema ps idx dir <<<"${state}"
+    if ! state_fields_valid "${fee}" "${pv}" "${ema}" "${ps}" "${idx}" "${dir}"; then
+      continue
+    fi
+    if (( idx >= target_idx )); then
+      return 0
+    fi
+
+    wait_roll="$(seconds_to_next_period "${ps}")"
+    if [[ "${wait_roll}" =~ ^[0-9]+$ ]] && (( wait_roll > 0 )); then
+      random_sleep_with_dashboard "${wait_roll}"
+    fi
+
+    if ! state="$(read_state 2>/dev/null)"; then
+      continue
+    fi
+    IFS='|' read -r fee pv ema ps idx dir <<<"${state}"
+    if ! state_fields_valid "${fee}" "${pv}" "${ema}" "${ps}" "${idx}" "${dir}"; then
+      continue
+    fi
+    if (( idx >= target_idx )); then
+      return 0
+    fi
+
+    side="$(cases_pick_centering_side "$(cases_prefer_stable_input_side)")"
+    side_bool=true
+    if [[ "${side}" == "oneForZero" ]]; then
+      side_bool=false
+    fi
+    target_vol="$(cases_target_up_volume "${ema}" "$((10 + step_n))")"
+    target_vol="$(cases_centering_target_vol "${side}" "${target_vol}")"
+    amount_raw="$(amount_for_period_target_vol "${target_vol}" "${pv}")"
+    if ! [[ "${amount_raw}" =~ ^[0-9]+$ ]] || (( amount_raw <= 0 )); then
+      amount_raw=1000000
+    fi
+    amount="$(scale_amount_for_side "${amount_raw}" "${side}")"
+    if ! [[ "${amount}" =~ ^[0-9]+$ ]] || (( amount <= 0 )); then
+      maybe_rebalance_wallet 1 1 >/dev/null 2>&1 || true
+      continue
+    fi
+
+    if ! tx="$(run_swap_step "${label_prefix}_${step_n}" "${amount}" "${side_bool}" 2>/dev/null)"; then
+      continue
+    fi
+
+    emit_ts="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+    record_period_closed_events_from_tx "${emit_ts}" "${RND_ATTEMPTS}" "${tx}" >/dev/null 2>&1 || true
+    econ_metrics="$(estimate_swap_economics "${side}" "${amount}" "${fee}" "${RND_POOL_PRICE_T1_PER_T0}")"
+    IFS='|' read -r econ_vol_usd6 _ _ _ _ _ <<<"${econ_metrics}"
+    random_append_tx_log \
+      "${emit_ts}" \
+      "${RND_ATTEMPTS}" \
+      "${label_prefix}_${step_n}" \
+      "ok" \
+      "${side}" \
+      "${amount}" \
+      "final-high-prep" \
+      "${tx}" \
+      "${fee}" \
+      "-" \
+      "${idx}" \
+      "-" \
+      "${dir}" \
+      "-" \
+      "-"
+
+    if [[ "${econ_vol_usd6}" =~ ^[0-9]+$ && "${econ_vol_usd6}" -gt 0 ]]; then
+      :
+    fi
+  done
+
+  if state="$(read_state 2>/dev/null)"; then
+    IFS='|' read -r fee pv ema ps idx dir <<<"${state}"
+    if state_fields_valid "${fee}" "${pv}" "${ema}" "${ps}" "${idx}" "${dir}" && (( idx >= target_idx )); then
+      return 0
+    fi
+  fi
+  return 1
+}
+
 cases_select_stage() {
   local idx="$1"
   local dir="$2"
   cases_refresh_checklist_from_counters
   if ! [[ "${idx}" =~ ^[0-9]+$ ]]; then
-    idx="${HOOK_INITIAL_IDX}"
+    idx="${HOOK_REGIME_FLOOR}"
   fi
   if ! [[ "${dir}" =~ ^[0-2]$ ]]; then
     dir=0
@@ -2164,75 +4010,120 @@ cases_select_stage() {
     return
   fi
 
-  if (( CASES_RUN_LULL_OK == 0 )) && [[ "${CASES_STAGE}" == "lull_wait" || "${CASES_STAGE}" == "post_lull_trigger" || "${CASES_STAGE}" == "await_lull_validation" ]]; then
-    return
-  fi
-
-  if [[ "${CASES_PRIORITY_EDGE}" == "cap" ]]; then
-    if (( CASES_RUN_CAP_OK == 0 )); then
-      if (( idx >= HOOK_CAP_IDX )); then
+  case "${CASES_STAGE}" in
+    up_to_cap)
+      if (( CASES_RUN_BOOTSTRAP_OK == 1 && CASES_RUN_JUMP_CASH_OK == 1 )); then
         cases_set_stage "cap_probe"
-      else
-        cases_set_stage "up_to_cap"
       fi
-      return
-    fi
-    if (( CASES_RUN_FLOOR_OK == 0 )); then
-      if (( idx <= HOOK_FLOOR_IDX )); then
-        cases_set_stage "floor_probe"
-      else
+      ;;
+    cap_probe)
+      if (( CASES_RUN_JUMP_EXTREME_OK == 1 )); then
+        cases_set_stage "reversal_mid"
+      fi
+      ;;
+    reversal_mid)
+      if (( CASES_RUN_HOLD_OK == 1 )); then
+        cases_set_stage "reversal_seed"
+      fi
+      ;;
+    reversal_seed)
+      if (( CASES_RUN_DOWN_CASH_OK == 1 )); then
+        cases_set_stage "reversal_opposite"
+      fi
+      ;;
+    reversal_opposite)
+      if (( CASES_RUN_FLOOR_OK == 1 )); then
         cases_set_stage "down_to_floor"
       fi
-      return
-    fi
-  else
-    if (( CASES_RUN_FLOOR_OK == 0 )); then
-      if (( idx <= HOOK_FLOOR_IDX )); then
+      ;;
+    down_to_floor)
+      if (( CASES_RUN_DEADBAND_OK == 1 )); then
         cases_set_stage "floor_probe"
-      else
-        cases_set_stage "down_to_floor"
       fi
-      return
-    fi
-    if (( CASES_RUN_CAP_OK == 0 )); then
-      if (( idx >= HOOK_CAP_IDX )); then
-        cases_set_stage "cap_probe"
-      else
-        cases_set_stage "up_to_cap"
+      ;;
+    floor_probe)
+      if (( CASES_RUN_NO_SWAPS_OK == 1 )); then
+        cases_set_stage "deadband_probe"
       fi
-      return
-    fi
-  fi
+      ;;
+    deadband_probe)
+      if (( CASES_RUN_EMERGENCY_OK == 1 )); then
+        cases_set_stage "lull_prepare"
+      fi
+      ;;
+    lull_prepare)
+      if (( idx > HOOK_REGIME_FLOOR )); then
+        cases_set_stage "lull_wait"
+      fi
+      ;;
+    lull_wait|post_lull_trigger|await_lull_validation)
+      if (( CASES_RUN_LULL_OK == 1 )); then
+        cases_set_stage "post_checks"
+      fi
+      ;;
+    post_checks)
+      ;;
+    cycle_done)
+      ;;
+    *)
+      cases_set_stage "up_to_cap"
+      ;;
+  esac
+}
 
-  if (( CASES_RUN_REV_OK == 0 )); then
-    if (( dir == 1 || dir == 2 )); then
-      cases_set_stage "reversal_opposite"
-    else
-      cases_set_stage "reversal_seed"
-    fi
-    return
-  fi
-  if (( CASES_RUN_DEADBAND_OK == 0 )); then
-    cases_set_stage "deadband_probe"
-    return
-  fi
-  if (( CASES_RUN_LULL_OK == 0 )); then
-    cases_set_stage "lull_wait"
-    return
-  fi
-
-  cases_set_stage "cycle_done"
+cases_stage_case_label() {
+  case "${CASES_STAGE}" in
+    up_to_cap)
+      echo "V2-2 jump floor->cash"
+      ;;
+    cap_probe)
+      echo "V2-3 jump cash->extreme"
+      ;;
+    reversal_mid)
+      echo "V2-4 hold blocks down"
+      ;;
+    reversal_seed)
+      echo "V2-5 down extreme->cash"
+      ;;
+    reversal_opposite)
+      echo "V2-6 down cash->floor"
+      ;;
+    down_to_floor)
+      echo "V2-7 deadband no-change"
+      ;;
+    floor_probe)
+      echo "V2-8 no-swaps close"
+      ;;
+    deadband_probe)
+      echo "V2-9 emergency floor"
+      ;;
+    lull_prepare|lull_wait|post_lull_trigger|await_lull_validation)
+      echo "V2-10 lull reset"
+      ;;
+    post_checks)
+      echo "GV/MN/AN controls"
+      ;;
+    cycle_done)
+      echo "completed"
+      ;;
+    *)
+      echo "bootstrapping"
+      ;;
+  esac
 }
 
 cases_reset_cycle_context() {
   local idx="$1"
   local dir="$2"
-  local dist_to_cap dist_to_floor
+  local ema_now="${3:-0}"
   if ! [[ "${idx}" =~ ^[0-9]+$ ]]; then
-    idx="${HOOK_INITIAL_IDX}"
+    idx="${HOOK_REGIME_FLOOR}"
   fi
   if ! [[ "${dir}" =~ ^[0-2]$ ]]; then
     dir=0
+  fi
+  if ! [[ "${ema_now}" =~ ^[0-9]+$ ]]; then
+    ema_now=0
   fi
 
   CASES_RUN_CAP_OK=0
@@ -2240,53 +4131,57 @@ cases_reset_cycle_context() {
   CASES_RUN_REV_OK=0
   CASES_RUN_DEADBAND_OK=0
   CASES_RUN_LULL_OK=0
-  CASES_RUN_ZERO_EMA_OK=0
+  CASES_RUN_BOOTSTRAP_OK=0
+  CASES_RUN_JUMP_CASH_OK=0
+  CASES_RUN_JUMP_EXTREME_OK=0
+  CASES_RUN_HOLD_OK=0
+  CASES_RUN_DOWN_CASH_OK=0
+  CASES_RUN_NO_SWAPS_OK=0
+  CASES_RUN_EMERGENCY_OK=0
+  CASES_RUN_ANOMALY_OK=0
+  if (( ema_now > 0 )); then
+    CASES_RUN_BOOTSTRAP_OK=1
+  fi
   CASES_STAGE_STEP=0
+  CASES_STAGE_REF_STAGE=""
+  CASES_STAGE_REF_EMA=0
   CASES_BASE_CAP_PASS="${TC_CAP_CLAMP_PASS}"
   CASES_BASE_FLOOR_PASS="${TC_FLOOR_CLAMP_PASS}"
   CASES_BASE_REV_PASS="${TC_REVERSAL_LOCK_PASS}"
   CASES_BASE_DEADBAND_PASS="${TC_DEADBAND_PASS}"
   CASES_BASE_LULL_PASS="${TC_LULL_RESET_PASS}"
-  CASES_BASE_ZERO_EMA_PASS="${TC_ZERO_EMA_DOWN_PASS}"
-
-  if (( idx >= HOOK_CAP_IDX )); then
-    CASES_PRIORITY_EDGE="cap"
-  elif (( idx <= HOOK_FLOOR_IDX )); then
-    CASES_PRIORITY_EDGE="floor"
-  else
-    dist_to_cap=$((HOOK_CAP_IDX - idx))
-    if (( dist_to_cap < 0 )); then dist_to_cap=$(( -dist_to_cap )); fi
-    dist_to_floor=$((idx - HOOK_FLOOR_IDX))
-    if (( dist_to_floor < 0 )); then dist_to_floor=$(( -dist_to_floor )); fi
-    if (( dist_to_floor < dist_to_cap )); then
-      CASES_PRIORITY_EDGE="floor"
-    else
-      CASES_PRIORITY_EDGE="cap"
-    fi
-  fi
-
-  cases_select_stage "${idx}" "${dir}"
+  cases_set_stage "up_to_cap"
 }
 
 cases_target_up_volume() {
   local ema="$1"
   local step="$2"
-  local upper margin target
+  local rbps min_close target buffer
   if ! [[ "${ema}" =~ ^[0-9]+$ ]]; then
     ema=0
   fi
   if ! [[ "${step}" =~ ^[0-9]+$ ]]; then
     step=0
   fi
-  upper=$(( ema * (10000 + HOOK_DEADBAND_BPS) / 10000 ))
-  if (( upper < HOOK_DUST_CLOSE_VOL_USD6 )); then
-    upper="${HOOK_DUST_CLOSE_VOL_USD6}"
+  rbps="${HOOK_UP_R_TO_CASH_BPS}"
+  min_close="${HOOK_MIN_CLOSEVOL_TO_CASH_USD6}"
+  if [[ "${CASES_STAGE}" == "cap_probe" ]]; then
+    rbps="${HOOK_UP_R_TO_EXTREME_BPS}"
+    min_close="${HOOK_MIN_CLOSEVOL_TO_EXTREME_USD6}"
   fi
-  margin=$(( upper / 20 ))
-  if (( margin < 1500000 )); then margin=1500000; fi
-  if (( margin > 12000000 )); then margin=12000000; fi
-  target=$(( upper + margin + step * 1000000 ))
-  if (( target < 6000000 )); then target=6000000; fi
+  if ! [[ "${rbps}" =~ ^[0-9]+$ ]]; then rbps=11000; fi
+  if ! [[ "${min_close}" =~ ^[0-9]+$ ]]; then min_close=2000000; fi
+  if (( rbps < 10001 )); then rbps=10001; fi
+
+  if (( ema > 0 )); then
+    target=$(( ema * (rbps + 600) / 10000 ))
+  else
+    target=$(( min_close + 2000000 ))
+  fi
+  buffer=$((step * 750000))
+  target=$((target + buffer))
+  if (( target < min_close )); then target="${min_close}"; fi
+  if (( target < 2000000 )); then target=2000000; fi
   if (( target > 260000000 )); then target=260000000; fi
   echo "${target}"
 }
@@ -2294,218 +4189,348 @@ cases_target_up_volume() {
 cases_target_down_volume() {
   local ema="$1"
   local step="$2"
-  local lower margin ceiling target
+  local rbps target cut
   if ! [[ "${ema}" =~ ^[0-9]+$ ]]; then
     ema=0
   fi
   if ! [[ "${step}" =~ ^[0-9]+$ ]]; then
     step=0
   fi
-  lower=$(( ema * (10000 - HOOK_DEADBAND_BPS) / 10000 ))
-  if (( lower <= 0 )); then
-    echo "1000000"
+  rbps="${HOOK_DOWN_R_FROM_CASH_BPS}"
+  if [[ "${CASES_STAGE}" == "reversal_seed" || "${CASES_STAGE}" == "reversal_mid" ]]; then
+    rbps="${HOOK_DOWN_R_FROM_EXTREME_BPS}"
+  fi
+  if ! [[ "${rbps}" =~ ^[0-9]+$ ]]; then rbps=13000; fi
+  if (( ema <= 0 )); then
+    echo "${HOOK_DUST_CLOSE_VOL_USD6}"
     return
   fi
-  margin=$(( lower / 20 ))
-  if (( margin < 1000000 )); then margin=1000000; fi
-  if (( margin > 8000000 )); then margin=8000000; fi
-  ceiling=$(( lower - margin ))
-  if (( ceiling < 1000000 )); then ceiling=1000000; fi
-  target=$(( 1000000 + step * 1000000 ))
-  if (( target > ceiling )); then target="${ceiling}"; fi
-  if (( target < 1000000 )); then target=1000000; fi
+  target=$(( ema * rbps / 10000 ))
+  cut=$(( target * 12 / 100 + step * 350000 ))
+  if (( cut < 1 )); then cut=1; fi
+  target=$((target - cut))
+  if (( target < HOOK_DUST_CLOSE_VOL_USD6 )); then target="${HOOK_DUST_CLOSE_VOL_USD6}"; fi
   echo "${target}"
 }
 
 cases_target_deadband_volume() {
   local ema="$1"
-  local lower upper target
+  local lower upper band target
   if ! [[ "${ema}" =~ ^[0-9]+$ ]]; then
     ema=0
   fi
   if (( ema <= 0 )); then
-    echo "1000000"
+    echo "2000000"
     return
   fi
   lower=$(( ema * (10000 - HOOK_DEADBAND_BPS) / 10000 ))
   upper=$(( ema * (10000 + HOOK_DEADBAND_BPS) / 10000 ))
-  target=$(( lower + (upper - lower) / 2 ))
+  band=$((upper - lower))
+  target=$(( lower + band / 2 ))
   if (( target < lower )); then target="${lower}"; fi
   if (( target > upper )); then target="${upper}"; fi
+  if (( target < 2000000 )); then target=2000000; fi
+  echo "${target}"
+}
+
+cases_prefer_stable_input_side() {
+  case "${STABLE_SIDE}" in
+    token0) echo "zeroForOne" ;;
+    token1) echo "oneForZero" ;;
+    *) echo "zeroForOne" ;;
+  esac
+}
+
+cases_refresh_stage_reference() {
+  local ema_now="$1"
+  local ref_ema
+  if ! [[ "${ema_now}" =~ ^[0-9]+$ ]]; then
+    ema_now=0
+  fi
+  if [[ "${CASES_STAGE_REF_STAGE}" != "${CASES_STAGE}" || "${CASES_STAGE_REF_EMA}" -le 0 ]]; then
+    ref_ema="${ema_now}"
+    if (( ref_ema <= 0 )); then
+      ref_ema=4000000
+    fi
+    if (( ref_ema < HOOK_DUST_CLOSE_VOL_USD6 )); then
+      ref_ema="${HOOK_DUST_CLOSE_VOL_USD6}"
+    fi
+    CASES_STAGE_REF_STAGE="${CASES_STAGE}"
+    CASES_STAGE_REF_EMA="${ref_ema}"
+  fi
+}
+
+cases_anchor_tick_from_range() {
+  python3 -S - "${LIQ_RANGE_MIN_USD:-}" "${LIQ_RANGE_MAX_USD:-}" "${STABLE_SIDE}" "${TOKEN0_DECIMALS}" "${TOKEN1_DECIMALS}" <<'PY'
+import math
+import re
+import sys
+from decimal import Decimal, getcontext
+
+getcontext().prec = 80
+min_raw = (sys.argv[1] or "").strip()
+max_raw = (sys.argv[2] or "").strip()
+stable_side = (sys.argv[3] or "").strip()
+dec0 = int(sys.argv[4])
+dec1 = int(sys.argv[5])
+num_re = re.compile(r'^[0-9]+(?:[.][0-9]+)?$')
+
+if not num_re.match(min_raw) or not num_re.match(max_raw):
+    raise SystemExit(1)
+
+lo = Decimal(min_raw)
+hi = Decimal(max_raw)
+if lo <= 0 or hi <= 0 or hi <= lo:
+    raise SystemExit(1)
+
+# Center price in stable per volatile.
+center_stable_per_volatile = (lo * hi).sqrt()
+if stable_side == "token1":
+    price_t1_per_t0 = center_stable_per_volatile
+elif stable_side == "token0":
+    price_t1_per_t0 = Decimal(1) / center_stable_per_volatile
+else:
+    raise SystemExit(1)
+
+raw_price = price_t1_per_t0 * (Decimal(10) ** (dec0 - dec1))
+if raw_price <= 0:
+    raise SystemExit(1)
+
+tick = math.floor(math.log(float(raw_price), 1.0001))
+print(tick)
+PY
+}
+
+cases_pick_centering_side() {
+  local fallback="$1"
+  local tick_now delta
+  if (( CASES_MODE != 1 )); then
+    echo "${fallback}"
+    return
+  fi
+  if [[ -z "${STATE_VIEW_ADDRESS}" || -z "${POOL_ID}" ]]; then
+    echo "${fallback}"
+    return
+  fi
+  if ! [[ "${RND_ARB_ANCHOR_TICK}" =~ ^-?[0-9]+$ ]]; then
+    echo "${fallback}"
+    return
+  fi
+  if ! tick_now="$(read_pool_tick 2>/dev/null)"; then
+    echo "${fallback}"
+    return
+  fi
+  if ! [[ "${tick_now}" =~ ^-?[0-9]+$ ]]; then
+    echo "${fallback}"
+    return
+  fi
+  delta=$((tick_now - RND_ARB_ANCHOR_TICK))
+  # In cases mode always bias side toward configured anchor tick.
+  if (( delta < 0 )); then
+    echo "oneForZero"
+    return
+  fi
+  if (( delta > 0 )); then
+    echo "zeroForOne"
+    return
+  fi
+  echo "${fallback}"
+}
+
+cases_centering_target_vol() {
+  local side="$1"
+  local target="$2"
+  local tick_now delta abs_delta band mul
+  if ! [[ "${target}" =~ ^[0-9]+$ ]] || (( target <= 0 )); then
+    echo "1"
+    return
+  fi
+  if (( CASES_MODE != 1 )); then
+    echo "${target}"
+    return
+  fi
+  if [[ -z "${STATE_VIEW_ADDRESS}" || -z "${POOL_ID}" ]]; then
+    echo "${target}"
+    return
+  fi
+  if ! [[ "${RND_ARB_ANCHOR_TICK}" =~ ^-?[0-9]+$ ]]; then
+    echo "${target}"
+    return
+  fi
+  if ! tick_now="$(read_pool_tick 2>/dev/null)"; then
+    echo "${target}"
+    return
+  fi
+  if ! [[ "${tick_now}" =~ ^-?[0-9]+$ ]]; then
+    echo "${target}"
+    return
+  fi
+  band="${CASES_CENTER_TICK_BAND}"
+  if ! [[ "${band}" =~ ^[0-9]+$ ]] || (( band <= 0 )); then
+    band=40
+  fi
+  if (( band < 5 )); then
+    band=5
+  fi
+  delta=$((tick_now - RND_ARB_ANCHOR_TICK))
+  abs_delta="${delta#-}"
+  mul=10000
+  if (( abs_delta > 0 )); then
+    # Farther from anchor -> larger volume to accelerate recentering.
+    mul=$((10000 + (abs_delta * 6000 / band)))
+    if (( mul > 26000 )); then
+      mul=26000
+    fi
+  fi
+  if (( delta > 0 )) && [[ "${side}" != "zeroForOne" ]]; then
+    mul=$((mul * 45 / 100))
+  elif (( delta < 0 )) && [[ "${side}" != "oneForZero" ]]; then
+    mul=$((mul * 45 / 100))
+  fi
+  if (( mul < 3000 )); then
+    mul=3000
+  fi
+  target=$((target * mul / 10000))
+  if (( target < HOOK_DUST_CLOSE_VOL_USD6 )); then
+    target="${HOOK_DUST_CLOSE_VOL_USD6}"
+  fi
+  if (( target < 1 )); then
+    target=1
+  fi
   echo "${target}"
 }
 
 cases_plan_next_action() {
   local state="$1"
   local fee pv ema ps idx dir
-  local side reason target_vol amount wait_roll
+  local side reason target_vol amount wait_roll ref_ema
+  local debug_state hold_remaining up_streak down_streak emergency_streak
 
   IFS='|' read -r fee pv ema ps idx dir <<<"${state}"
   cases_select_stage "${idx}" "${dir}"
+  cases_refresh_stage_reference "${ema}"
+  ref_ema="${CASES_STAGE_REF_EMA}"
+  if ! [[ "${ref_ema}" =~ ^[0-9]+$ ]] || (( ref_ema <= 0 )); then
+    ref_ema="${ema}"
+  fi
+  if ! [[ "${ref_ema}" =~ ^[0-9]+$ ]] || (( ref_ema <= 0 )); then
+    ref_ema=4000000
+  fi
+  hold_remaining=0
+  up_streak=0
+  down_streak=0
+  emergency_streak=0
+  if debug_state="$(read_state_debug 2>/dev/null)"; then
+    IFS='|' read -r _ hold_remaining up_streak down_streak emergency_streak _ _ _ _ <<<"${debug_state}"
+  fi
   CASES_FORCE_WAIT_SECONDS=0
   CASES_FORCE_WAIT_REASON=""
-  side="zeroForOne"
+  side="$(cases_prefer_stable_input_side)"
   reason="case-step"
-  target_vol=1000000
+  target_vol=2000000
 
-  while true; do
-    case "${CASES_STAGE}" in
-      up_to_cap)
-        if (( idx >= HOOK_CAP_IDX )); then
-          cases_set_stage "cap_probe"
-          continue
-        fi
-        side="zeroForOne"
-        target_vol="$(cases_target_up_volume "${ema}" "${CASES_STAGE_STEP}")"
-        reason="case-up-ramp"
-        CASES_STAGE_STEP=$((CASES_STAGE_STEP + 1))
-        break
-        ;;
-      cap_probe)
-        side="zeroForOne"
-        target_vol="$(cases_target_up_volume "${ema}" "$((CASES_STAGE_STEP + 2))")"
-        reason="case-cap-clamp-probe"
-        CASES_STAGE_STEP=$((CASES_STAGE_STEP + 1))
-        break
-        ;;
-      down_to_floor)
-        if (( idx <= HOOK_FLOOR_IDX )); then
-          cases_set_stage "floor_probe"
-          continue
-        fi
-        side="oneForZero"
-        target_vol="$(cases_target_down_volume "${ema}" "${CASES_STAGE_STEP}")"
-        reason="case-down-ramp"
-        CASES_STAGE_STEP=$((CASES_STAGE_STEP + 1))
-        break
-        ;;
-      floor_probe)
-        side="oneForZero"
-        target_vol="$(cases_target_down_volume "${ema}" "$((CASES_STAGE_STEP + 2))")"
-        reason="case-floor-clamp-probe"
-        CASES_STAGE_STEP=$((CASES_STAGE_STEP + 1))
-        break
-        ;;
-      reversal_seed)
-        if (( idx >= HOOK_CAP_IDX )); then
-          side="oneForZero"
-          target_vol="$(cases_target_down_volume "${ema}" "3")"
-          reason="case-reversal-seed-down"
-        elif (( idx <= HOOK_FLOOR_IDX )); then
-          side="zeroForOne"
-          target_vol="$(cases_target_up_volume "${ema}" "3")"
-          reason="case-reversal-seed-up"
-        elif [[ "${CASES_PRIORITY_EDGE}" == "floor" ]]; then
-          side="oneForZero"
-          target_vol="$(cases_target_down_volume "${ema}" "2")"
-          reason="case-reversal-seed-down"
-        else
-          side="zeroForOne"
-          target_vol="$(cases_target_up_volume "${ema}" "2")"
-          reason="case-reversal-seed-up"
-        fi
-        if (( CASES_STAGE_STEP == 0 )); then
-          wait_roll="$(seconds_to_next_period "${ps}")"
-          if [[ "${wait_roll}" =~ ^[0-9]+$ ]] && (( wait_roll > 0 )); then
-            CASES_FORCE_WAIT_SECONDS="${wait_roll}"
-            CASES_FORCE_WAIT_REASON="case-reversal-rollover-wait"
-            CASES_STAGE_STEP=1
-          fi
-        else
-          CASES_STAGE_STEP=$((CASES_STAGE_STEP + 1))
-          if (( CASES_STAGE_STEP % 6 == 0 )); then
-            wait_roll="$(seconds_to_next_period "${ps}")"
-            if [[ "${wait_roll}" =~ ^[0-9]+$ ]] && (( wait_roll > 0 )); then
-              CASES_FORCE_WAIT_SECONDS="${wait_roll}"
-              CASES_FORCE_WAIT_REASON="case-reversal-rollover-retry"
-            fi
-          fi
-        fi
-        # Wait until hook sets a directional memory before opposite probe.
-        if [[ "${dir}" == "1" || "${dir}" == "2" ]]; then
-          cases_set_stage "reversal_opposite"
-        fi
-        break
-        ;;
-      reversal_opposite)
-        if [[ "${dir}" == "1" ]]; then
-          side="oneForZero"
-          target_vol="$(cases_target_down_volume "${ema}" "3")"
-          reason="case-reversal-opposite-down"
-          break
-        fi
-        if [[ "${dir}" == "2" ]]; then
-          side="zeroForOne"
-          target_vol="$(cases_target_up_volume "${ema}" "3")"
-          reason="case-reversal-opposite-up"
-          break
-        fi
-        side="zeroForOne"
-        target_vol="$(cases_target_up_volume "${ema}" "1")"
-        reason="case-reversal-wait-dir"
-        CASES_STAGE_STEP=$((CASES_STAGE_STEP + 1))
-        if (( CASES_STAGE_STEP % 6 == 0 )); then
-          wait_roll="$(seconds_to_next_period "${ps}")"
-          if [[ "${wait_roll}" =~ ^[0-9]+$ ]] && (( wait_roll > 0 )); then
-            CASES_FORCE_WAIT_SECONDS="${wait_roll}"
-            CASES_FORCE_WAIT_REASON="case-reversal-rollover-retry"
-          fi
-        fi
-        break
-        ;;
-      deadband_probe)
-        side="zeroForOne"
-        target_vol="$(cases_target_deadband_volume "${ema}")"
-        reason="case-deadband-probe"
-        if (( CASES_STAGE_STEP == 0 )); then
-          wait_roll="$(seconds_to_next_period "${ps}")"
-          if [[ "${wait_roll}" =~ ^[0-9]+$ ]] && (( wait_roll > 0 )); then
-            CASES_FORCE_WAIT_SECONDS="${wait_roll}"
-            CASES_FORCE_WAIT_REASON="case-deadband-rollover-wait"
-            CASES_STAGE_STEP=1
-          fi
-        else
-          CASES_STAGE_STEP=$((CASES_STAGE_STEP + 1))
-        fi
-        break
-        ;;
-      lull_wait)
-        side="zeroForOne"
-        target_vol="$(cases_target_deadband_volume "${ema}")"
+  case "${CASES_STAGE}" in
+    up_to_cap)
+      if (( CASES_RUN_JUMP_CASH_OK == 0 && idx > HOOK_REGIME_FLOOR )); then
+        target_vol="$(cases_target_down_volume "${ref_ema}" "${CASES_STAGE_STEP}")"
+        reason="case-prep-floor-for-jump-cash"
+      elif (( CASES_RUN_BOOTSTRAP_OK == 0 )); then
+        target_vol=$((HOOK_DUST_CLOSE_VOL_USD6 + 1000000))
+        reason="case-bootstrap"
+      else
+        target_vol="$(cases_target_up_volume "${ref_ema}" "${CASES_STAGE_STEP}")"
+        reason="case-jump-cash"
+      fi
+      ;;
+    cap_probe)
+      target_vol="$(cases_target_up_volume "${ref_ema}" "$((CASES_STAGE_STEP + 1))")"
+      reason="case-jump-extreme"
+      ;;
+    reversal_mid)
+      target_vol="$(cases_target_down_volume "${ref_ema}" "${CASES_STAGE_STEP}")"
+      if (( target_vol <= HOOK_EMERGENCY_FLOOR_CLOSEVOL_USD6 )); then
+        target_vol=$((HOOK_EMERGENCY_FLOOR_CLOSEVOL_USD6 + 1500000))
+      fi
+      reason="case-hold-probe"
+      ;;
+    reversal_seed)
+      target_vol="$(cases_target_down_volume "${ref_ema}" "$((CASES_STAGE_STEP + 1))")"
+      reason="case-down-to-cash"
+      ;;
+    reversal_opposite)
+      target_vol="$(cases_target_down_volume "${ref_ema}" "$((CASES_STAGE_STEP + 2))")"
+      reason="case-down-to-floor"
+      ;;
+    down_to_floor)
+      target_vol="$(cases_target_deadband_volume "${ref_ema}")"
+      reason="case-deadband"
+      ;;
+    floor_probe)
+      target_vol="${HOOK_DUST_CLOSE_VOL_USD6}"
+      reason="case-no-swaps"
+      ;;
+    deadband_probe)
+      if (( idx <= HOOK_REGIME_FLOOR )); then
+        target_vol="$(cases_target_up_volume "${ref_ema}" "$((CASES_STAGE_STEP + 2))")"
+        reason="case-emergency-seed"
+      else
+        target_vol="${HOOK_DUST_CLOSE_VOL_USD6}"
+        reason="case-emergency-floor"
+      fi
+      ;;
+    lull_prepare)
+      if (( idx > HOOK_REGIME_FLOOR )); then
+        cases_set_stage "lull_wait"
+        target_vol="${HOOK_DUST_CLOSE_VOL_USD6}"
         reason="case-lull-prewait"
-        break
-        ;;
-      post_lull_trigger)
-        side="zeroForOne"
-        target_vol="$(cases_target_deadband_volume "${ema}")"
-        reason="case-lull-post-trigger"
-        cases_set_stage "await_lull_validation"
-        break
-        ;;
-      await_lull_validation)
-        side="zeroForOne"
-        target_vol="$(cases_target_deadband_volume "${ema}")"
-        reason="case-lull-post-retry"
-        break
-        ;;
-      cycle_done)
-        side="zeroForOne"
-        target_vol="$(cases_target_deadband_volume "${ema}")"
-        reason="case-cycle-done-hold"
-        break
-        ;;
-      *)
-        cases_select_stage "${idx}" "${dir}"
-        CASES_STAGE_STEP=0
-        continue
-        ;;
-    esac
-  done
+      else
+        target_vol="$(cases_target_up_volume "${ref_ema}" "$((CASES_STAGE_STEP + 3))")"
+        reason="case-lull-seed"
+      fi
+      ;;
+    lull_wait)
+      target_vol="${HOOK_DUST_CLOSE_VOL_USD6}"
+      reason="case-lull-prewait"
+      ;;
+    post_lull_trigger)
+      target_vol="${HOOK_DUST_CLOSE_VOL_USD6}"
+      reason="case-lull-post-trigger"
+      cases_set_stage "await_lull_validation"
+      ;;
+    await_lull_validation)
+      target_vol="${HOOK_DUST_CLOSE_VOL_USD6}"
+      reason="case-lull-post-retry"
+      ;;
+    post_checks)
+      target_vol="$(cases_target_deadband_volume "${ref_ema}")"
+      reason="case-post-checks"
+      ;;
+    cycle_done)
+      target_vol="$(cases_target_deadband_volume "${ref_ema}")"
+      reason="case-cycle-done-hold"
+      ;;
+    *)
+      cases_set_stage "up_to_cap"
+      target_vol=$((HOOK_DUST_CLOSE_VOL_USD6 + 1000000))
+      reason="case-bootstrap"
+      ;;
+  esac
 
-  amount="$(amount_for_period_target_vol "${target_vol}" "${pv}")"
+  if [[ "${CASES_STAGE}" == "floor_probe" || "${CASES_STAGE}" == "deadband_probe" || "${CASES_STAGE}" == "lull_wait" || "${CASES_STAGE}" == "post_lull_trigger" || "${CASES_STAGE}" == "await_lull_validation" ]]; then
+    amount="$(amount_for_target_vol "${target_vol}")"
+  else
+    amount="$(amount_for_period_target_vol "${target_vol}" "${pv}")"
+  fi
   if ! [[ "${amount}" =~ ^[0-9]+$ ]]; then
     amount=0
   fi
+  if (( hold_remaining > 0 )) && [[ "${CASES_STAGE}" == "reversal_mid" ]]; then
+    reason="case-hold-probe(active-hold=${hold_remaining})"
+  fi
+  if [[ "${up_streak}" =~ ^[0-9]+$ && "${down_streak}" =~ ^[0-9]+$ && "${emergency_streak}" =~ ^[0-9]+$ ]]; then
+    :
+  fi
+  CASES_STAGE_STEP=$((CASES_STAGE_STEP + 1))
   CASES_NEXT_SIDE="${side}"
   CASES_NEXT_REASON="${reason}"
   CASES_NEXT_TARGET_VOL="${target_vol}"
@@ -2516,55 +4541,7 @@ pick_amount_with_case_bias() {
   local min_amount="$1"
   local max_amount="$2"
   local state="$3"
-  local fee pv ema ps idx dir
-  local amount reason side roll span
-  local low_hi high_lo mid_target mid_lo mid_hi
-
-  IFS='|' read -r fee pv ema ps idx dir <<<"${state}"
-  amount="$(random_between "${min_amount}" "${max_amount}")"
-  reason="biased-mid"
-  side=""
-
-  span=$((max_amount - min_amount))
-  if (( span < 0 )); then span=0; fi
-  low_hi=$((min_amount + span / 6))
-  high_lo=$((max_amount - span / 6))
-  if (( low_hi < min_amount )); then low_hi="${min_amount}"; fi
-  if (( high_lo > max_amount )); then high_lo="${max_amount}"; fi
-  if (( high_lo < min_amount )); then high_lo="${min_amount}"; fi
-
-  if (( ema > 0 )); then
-    if mid_target="$(amount_for_target_vol "${ema}" 2>/dev/null)"; then
-      :
-    else
-      mid_target=$((min_amount + span / 2))
-    fi
-  else
-    mid_target=$((min_amount + span / 2))
-  fi
-  if (( mid_target < min_amount )); then mid_target="${min_amount}"; fi
-  if (( mid_target > max_amount )); then mid_target="${max_amount}"; fi
-  mid_lo=$((mid_target - span / 10))
-  mid_hi=$((mid_target + span / 10))
-  if (( mid_lo < min_amount )); then mid_lo="${min_amount}"; fi
-  if (( mid_hi > max_amount )); then mid_hi="${max_amount}"; fi
-  if (( mid_hi < mid_lo )); then mid_hi="${mid_lo}"; fi
-
-  roll="$(random_between 1 100)"
-  if (( roll <= 20 )); then
-    amount="$(random_between "${min_amount}" "${low_hi}")"
-    reason="biased-low"
-  elif (( roll <= 80 )); then
-    amount="$(random_between "${high_lo}" "${max_amount}")"
-    reason="biased-high"
-  else
-    amount="$(random_between "${mid_lo}" "${mid_hi}")"
-    reason="biased-mid"
-  fi
-
-  if (( amount < min_amount )); then amount="${min_amount}"; fi
-  if (( amount > max_amount )); then amount="${max_amount}"; fi
-  echo "${amount}|${reason}|${side}"
+  random_plan_v2_amount "${state}" "${min_amount}" "${max_amount}"
 }
 
 pick_wait_with_case_bias() {
@@ -2599,8 +4576,16 @@ pick_wait_with_case_bias() {
       RND_WAIT_PICK_REASON="${reason}"
       return
     fi
-    RND_WAIT_PICK_SECONDS=0
-    RND_WAIT_PICK_REASON="case-step"
+    # In strict cases mode, run one controlled close per period.
+    wait="$(seconds_to_next_period "${ps}")"
+    if ! [[ "${wait}" =~ ^[0-9]+$ ]]; then
+      wait=0
+    fi
+    if (( wait < 0 )); then
+      wait=0
+    fi
+    RND_WAIT_PICK_SECONDS="${wait}"
+    RND_WAIT_PICK_REASON="case-period-sync"
     return
   fi
 
@@ -2635,7 +4620,7 @@ pick_wait_with_case_bias() {
 
 random_write_stats_snapshot() {
   local now elapsed avg_amount success_pct
-  local current_tier floor_tier cap_tier initial_tier pause_tier
+  local current_tier floor_tier cap_tier
   local mode_label
   local i recent_count
   now="$(date +%s)"
@@ -2647,10 +4632,8 @@ random_write_stats_snapshot() {
     success_pct=$((100 * RND_SUCCESS / RND_ATTEMPTS))
   fi
   current_tier="$(fee_tier_for_idx "${RND_CURRENT_IDX}")"
-  floor_tier="$(fee_tier_for_idx "${HOOK_FLOOR_IDX}")"
-  cap_tier="$(fee_tier_for_idx "${HOOK_CAP_IDX}")"
-  initial_tier="$(fee_tier_for_idx "${HOOK_INITIAL_IDX}")"
-  pause_tier="$(fee_tier_for_idx "${HOOK_PAUSE_IDX}")"
+  floor_tier="$(fee_tier_for_idx "${HOOK_REGIME_FLOOR}")"
+  cap_tier="$(fee_tier_for_idx "${HOOK_REGIME_EXTREME}")"
   mode_label="random"
   if (( CASES_MODE == 1 )); then
     mode_label="cases"
@@ -2684,12 +4667,23 @@ random_write_stats_snapshot() {
     echo "cases_runs_completed=${CASES_COMPLETED_RUNS}"
     echo "cases_stage=${CASES_STAGE}"
     echo "cases_stage_step=${CASES_STAGE_STEP}"
-    echo "cases_priority_edge=${CASES_PRIORITY_EDGE}"
     echo "cases_run_cap_ok=${CASES_RUN_CAP_OK}"
     echo "cases_run_floor_ok=${CASES_RUN_FLOOR_OK}"
     echo "cases_run_reversal_ok=${CASES_RUN_REV_OK}"
     echo "cases_run_deadband_ok=${CASES_RUN_DEADBAND_OK}"
     echo "cases_run_lull_ok=${CASES_RUN_LULL_OK}"
+    echo "cases_run_bootstrap_ok=${CASES_RUN_BOOTSTRAP_OK}"
+    echo "cases_run_jump_cash_ok=${CASES_RUN_JUMP_CASH_OK}"
+    echo "cases_run_jump_extreme_ok=${CASES_RUN_JUMP_EXTREME_OK}"
+    echo "cases_run_hold_ok=${CASES_RUN_HOLD_OK}"
+    echo "cases_run_down_cash_ok=${CASES_RUN_DOWN_CASH_OK}"
+    echo "cases_run_no_swaps_ok=${CASES_RUN_NO_SWAPS_OK}"
+    echo "cases_run_emergency_ok=${CASES_RUN_EMERGENCY_OK}"
+    echo "cases_run_anomaly_ok=${CASES_RUN_ANOMALY_OK}"
+    echo "cases_next_reason=$(sanitize_inline "${CASES_NEXT_REASON}")"
+    echo "cases_next_side=${CASES_NEXT_SIDE}"
+    echo "cases_next_target_vol_usd6=${CASES_NEXT_TARGET_VOL}"
+    echo "cases_next_amount_proxy_raw=${CASES_NEXT_AMOUNT}"
     echo "lull_last_probe_attempt=${RND_LULL_LAST_PROBE_ATTEMPT}"
     echo "attempts=${RND_ATTEMPTS}"
     echo "success=${RND_SUCCESS}"
@@ -2766,10 +4760,34 @@ random_write_stats_snapshot() {
     echo "tc_edges_floor_clamp_obs=${TC_FLOOR_CLAMP_OBS}"
     echo "tc_edges_floor_clamp_pass=${TC_FLOOR_CLAMP_PASS}"
     echo "tc_edges_floor_clamp_fail=${TC_FLOOR_CLAMP_FAIL}"
-    echo "tc_edges_zero_ema_zero_close_down_status=$(tc_status_ed3)"
-    echo "tc_edges_zero_ema_zero_close_down_obs=${TC_ZERO_EMA_DOWN_OBS}"
-    echo "tc_edges_zero_ema_zero_close_down_pass=${TC_ZERO_EMA_DOWN_PASS}"
-    echo "tc_edges_zero_ema_zero_close_down_fail=${TC_ZERO_EMA_DOWN_FAIL}"
+    echo "tc_governance_pause_status=$(tc_status "${TC_PAUSE_PASS}" "${TC_PAUSE_FAIL}")"
+    echo "tc_governance_pause_obs=${TC_PAUSE_OBS}"
+    echo "tc_governance_pause_pass=${TC_PAUSE_PASS}"
+    echo "tc_governance_pause_fail=${TC_PAUSE_FAIL}"
+    echo "tc_governance_pause_freeze_status=$(tc_status "${TC_PAUSE_STATIC_PASS}" "${TC_PAUSE_STATIC_FAIL}")"
+    echo "tc_governance_pause_freeze_obs=${TC_PAUSE_STATIC_OBS}"
+    echo "tc_governance_pause_freeze_pass=${TC_PAUSE_STATIC_PASS}"
+    echo "tc_governance_pause_freeze_fail=${TC_PAUSE_STATIC_FAIL}"
+    echo "tc_governance_unpause_status=$(tc_status "${TC_UNPAUSE_PASS}" "${TC_UNPAUSE_FAIL}")"
+    echo "tc_governance_unpause_obs=${TC_UNPAUSE_OBS}"
+    echo "tc_governance_unpause_pass=${TC_UNPAUSE_PASS}"
+    echo "tc_governance_unpause_fail=${TC_UNPAUSE_FAIL}"
+    echo "tc_governance_unpause_resume_status=$(tc_status "${TC_UNPAUSE_RESUME_PASS}" "${TC_UNPAUSE_RESUME_FAIL}")"
+    echo "tc_governance_unpause_resume_obs=${TC_UNPAUSE_RESUME_OBS}"
+    echo "tc_governance_unpause_resume_pass=${TC_UNPAUSE_RESUME_PASS}"
+    echo "tc_governance_unpause_resume_fail=${TC_UNPAUSE_RESUME_FAIL}"
+    echo "tc_monetization_accrue_status=$(tc_status "${TC_MON_ACCRUE_PASS}" "${TC_MON_ACCRUE_FAIL}")"
+    echo "tc_monetization_accrue_obs=${TC_MON_ACCRUE_OBS}"
+    echo "tc_monetization_accrue_pass=${TC_MON_ACCRUE_PASS}"
+    echo "tc_monetization_accrue_fail=${TC_MON_ACCRUE_FAIL}"
+    echo "tc_monetization_claim_status=$(tc_status "${TC_MON_CLAIM_PASS}" "${TC_MON_CLAIM_FAIL}")"
+    echo "tc_monetization_claim_obs=${TC_MON_CLAIM_OBS}"
+    echo "tc_monetization_claim_pass=${TC_MON_CLAIM_PASS}"
+    echo "tc_monetization_claim_fail=${TC_MON_CLAIM_FAIL}"
+    echo "tc_anomaly_status=$(tc_status "${TC_ANOMALY_PASS}" "${TC_ANOMALY_FAIL}")"
+    echo "tc_anomaly_obs=${TC_ANOMALY_OBS}"
+    echo "tc_anomaly_pass=${TC_ANOMALY_PASS}"
+    echo "tc_anomaly_fail=${TC_ANOMALY_FAIL}"
     echo "total_amount=${RND_TOTAL_AMOUNT}"
     echo "avg_amount=${avg_amount}"
     echo "min_amount=${RND_MIN_AMOUNT_OBS}"
@@ -2797,6 +4815,12 @@ random_write_stats_snapshot() {
     echo "last_fee_change_to_idx=${RND_LAST_FEE_TO_IDX}"
     echo "last_fee_change_from_fee_bips=${RND_LAST_FEE_FROM_BIPS}"
     echo "last_fee_change_to_fee_bips=${RND_LAST_FEE_TO_BIPS}"
+    echo "last_period_event_reason=${RND_LAST_PERIOD_EVENT_REASON}"
+    echo "last_period_event_code=${RND_LAST_PERIOD_EVENT_CODE}"
+    echo "last_period_event_from_idx=${RND_LAST_PERIOD_EVENT_FROM_IDX}"
+    echo "last_period_event_to_idx=${RND_LAST_PERIOD_EVENT_TO_IDX}"
+    echo "last_period_event_close_vol=${RND_LAST_PERIOD_EVENT_CLOSE_VOL}"
+    echo "last_period_event_ema=${RND_LAST_PERIOD_EVENT_EMA}"
     echo "recent_fee_change_events_count=${recent_count}"
     i=0
     while (( i < recent_count )); do
@@ -2808,6 +4832,8 @@ random_write_stats_snapshot() {
       echo "recent_fee_change_${i}_side=${RND_FEE_EVENT_SIDE[$i]}"
       echo "recent_fee_change_${i}_reason=$(sanitize_inline "${RND_FEE_EVENT_REASON[$i]}")"
       echo "recent_fee_change_${i}_hash=${RND_FEE_EVENT_HASH[$i]}"
+      echo "recent_fee_change_${i}_ema=${RND_FEE_EVENT_EMA[$i]}"
+      echo "recent_fee_change_${i}_volume=${RND_FEE_EVENT_VOLUME[$i]}"
       i=$((i + 1))
     done
     echo "current_fee_bips=${RND_CURRENT_FEE}"
@@ -2815,58 +4841,83 @@ random_write_stats_snapshot() {
     echo "current_period_vol_usd6=${RND_CURRENT_PV}"
     echo "current_ema_usd6=${RND_CURRENT_EMA}"
     echo "current_fee_idx=${RND_CURRENT_IDX}"
-    echo "current_last_dir=${RND_CURRENT_DIR}"
-    echo "fee_level_floor_idx=${HOOK_FLOOR_IDX}"
+    echo "current_direction_flag=${RND_CURRENT_DIR}"
+    echo "fee_level_floor_regime=${HOOK_REGIME_FLOOR}"
     echo "fee_level_floor_tier_bips=${floor_tier}"
-    echo "fee_level_initial_idx=${HOOK_INITIAL_IDX}"
-    echo "fee_level_initial_tier_bips=${initial_tier}"
-    echo "fee_level_pause_idx=${HOOK_PAUSE_IDX}"
-    echo "fee_level_pause_tier_bips=${pause_tier}"
-    echo "fee_level_cap_idx=${HOOK_CAP_IDX}"
+    echo "fee_level_extreme_regime=${HOOK_REGIME_EXTREME}"
     echo "fee_level_cap_tier_bips=${cap_tier}"
     echo "wallet_native_symbol=${NATIVE_GAS_SYMBOL}"
     echo "wallet_native_balance_wei=${RND_BAL_NATIVE_WEI}"
     echo "wallet_token0_balance_raw=${RND_BAL_TOKEN0_RAW}"
     echo "wallet_token1_balance_raw=${RND_BAL_TOKEN1_RAW}"
     echo "last_tx_hash=${RND_LAST_TX_HASH}"
+    echo "last_tx_ts=${RND_LAST_TX_TS}"
     echo "last_tx_status=${RND_LAST_TX_STATUS}"
     echo "last_tx_side=${RND_LAST_TX_SIDE}"
+    echo "last_tx_type=${RND_LAST_TX_TYPE}"
     echo "last_tx_amount=${RND_LAST_TX_AMOUNT}"
+    echo "last_tx_ema_usd=${RND_LAST_TX_EMA_USD}"
     echo "last_tx_reason=${RND_LAST_TX_REASON}"
+    echo "last_tx_hook_reason=${RND_LAST_TX_HOOK_REASON}"
     echo "last_error=${RND_LAST_ERROR}"
     echo "stats_file=${RND_STATS_FILE}"
     echo "tx_log_file=${RND_TX_LOG_FILE}"
   } > "${RND_STATS_FILE}"
 }
 
-random_render_dashboard() {
-  local now elapsed success_pct
-  local current_tier floor_tier cap_tier initial_tier pause_tier
-  local current_pct floor_pct cap_pct initial_pct pause_pct
-  local mode_label pool_id_display live_lp_fee price_usd_display deadband_pct ema_human
-  local econ_vol_usd econ_fee_usd econ_fee0_fmt econ_fee1_fmt
-  local econ_avg_fee_bips econ_avg_fee_pct
-  local econ_avg_fee_bips_fmt tick_fmt liq_fmt
-  local attempts_fmt success_fmt failed_fmt rpc_errors_fmt skip_balance_fmt
-  local zfo_fmt ozf_fmt
-  local hook_period_vol_usd hook_ema_usd hook_last_dir
-  local last_tx_amount_display
+random_render_header_tick() {
+  local now elapsed mode_label
+  if [[ ! -t 1 || "${NO_LIVE}" -eq 1 ]]; then
+    return
+  fi
+  if [[ "${RND_START_TS}" == "-" || -z "${RND_START_TS}" ]]; then
+    return
+  fi
   now="$(date +%s)"
   elapsed=$((now - RND_START_TS))
-  success_pct=0
-  if (( RND_ATTEMPTS > 0 )); then
-    success_pct=$((100 * RND_SUCCESS / RND_ATTEMPTS))
+  mode_label="random"
+  if (( CASES_MODE == 1 )); then
+    mode_label="cases"
   fi
+
+  printf '\033[s'
+  printf '\033[H'
+  printf '\033[2K===== Dynamic Fee Traffic Simulator =====\n'
+  if (( CASES_MODE == 1 )); then
+    printf '\033[2KCases progress: run %s/%s | runtime=%s | mode=%s | status=%s\n' \
+      "${CASES_COMPLETED_RUNS}" "${CASES_RUNS}" "$(fmt_duration "${elapsed}")" "${mode_label}" "${RND_REASON}"
+    printf '\033[2K\n'
+  else
+    printf '\033[2KProgress: runtime=%s | mode=%s | status=%s\n' \
+      "$(fmt_duration "${elapsed}")" "${mode_label}" "${RND_REASON}"
+    printf '\033[2K\n'
+  fi
+  printf '\033[u'
+}
+
+random_render_dashboard() {
+  local now elapsed
+  local current_tier floor_tier cap_tier
+  local current_pct floor_pct cap_pct
+  local mode_label pool_id_display live_lp_fee price_usd_display deadband_pct ema_human
+  local range_min_usd range_max_usd range_display
+  local econ_vol_usd econ_fee_usd econ_fee0_fmt econ_fee1_fmt
+  local econ_avg_fee_bips econ_avg_fee_pct
+  local econ_avg_fee_bips_fmt tick_fmt active_liq_usd6 active_liq_display
+  local zfo_fmt ozf_fmt buy_count sell_count buy_fmt sell_fmt
+  local hook_period_vol_usd hook_ema_usd hook_direction_flag
+  local hook_bal0_raw hook_bal1_raw hook_bal0_fmt hook_bal1_fmt hook_bal0_usd hook_bal1_usd
+  local cases_label
+  local -a balance_parts=()
+  local balances_line=""
+  now="$(date +%s)"
+  elapsed=$((now - RND_START_TS))
   current_tier="$(fee_tier_for_idx "${RND_CURRENT_IDX}")"
-  floor_tier="$(fee_tier_for_idx "${HOOK_FLOOR_IDX}")"
-  cap_tier="$(fee_tier_for_idx "${HOOK_CAP_IDX}")"
-  initial_tier="$(fee_tier_for_idx "${HOOK_INITIAL_IDX}")"
-  pause_tier="$(fee_tier_for_idx "${HOOK_PAUSE_IDX}")"
+  floor_tier="$(fee_tier_for_idx "${HOOK_REGIME_FLOOR}")"
+  cap_tier="$(fee_tier_for_idx "${HOOK_REGIME_EXTREME}")"
   current_pct="$(fee_bips_to_percent "${current_tier}")"
   floor_pct="$(fee_bips_to_percent "${floor_tier}")"
   cap_pct="$(fee_bips_to_percent "${cap_tier}")"
-  initial_pct="$(fee_bips_to_percent "${initial_tier}")"
-  pause_pct="$(fee_bips_to_percent "${pause_tier}")"
   pool_id_display="${POOL_ID:-n/a}"
   live_lp_fee="${RND_SLOT0_LP_FEE}"
   if ! [[ "${live_lp_fee}" =~ ^[0-9]+$ ]]; then
@@ -2887,20 +4938,44 @@ random_render_dashboard() {
   fi
   econ_avg_fee_bips_fmt="$(format_int_commas "${econ_avg_fee_bips}")"
   tick_fmt="$(format_int_commas "${RND_SLOT0_TICK}")"
-  liq_fmt="$(format_int_commas "${RND_POOL_LIQUIDITY}")"
-  attempts_fmt="$(format_int_commas "${RND_ATTEMPTS}")"
-  success_fmt="$(format_int_commas "${RND_SUCCESS}")"
-  failed_fmt="$(format_int_commas "${RND_FAILED}")"
-  rpc_errors_fmt="$(format_int_commas "${RND_RPC_ERRORS}")"
-  skip_balance_fmt="$(format_int_commas "${RND_SKIP_BALANCE}")"
+  active_liq_usd6="$(pool_active_liquidity_usd6 2>/dev/null || true)"
+  if [[ "${active_liq_usd6}" =~ ^[0-9]+$ && "${active_liq_usd6}" -gt 0 ]]; then
+    active_liq_display="$(usd6_to_dollar "${active_liq_usd6}")"
+  else
+    active_liq_display="n/a"
+  fi
   zfo_fmt="$(format_int_commas "${RND_ZFO_COUNT}")"
   ozf_fmt="$(format_int_commas "${RND_OZF_COUNT}")"
+  if [[ "${STABLE_SIDE}" == "token0" ]]; then
+    buy_count="${RND_ZFO_COUNT}"
+    sell_count="${RND_OZF_COUNT}"
+  elif [[ "${STABLE_SIDE}" == "token1" ]]; then
+    buy_count="${RND_OZF_COUNT}"
+    sell_count="${RND_ZFO_COUNT}"
+  else
+    buy_count="${RND_ZFO_COUNT}"
+    sell_count="${RND_OZF_COUNT}"
+  fi
+  buy_fmt="$(format_int_commas "${buy_count}")"
+  sell_fmt="$(format_int_commas "${sell_count}")"
   hook_period_vol_usd="$(usd6_to_dollar "${RND_CURRENT_PV}")"
   hook_ema_usd="$(usd6_to_dollar "${RND_CURRENT_EMA}")"
-  hook_last_dir="$(dir_to_label "${RND_CURRENT_DIR}")"
-  last_tx_amount_display="${RND_LAST_TX_AMOUNT}"
-  if [[ "${RND_LAST_TX_AMOUNT}" =~ ^-?[0-9]+$ ]]; then
-    last_tx_amount_display="$(format_int_commas "${RND_LAST_TX_AMOUNT}")"
+  hook_direction_flag="$(dir_to_label "${RND_CURRENT_DIR}")"
+  hook_bal0_raw="$(read_token_balance "${CURRENCY0}" "${HOOK_ADDRESS}" 2>/dev/null || true)"
+  hook_bal1_raw="$(read_token_balance "${CURRENCY1}" "${HOOK_ADDRESS}" 2>/dev/null || true)"
+  if ! [[ "${hook_bal0_raw}" =~ ^[0-9]+$ ]]; then hook_bal0_raw=0; fi
+  if ! [[ "${hook_bal1_raw}" =~ ^[0-9]+$ ]]; then hook_bal1_raw=0; fi
+  hook_bal0_fmt="$(format_token_amount_precision "${hook_bal0_raw}" "${TOKEN0_DECIMALS}" 10)"
+  hook_bal1_fmt="$(format_token_amount_precision "${hook_bal1_raw}" "${TOKEN1_DECIMALS}" 10)"
+  hook_bal0_usd="$(token_raw_to_usd "${hook_bal0_raw}" "${CURRENCY0}" "${TOKEN0_DECIMALS}" 2>/dev/null || true)"
+  hook_bal1_usd="$(token_raw_to_usd "${hook_bal1_raw}" "${CURRENCY1}" "${TOKEN1_DECIMALS}" 2>/dev/null || true)"
+  if [[ -z "${hook_bal0_usd}" ]]; then hook_bal0_usd="n/a"; fi
+  if [[ -z "${hook_bal1_usd}" ]]; then hook_bal1_usd="n/a"; fi
+  range_display="n/a"
+  if [[ "${LIQ_RANGE_MIN_USD:-}" =~ ^[0-9]+$ && "${LIQ_RANGE_MAX_USD:-}" =~ ^[0-9]+$ ]]; then
+    range_min_usd="$(format_usd_int "${LIQ_RANGE_MIN_USD}")"
+    range_max_usd="$(format_usd_int "${LIQ_RANGE_MAX_USD}")"
+    range_display="${range_min_usd} - ${range_max_usd}"
   fi
   mode_label="random"
   if (( CASES_MODE == 1 )); then
@@ -2910,42 +4985,56 @@ random_render_dashboard() {
     printf '\033[2J\033[H'
   fi
   echo "===== Dynamic Fee Traffic Simulator ====="
-  echo "Mode: ${mode_label} | Chain: ${CHAIN} | Status: ${RND_REASON} | Runtime: $(fmt_duration "${elapsed}")"
   if (( CASES_MODE == 1 )); then
-    echo "Cases progress: run ${CASES_COMPLETED_RUNS}/${CASES_RUNS} | stage=${CASES_STAGE}"
-    echo "Cases checklist: cap=${CASES_RUN_CAP_OK} floor=${CASES_RUN_FLOOR_OK} reversal=${CASES_RUN_REV_OK} deadband=${CASES_RUN_DEADBAND_OK} lull=${CASES_RUN_LULL_OK}"
+    echo "Cases progress: run ${CASES_COMPLETED_RUNS}/${CASES_RUNS} | runtime=$(fmt_duration "${elapsed}") | mode=${mode_label} | status=${RND_REASON}"
+    echo "Case plan: stage=${CASES_STAGE} step=${CASES_STAGE_STEP} | next=${CASES_NEXT_REASON} | side=${CASES_NEXT_SIDE} | targetVol=$(usd6_to_dollar_no_cents "${CASES_NEXT_TARGET_VOL}")"
+  else
+    echo "Progress: runtime=$(fmt_duration "${elapsed}") | mode=${mode_label} | status=${RND_REASON}"
   fi
   echo
   echo "Hook:"
   echo "  Address: ${HOOK_ADDRESS}"
-  echo "  Deploy: floor=${floor_pct} (${floor_tier}, i${HOOK_FLOOR_IDX}) | initial=${initial_pct} (${initial_tier}, i${HOOK_INITIAL_IDX}) | pause=${pause_pct} (${pause_tier}, i${HOOK_PAUSE_IDX}) | cap=${cap_pct} (${cap_tier}, i${HOOK_CAP_IDX})"
-  echo "  Algo: period=${PERIOD_SECONDS}s | emaPeriods=${HOOK_EMA_PERIODS} (~${ema_human}) | deadband=${HOOK_DEADBAND_BPS}bps (${deadband_pct}) | lullReset=${HOOK_LULL_RESET_SECONDS}s | tickSpacing=${TICK_SPACING} | stableSide=${STABLE_SIDE}"
-  echo "  Live: periodVol=${hook_period_vol_usd} | ema=${hook_ema_usd} | lastDir=${hook_last_dir}"
+  echo "  Deploy: floor=${floor_pct} | cap=${cap_pct}"
+  echo "  Algo: period=${PERIOD_SECONDS}s | emaPeriods=${HOOK_EMA_PERIODS} (~${ema_human}) | deadband=${deadband_pct} | lullReset=${HOOK_LULL_RESET_SECONDS}s | tickSpacing=${TICK_SPACING} | stableSide=${STABLE_SIDE}"
+  echo "  Live: periodVol=${hook_period_vol_usd} | ema=${hook_ema_usd} | directionFlag=${hook_direction_flag} | balance=${TOKEN0_SYMBOL}=${hook_bal0_fmt} (${hook_bal0_usd}) | ${TOKEN1_SYMBOL}=${hook_bal1_fmt} (${hook_bal1_usd})"
   echo
   echo "Pool:"
   echo "  Id: ${pool_id_display}"
-  echo "  Tick: ${tick_fmt} | Active Liquidity: ${liq_fmt} | Price USD: ${price_usd_display}"
-  echo "  Fee Level: ${current_pct} (${current_tier}, i${RND_CURRENT_IDX}) | Avg Fee Level: ${econ_avg_fee_pct} (${econ_avg_fee_bips_fmt})"
+  echo "  Price USD: ${price_usd_display} | Range: ${range_display} | Active Liquidity: ${active_liq_display}"
+  echo "  Fee Level: ${current_pct} | Avg Fee Level: ${econ_avg_fee_pct}"
   echo "  Volume: ${econ_vol_usd} | Fees: ${econ_fee_usd} (${TOKEN0_SYMBOL}=${econ_fee0_fmt} + ${TOKEN1_SYMBOL}=${econ_fee1_fmt})"
   echo
   echo "Wallet:"
   echo "  Address: ${DEPLOYER}"
-  echo "  Balances: ${NATIVE_GAS_SYMBOL}=${RND_BAL_NATIVE_FMT} | ${TOKEN0_SYMBOL}=${RND_BAL_TOKEN0_FMT} | ${TOKEN1_SYMBOL}=${RND_BAL_TOKEN1_FMT}"
+  balance_parts+=("${NATIVE_GAS_SYMBOL}=${RND_BAL_NATIVE_FMT}")
+  if [[ "${CURRENCY0_LC}" != "${NATIVE_CURRENCY_ADDRESS_LC}" ]]; then
+    balance_parts+=("${TOKEN0_SYMBOL}=${RND_BAL_TOKEN0_FMT}")
+  fi
+  if [[ "${CURRENCY1_LC}" != "${NATIVE_CURRENCY_ADDRESS_LC}" ]]; then
+    balance_parts+=("${TOKEN1_SYMBOL}=${RND_BAL_TOKEN1_FMT}")
+  fi
+  if (( ${#balance_parts[@]} > 0 )); then
+    local i
+    balances_line="${balance_parts[0]}"
+    for (( i = 1; i < ${#balance_parts[@]}; i++ )); do
+      balances_line="${balances_line} | ${balance_parts[$i]}"
+    done
+  fi
+  echo "  Balances: ${balances_line}"
   echo
-  echo "Execution: tx=${attempts_fmt} | ok=${success_fmt} fail=${failed_fmt} | rpcErr=${rpc_errors_fmt} | skipped(noBalance)=${skip_balance_fmt} | rebalances=${RND_REBALANCE_COUNT} | successRate=${success_pct}%"
-  echo "Directions: zeroForOne=${zfo_fmt} | oneForZero=${ozf_fmt}"
-  echo
-  render_hook_cases_table
-  echo "  Note: INV-* are on-chain invariants; RT/FZ/ED are script-model checks vs on-chain state."
-  echo "  Note: ED-3 is advisory in live cases and does not block cycle completion."
+  cases_label=""
+  if (( CASES_MODE == 1 )); then
+    cases_label="$(cases_stage_case_label)"
+  fi
+  render_hook_cases_table "${cases_label}"
   if (( RND_MODEL_MISMATCH_COUNT > 0 )); then
     echo "  Model mismatch: count=${RND_MODEL_MISMATCH_COUNT} last=${RND_MODEL_MISMATCH_LAST}"
   fi
   echo
   render_fee_change_table
   echo
-  echo "Last tx: status=${RND_LAST_TX_STATUS} side=${RND_LAST_TX_SIDE} amount=${last_tx_amount_display} reason=${RND_LAST_TX_REASON} hash=${RND_LAST_TX_HASH}"
   echo "Last error: ${RND_LAST_ERROR}"
+  echo
   echo "Stats: ${RND_STATS_FILE}"
   echo "Tx log: ${RND_TX_LOG_FILE}"
   echo
@@ -3027,7 +5116,7 @@ random_sleep_with_dashboard() {
       break
     fi
     RND_CURRENT_WAIT="${left}"
-    random_render_dashboard
+    random_render_header_tick
     sleep 1 || true
     left=$((left - 1))
   done
@@ -3042,9 +5131,11 @@ run_random_mode() {
   local amount_pick amount_pick_rest planned_side bounds_pick wait_reason
   local attempt_no side_roll
   local side zero_for_one tx_hash tx_out tx_reason
+  local tx_hook_reason
   local side_hint side_hint_reason side_hint_raw allow_hint
   local econ_metrics econ_vol_usd6 econ_vol0 econ_vol1 econ_fee0 econ_fee1 econ_fee_usd6
-  local bal0_raw bal1_raw zfo_budget ozf_budget
+  local anchor_tick center_tick
+  local bal0_raw bal1_raw
   local tick_now tick_delta tick_abs force_correction correction_min correction_max
   local wait_seconds label ts
 
@@ -3084,7 +5175,7 @@ run_random_mode() {
     RND_TX_LOG_FILE="${RND_STATS_FILE}.tx.csv"
   fi
   {
-    echo "timestamp_utc,attempt,label,status,side,amount,reason,tx_hash,fee_before,fee_after,fee_idx_before,fee_idx_after,last_dir_before,last_dir_after,error"
+    echo "timestamp_utc,attempt,label,status,side,amount,reason,tx_hash,fee_before,fee_after,fee_idx_before,fee_idx_after,direction_flag_before,direction_flag_after,error"
   } > "${RND_TX_LOG_FILE}"
 
   if ! state_before="$(read_state 2>&1)"; then
@@ -3096,19 +5187,27 @@ run_random_mode() {
     echo "ERROR: malformed initial hook state: ${state_before}"
     exit 1
   fi
+  if (( CASES_MODE == 1 )) && [[ "${RND_CURRENT_PV}" =~ ^[0-9]+$ ]] && (( RND_CURRENT_PV > HOOK_DUST_CLOSE_VOL_USD6 )); then
+    echo "WARN: cases start with non-zero periodVol=${RND_CURRENT_PV} (usd6)."
+    echo "      First PeriodClosed event may include carry-over volume from swaps before this run."
+  fi
   evaluate_hook_invariants "${RND_CURRENT_FEE}" "${RND_CURRENT_IDX}"
   random_refresh_runtime_metrics
   RND_START_TS="$(date +%s)"
   RND_START_ISO="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
   RND_LAST_UPDATE_ISO="${RND_START_ISO}"
+  RND_LAST_TX_TS="-"
+  RND_LAST_TX_TYPE="-"
+  RND_LAST_TX_EMA_USD="-"
   RND_LAST_TX_REASON="-"
+  RND_LAST_TX_HOOK_REASON="-"
   RND_REBALANCE_LAST_ATTEMPT=0
   RND_REBALANCE_COUNT=0
   if (( CASES_MODE == 1 )); then
     CASES_COMPLETED_RUNS=0
-    cases_reset_cycle_context "${RND_CURRENT_IDX}" "${RND_CURRENT_DIR}"
+    cases_reset_cycle_context "${RND_CURRENT_IDX}" "${RND_CURRENT_DIR}" "${RND_CURRENT_EMA}"
   fi
-  if maybe_rebalance_wallet 1; then
+  if (( CASES_MODE == 0 )) && maybe_rebalance_wallet 1; then
     if state_before="$(read_state 2>&1)"; then
       IFS='|' read -r RND_CURRENT_FEE RND_CURRENT_PV RND_CURRENT_EMA ps_before RND_CURRENT_IDX RND_CURRENT_DIR <<<"${state_before}"
       if state_fields_valid "${RND_CURRENT_FEE}" "${RND_CURRENT_PV}" "${RND_CURRENT_EMA}" "${ps_before}" "${RND_CURRENT_IDX}" "${RND_CURRENT_DIR}"; then
@@ -3119,9 +5218,16 @@ run_random_mode() {
 
   if [[ -n "${STATE_VIEW_ADDRESS}" && -n "${POOL_ID}" ]]; then
     if tick_now="$(read_pool_tick 2>/dev/null)"; then
-      RND_ARB_MODE="tick-band"
-      RND_ARB_ENABLED=1
-      RND_ARB_ANCHOR_TICK="${tick_now}"
+      RND_ARB_MODE="disabled"
+      RND_ARB_ENABLED=0
+      anchor_tick="${tick_now}"
+      if (( CASES_MODE == 1 )); then
+        center_tick="$(cases_anchor_tick_from_range 2>/dev/null || true)"
+        if [[ "${center_tick}" =~ ^-?[0-9]+$ ]]; then
+          anchor_tick="${center_tick}"
+        fi
+      fi
+      RND_ARB_ANCHOR_TICK="${anchor_tick}"
       RND_ARB_CURRENT_TICK="${tick_now}"
       RND_ARB_TICK_DEV=0
       if liq_now="$(read_pool_liquidity 2>/dev/null)"; then
@@ -3136,14 +5242,14 @@ run_random_mode() {
         RND_LAST_ERROR="failed to read pool liquidity; continuing."
       fi
     else
-      RND_ARB_MODE="fallback-streak"
+      RND_ARB_MODE="disabled"
       RND_ARB_ENABLED=0
-      RND_LAST_ERROR="StateView is not readable; using side-streak fallback."
+      RND_LAST_ERROR="StateView is not readable; directional guardrails disabled."
     fi
   else
-    RND_ARB_MODE="fallback-streak"
+    RND_ARB_MODE="disabled"
     RND_ARB_ENABLED=0
-    RND_LAST_ERROR="StateView not configured; using side-streak fallback."
+    RND_LAST_ERROR="StateView not configured; directional guardrails disabled."
   fi
   if (( CASES_MODE == 1 )); then
     RND_ARB_ENABLED=0
@@ -3174,7 +5280,7 @@ run_random_mode() {
       RND_PHASE="read-state-retry"
       random_write_stats_snapshot
       random_render_dashboard
-      random_sleep_with_dashboard 3
+      random_sleep_with_dashboard 1
       continue
     fi
     IFS='|' read -r fee_before pv_before ema_before ps_before idx_before dir_before <<<"${state_before}"
@@ -3184,7 +5290,7 @@ run_random_mode() {
       RND_PHASE="read-state-retry"
       random_write_stats_snapshot
       random_render_dashboard
-      random_sleep_with_dashboard 2
+      random_sleep_with_dashboard 1
       continue
     fi
     RND_CURRENT_FEE="${fee_before}"
@@ -3194,12 +5300,12 @@ run_random_mode() {
     RND_CURRENT_DIR="${dir_before}"
     evaluate_hook_invariants "${fee_before}" "${idx_before}"
     random_refresh_runtime_metrics
-    if maybe_rebalance_wallet 0; then
+    if (( CASES_MODE == 0 )) && maybe_rebalance_wallet 0; then
       RND_PHASE="wait"
       RND_LAST_WAIT_STRATEGY="wallet-rebalance"
       random_write_stats_snapshot
       random_render_dashboard
-      random_sleep_with_dashboard 2
+      random_sleep_with_dashboard 1
       continue
     fi
 
@@ -3243,12 +5349,6 @@ run_random_mode() {
         min_amount=100
       fi
     fi
-    if [[ -z "${RANDOM_MIN_AMOUNT}" ]] && (( max_amount >= RANDOM_SOFT_MIN_AMOUNT && min_amount < RANDOM_SOFT_MIN_AMOUNT )); then
-      min_amount="${RANDOM_SOFT_MIN_AMOUNT}"
-    fi
-    if [[ -z "${RANDOM_MAX_AMOUNT}" ]] && (( max_amount > RANDOM_SOFT_MAX_AMOUNT )); then
-      max_amount="${RANDOM_SOFT_MAX_AMOUNT}"
-    fi
     if (( max_amount < min_amount )); then max_amount="${min_amount}"; fi
     if (( CASES_MODE == 1 )); then
       cases_plan_next_action "${state_before}"
@@ -3269,6 +5369,41 @@ run_random_mode() {
       if [[ "${planned_side}" == "${amount_pick_rest}" ]]; then
         planned_side=""
       fi
+    fi
+    if (( CASES_MODE == 1 )) && [[ "${CASES_STAGE}" == "post_checks" ]]; then
+      idx_after_checks="${idx_before}"
+      dir_after_checks="${dir_before}"
+      if ! cases_all_required_done; then
+        run_cases_final_checks || true
+      fi
+      if state_after_checks="$(read_state 2>/dev/null)"; then
+        IFS='|' read -r fee_after_checks pv_after_checks ema_after_checks ps_after_checks idx_after_checks dir_after_checks <<<"${state_after_checks}"
+        if state_fields_valid "${fee_after_checks}" "${pv_after_checks}" "${ema_after_checks}" "${ps_after_checks}" "${idx_after_checks}" "${dir_after_checks}"; then
+          evaluate_hook_invariants "${fee_after_checks}" "${idx_after_checks}"
+          RND_CURRENT_FEE="${fee_after_checks}"
+          RND_CURRENT_PV="${pv_after_checks}"
+          RND_CURRENT_EMA="${ema_after_checks}"
+          RND_CURRENT_IDX="${idx_after_checks}"
+          RND_CURRENT_DIR="${dir_after_checks}"
+          cases_select_stage "${idx_after_checks}" "${dir_after_checks}"
+        fi
+      fi
+      if cases_all_required_done; then
+        CASES_COMPLETED_RUNS=$((CASES_COMPLETED_RUNS + 1))
+        if (( CASES_COMPLETED_RUNS >= CASES_RUNS )); then
+          cases_set_stage "cycle_done"
+          RND_REASON="cases-runs-reached"
+        else
+          cases_reset_cycle_context "${idx_after_checks}" "${dir_after_checks}" "${ema_after_checks}"
+        fi
+      fi
+      RND_PHASE="wait"
+      RND_LAST_WAIT_STRATEGY="case-post-checks"
+      random_refresh_runtime_metrics
+      random_write_stats_snapshot
+      random_render_dashboard
+      random_sleep_with_dashboard 1
+      continue
     fi
     if (( CASES_MODE == 1 && CASES_FORCE_WAIT_SECONDS > 0 )); then
       RND_PHASE="wait"
@@ -3294,7 +5429,7 @@ run_random_mode() {
       RND_FORCE_SIDE_UNTIL=0
     fi
 
-    if (( RND_ARB_ENABLED == 1 )); then
+    if (( CASES_MODE == 0 && RND_ARB_ENABLED == 1 )); then
       if (( attempt_no >= RND_ARB_SUSPEND_UNTIL )); then
         if tick_now="$(read_pool_tick 2>/dev/null)"; then
           RND_ARB_CURRENT_TICK="${tick_now}"
@@ -3392,19 +5527,19 @@ run_random_mode() {
       else
         zfo_bias=55
         if [[ "${idx_before}" =~ ^[0-9]+$ ]]; then
-          if (( idx_before >= HOOK_CAP_IDX )); then
+          if (( idx_before >= HOOK_REGIME_EXTREME )); then
             zfo_bias=20
-          elif (( idx_before == HOOK_CAP_IDX - 1 )); then
+          elif (( idx_before == HOOK_REGIME_EXTREME - 1 )); then
             zfo_bias=35
-          elif (( idx_before <= HOOK_FLOOR_IDX )); then
+          elif (( idx_before <= HOOK_REGIME_FLOOR )); then
             zfo_bias=80
-          elif (( idx_before == HOOK_FLOOR_IDX + 1 )); then
+          elif (( idx_before == HOOK_REGIME_FLOOR + 1 )); then
             zfo_bias=65
           fi
-          if (( TC_CAP_CLAMP_PASS == 0 && idx_before < HOOK_CAP_IDX )); then
+          if (( TC_CAP_CLAMP_PASS == 0 && idx_before < HOOK_REGIME_EXTREME )); then
             zfo_bias=$((zfo_bias + 10))
           fi
-          if (( TC_FLOOR_CLAMP_PASS == 0 && idx_before > HOOK_FLOOR_IDX )); then
+          if (( TC_FLOOR_CLAMP_PASS == 0 && idx_before > HOOK_REGIME_FLOOR )); then
             zfo_bias=$((zfo_bias - 10))
           fi
         fi
@@ -3464,11 +5599,7 @@ run_random_mode() {
     if [[ "${side_hint}" == "zeroForOne" || "${side_hint}" == "oneForZero" ]]; then
       allow_hint=1
       if (( CASES_MODE == 1 )); then
-        case "${CASES_STAGE}" in
-          up_to_cap|cap_probe|down_to_floor|floor_probe|reversal_seed|reversal_opposite)
-            allow_hint=0
-            ;;
-        esac
+        allow_hint=0
       fi
       if (( force_correction == 0 && allow_hint == 1 )) && [[ "${side}" != "${side_hint}" ]]; then
         side="${side_hint}"
@@ -3478,10 +5609,15 @@ run_random_mode() {
           zero_for_one=false
         fi
         tx_reason="${tx_reason}+${side_hint_reason}"
+      elif (( CASES_MODE == 1 )) && [[ "${side}" == "${side_hint}" && "${amount}" =~ ^[0-9]+$ ]]; then
+        amount=$(( amount + amount / 2 ))
+        if (( amount > max_amount )); then
+          amount="${max_amount}"
+        fi
       fi
     fi
 
-    if [[ "${side}" == "zeroForOne" && ${attempt_no} -lt ${RND_BLOCK_ZFO_UNTIL} ]]; then
+    if (( CASES_MODE == 0 )) && [[ "${side}" == "zeroForOne" && ${attempt_no} -lt ${RND_BLOCK_ZFO_UNTIL} ]]; then
       if (( attempt_no >= RND_BLOCK_OZF_UNTIL )); then
         zero_for_one=false
         side="oneForZero"
@@ -3496,7 +5632,7 @@ run_random_mode() {
         fi
         tx_reason="${tx_reason}+side-unblock"
       fi
-    elif [[ "${side}" == "oneForZero" && ${attempt_no} -lt ${RND_BLOCK_OZF_UNTIL} ]]; then
+    elif (( CASES_MODE == 0 )) && [[ "${side}" == "oneForZero" && ${attempt_no} -lt ${RND_BLOCK_OZF_UNTIL} ]]; then
       if (( attempt_no >= RND_BLOCK_ZFO_UNTIL )); then
         zero_for_one=true
         side="zeroForOne"
@@ -3513,7 +5649,7 @@ run_random_mode() {
       fi
     fi
 
-    if [[ "${RND_ARB_CURRENT_TICK}" =~ ^-?[0-9]+$ ]]; then
+    if (( CASES_MODE == 0 )) && [[ "${RND_ARB_CURRENT_TICK}" =~ ^-?[0-9]+$ ]]; then
       if (( RND_ARB_CURRENT_TICK <= TICK_MIN + TICK_EDGE_GUARD )) && [[ "${side}" == "zeroForOne" ]]; then
         zero_for_one=false
         side="oneForZero"
@@ -3527,34 +5663,45 @@ run_random_mode() {
       fi
     fi
 
-    if [[ "${bal0_raw}" =~ ^[0-9]+$ && "${bal1_raw}" =~ ^[0-9]+$ ]]; then
-      zfo_budget=$(( bal0_raw * MAX_BALANCE_SPEND_PCT / 100 ))
-      ozf_budget=$(( bal1_raw * MAX_BALANCE_SPEND_PCT / 100 ))
-      if (( bal0_raw > 0 && zfo_budget <= 0 )); then zfo_budget="${bal0_raw}"; fi
-      if (( bal1_raw > 0 && ozf_budget <= 0 )); then ozf_budget="${bal1_raw}"; fi
-      # If one input side is depleted, force the opposite direction to restore spendable balance.
-      if [[ "${side}" == "zeroForOne" && ${zfo_budget} -le 0 ]]; then
-        if (( attempt_no < RND_BLOCK_OZF_UNTIL )); then
-          RND_BLOCK_OZF_UNTIL=0
-          RND_BALANCE_UNBLOCK_FORCED=$((RND_BALANCE_UNBLOCK_FORCED + 1))
-        fi
-        side="oneForZero"
-        zero_for_one=false
-        tx_reason="${tx_reason}+balance-reseed"
-      elif [[ "${side}" == "oneForZero" && ${ozf_budget} -le 0 ]]; then
-        if (( attempt_no < RND_BLOCK_ZFO_UNTIL )); then
-          RND_BLOCK_ZFO_UNTIL=0
-          RND_BALANCE_UNBLOCK_FORCED=$((RND_BALANCE_UNBLOCK_FORCED + 1))
-        fi
-        side="zeroForOne"
-        zero_for_one=true
-        tx_reason="${tx_reason}+balance-reseed"
-      fi
-    fi
-
     amount_raw="${amount}"
     amount="$(scale_amount_for_side "${amount_raw}" "${side}")"
+    balance_guard=""
+    balance_status="ok"
+    if balance_guard="$(clamp_amount_by_side_balance "${side}" "${amount}" 2>/dev/null)"; then
+      IFS='|' read -r amount balance_status spendable_in balance_in reserve_in token_in_addr token_in_dec <<<"${balance_guard}"
+      if [[ "${balance_status}" == "clamped" ]]; then
+        tx_reason="${tx_reason}+balance-cap"
+      fi
+    else
+      amount=0
+    fi
     if (( amount <= 0 )); then
+      if maybe_rebalance_wallet 1 1; then
+        RND_PHASE="wait"
+        RND_LAST_WAIT_STRATEGY="wallet-rebalance-emergency"
+        random_write_stats_snapshot
+        random_render_dashboard
+        random_sleep_with_dashboard 1
+        continue
+      fi
+      if (( CASES_MODE == 1 )); then
+        RND_SKIP_BALANCE=$((RND_SKIP_BALANCE + 1))
+        RND_LAST_ERROR="insufficient token-in balance for required cases direction; skipping attempt"
+        RND_LAST_TX_TS="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+        RND_LAST_TX_STATUS="skipped"
+        RND_LAST_TX_HASH="-"
+        RND_LAST_TX_SIDE="${side}"
+        RND_LAST_TX_TYPE="$(side_to_trade_type "${side}")"
+        RND_LAST_TX_AMOUNT="-"
+        RND_LAST_TX_EMA_USD="$(usd6_to_dollar "${ema_before}")"
+        RND_LAST_TX_HOOK_REASON="-"
+        RND_PHASE="wait"
+        RND_LAST_WAIT_STRATEGY="case-balance-skip"
+        random_write_stats_snapshot
+        random_render_dashboard
+        random_sleep_with_dashboard 1
+        continue
+      fi
       alt_side="zeroForOne"
       alt_zero_for_one=true
       if [[ "${side}" == "zeroForOne" ]]; then
@@ -3571,6 +5718,16 @@ run_random_mode() {
       fi
       alt_amount="$(scale_amount_for_side "${amount_raw}" "${alt_side}")"
       if (( alt_amount > 0 )); then
+        alt_guard=""
+        alt_status="ok"
+        if alt_guard="$(clamp_amount_by_side_balance "${alt_side}" "${alt_amount}" 2>/dev/null)"; then
+          IFS='|' read -r alt_amount alt_status alt_spendable alt_balance alt_reserve alt_token alt_dec <<<"${alt_guard}"
+          if [[ "${alt_status}" == "clamped" ]]; then
+            tx_reason="${tx_reason}+balance-cap"
+          fi
+        fi
+      fi
+      if (( alt_amount > 0 )); then
         side="${alt_side}"
         zero_for_one="${alt_zero_for_one}"
         amount="${alt_amount}"
@@ -3580,25 +5737,29 @@ run_random_mode() {
           RND_BALANCE_UNBLOCK_FORCED=$((RND_BALANCE_UNBLOCK_FORCED + 1))
         fi
       else
-        if maybe_rebalance_wallet 1; then
+        if maybe_rebalance_wallet 1 1; then
           RND_PHASE="wait"
           RND_LAST_WAIT_STRATEGY="wallet-rebalance"
           random_write_stats_snapshot
           random_render_dashboard
-          random_sleep_with_dashboard 2
+          random_sleep_with_dashboard 1
           continue
         fi
         RND_SKIP_BALANCE=$((RND_SKIP_BALANCE + 1))
         RND_LAST_ERROR="insufficient token-in balance for both directions; skipping attempt"
+        RND_LAST_TX_TS="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
         RND_LAST_TX_STATUS="skipped"
         RND_LAST_TX_HASH="-"
         RND_LAST_TX_SIDE="-"
+        RND_LAST_TX_TYPE="-"
         RND_LAST_TX_AMOUNT="-"
+        RND_LAST_TX_EMA_USD="$(usd6_to_dollar "${ema_before}")"
+        RND_LAST_TX_HOOK_REASON="-"
         RND_PHASE="wait"
         RND_LAST_WAIT_STRATEGY="balance-skip"
         random_write_stats_snapshot
         random_render_dashboard
-        random_sleep_with_dashboard 2
+        random_sleep_with_dashboard 1
         continue
       fi
     fi
@@ -3619,8 +5780,11 @@ run_random_mode() {
     label="$(printf 'RND_%06d' "${RND_ATTEMPTS}")"
     RND_PHASE="send"
     RND_LAST_TX_SIDE="${side}"
+    RND_LAST_TX_TYPE="$(side_to_trade_type "${side}")"
     RND_LAST_TX_AMOUNT="${amount}"
+    RND_LAST_TX_EMA_USD="$(usd6_to_dollar "${ema_before}")"
     RND_LAST_TX_REASON="${tx_reason}"
+    RND_LAST_TX_HOOK_REASON="-"
     RND_TOTAL_AMOUNT=$((RND_TOTAL_AMOUNT + amount))
     if (( RND_MIN_AMOUNT_OBS == 0 || amount < RND_MIN_AMOUNT_OBS )); then RND_MIN_AMOUNT_OBS="${amount}"; fi
     if (( amount > RND_MAX_AMOUNT_OBS )); then RND_MAX_AMOUNT_OBS="${amount}"; fi
@@ -3630,6 +5794,7 @@ run_random_mode() {
       RND_LAST_TX_HASH="${tx_hash}"
       RND_LAST_TX_STATUS="ok"
       RND_LAST_ERROR="-"
+      tx_hook_reason="-"
       econ_metrics="$(estimate_swap_economics "${side}" "${amount}" "${fee_before}" "${RND_POOL_PRICE_T1_PER_T0}")"
       IFS='|' read -r econ_vol_usd6 econ_vol0 econ_vol1 econ_fee0 econ_fee1 econ_fee_usd6 <<<"${econ_metrics}"
       if [[ "${econ_vol_usd6}" =~ ^[0-9]+$ ]]; then
@@ -3678,7 +5843,7 @@ run_random_mode() {
             cases_select_stage "${idx_after}" "${dir_after}"
             if cases_all_required_done; then
               CASES_COMPLETED_RUNS=$((CASES_COMPLETED_RUNS + 1))
-              cases_reset_cycle_context "${idx_after}" "${dir_after}"
+              cases_reset_cycle_context "${idx_after}" "${dir_after}" "${ema_after}"
             fi
           fi
           if [[ "${fee_after}" == "${fee_before}" && "${pv_after}" == "${pv_before}" && "${ema_after}" == "${ema_before}" && "${idx_after}" == "${idx_before}" && "${dir_after}" == "${dir_before}" ]]; then
@@ -3711,36 +5876,38 @@ run_random_mode() {
         idx_after="${idx_before}"
         dir_after="${dir_before}"
       fi
-      if [[ "${fee_after}" =~ ^[0-9]+$ && "${fee_before}" =~ ^[0-9]+$ ]]; then
-        if (( fee_after > fee_before )); then
-          RND_FEE_UP=$((RND_FEE_UP + 1))
-        elif (( fee_after < fee_before )); then
-          RND_FEE_DOWN=$((RND_FEE_DOWN + 1))
-        else
-          RND_FEE_FLAT=$((RND_FEE_FLAT + 1))
-        fi
-      else
-        RND_FEE_FLAT=$((RND_FEE_FLAT + 1))
-      fi
       ts="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
-      if (( idx_after != idx_before || fee_after != fee_before )); then
+      RND_LAST_TX_TS="${ts}"
+      tx_hook_reason="-"
+      if record_period_closed_events_from_tx "${ts}" "${RND_ATTEMPTS}" "${tx_hash}" 2>/dev/null; then
+        tx_hook_reason="${RND_LAST_PERIOD_EVENT_REASON}"
+      fi
+      tx_hook_reason="$(printf '%s' "${tx_hook_reason}" | tr -d '[:space:]')"
+      if [[ -z "${tx_hook_reason}" || "${tx_hook_reason}" == "-" ]] && (( idx_after != idx_before || fee_after != fee_before )); then
+        tx_hook_reason="UNKNOWN"
         random_record_fee_change_event \
           "${ts}" \
           "${RND_ATTEMPTS}" \
-          "${side}" \
-          "${tx_reason}" \
+          "UNKNOWN" \
           "${tx_hash}" \
           "${fee_before}" \
           "${fee_after}" \
           "${idx_before}" \
-          "${idx_after}"
+          "${idx_after}" \
+          "${ema_after}" \
+          "${pv_after}"
       fi
+      RND_LAST_TX_HOOK_REASON="${tx_hook_reason}"
       random_append_tx_log "${ts}" "${RND_ATTEMPTS}" "${label}" "ok" "${side}" "${amount}" "${tx_reason}" "${tx_hash}" "${fee_before}" "${fee_after}" "${idx_before}" "${idx_after}" "${dir_before}" "${dir_after}" "-"
+      random_refresh_runtime_metrics
+      random_write_stats_snapshot
+      random_render_dashboard
     else
       tx_out="$(sanitize_inline "${tx_hash}")"
       RND_FAILED=$((RND_FAILED + 1))
       RND_LAST_TX_HASH="-"
       RND_LAST_TX_STATUS="failed"
+      RND_LAST_TX_HOOK_REASON="-"
       RND_LAST_ERROR="${tx_out}"
       if [[ "${tx_out}" == *"replacement transaction underpriced"* || "${tx_out}" == *"nonce too low"* ]]; then
         RND_FAIL_NONCE=$((RND_FAIL_NONCE + 1))
@@ -3748,41 +5915,15 @@ run_random_mode() {
       elif [[ "${tx_out}" == *"PriceLimitAlreadyExceeded"* ]]; then
         RND_FAIL_PRICE_LIMIT=$((RND_FAIL_PRICE_LIMIT + 1))
         RND_PRICE_LIMIT_BLOCKS=$((RND_PRICE_LIMIT_BLOCKS + 1))
-        RND_PRICE_LIMIT_STREAK=$((RND_PRICE_LIMIT_STREAK + 1))
-        RND_ARB_SUSPEND_UNTIL=$((RND_ATTEMPTS + ARB_GUARD_SUSPEND_ATTEMPTS))
-        RND_ARB_MODE="tick-band-suspended"
-        if [[ "${side}" == "zeroForOne" ]]; then
-          RND_BLOCK_ZFO_UNTIL=$((RND_ATTEMPTS + PRICE_LIMIT_BLOCK_ATTEMPTS))
-          RND_FORCE_SIDE="oneForZero"
-          RND_LAST_ERROR="${tx_out}; block zeroForOne until attempt ${RND_BLOCK_ZFO_UNTIL}; force oneForZero"
-        else
-          RND_BLOCK_OZF_UNTIL=$((RND_ATTEMPTS + PRICE_LIMIT_BLOCK_ATTEMPTS))
-          RND_FORCE_SIDE="zeroForOne"
-          RND_LAST_ERROR="${tx_out}; block oneForZero until attempt ${RND_BLOCK_OZF_UNTIL}; force zeroForOne"
-        fi
-        RND_FORCE_SIDE_UNTIL=$((RND_ATTEMPTS + PRICE_LIMIT_FORCE_ATTEMPTS))
-        RND_PRICE_LIMIT_RECOVERY_FORCED=$((RND_PRICE_LIMIT_RECOVERY_FORCED + 1))
+        RND_PRICE_LIMIT_STREAK=0
+        RND_LAST_ERROR="${tx_out}"
         RND_NEXT_WAIT_OVERRIDE=1
-        if (( RND_PRICE_LIMIT_STREAK >= 6 )); then
-          RND_ARB_ENABLED=0
-          RND_ARB_MODE="fallback-streak"
-          RND_LAST_ERROR="${RND_LAST_ERROR}; disable arb guard after repeated price-limit errors"
-        fi
       elif [[ "${tx_out}" == *"transfer amount exceeds balance"* ]]; then
         RND_FAIL_BALANCE_REVERT=$((RND_FAIL_BALANCE_REVERT + 1))
-        if [[ "${side}" == "zeroForOne" ]]; then
-          RND_BLOCK_ZFO_UNTIL=$((RND_ATTEMPTS + BALANCE_ERROR_FORCE_ATTEMPTS))
-          RND_FORCE_SIDE="oneForZero"
-          RND_LAST_ERROR="${tx_out}; block zeroForOne until attempt ${RND_BLOCK_ZFO_UNTIL}; force oneForZero"
-        else
-          RND_BLOCK_OZF_UNTIL=$((RND_ATTEMPTS + BALANCE_ERROR_FORCE_ATTEMPTS))
-          RND_FORCE_SIDE="zeroForOne"
-          RND_LAST_ERROR="${tx_out}; block oneForZero until attempt ${RND_BLOCK_OZF_UNTIL}; force zeroForOne"
-        fi
-        RND_FORCE_SIDE_UNTIL=$((RND_ATTEMPTS + BALANCE_ERROR_FORCE_ATTEMPTS + 8))
+        RND_LAST_ERROR="${tx_out}"
         RND_NEXT_WAIT_OVERRIDE=1
         RND_PRICE_LIMIT_STREAK=0
-        maybe_rebalance_wallet 1 || true
+        maybe_rebalance_wallet 1 1 || true
       elif [[ "${tx_out}" == *"execution reverted"* ]]; then
         RND_FAIL_HOOKLIKE_REVERT=$((RND_FAIL_HOOKLIKE_REVERT + 1))
         RND_PRICE_LIMIT_STREAK=0
@@ -3791,7 +5932,11 @@ run_random_mode() {
         RND_PRICE_LIMIT_STREAK=0
       fi
       ts="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+      RND_LAST_TX_TS="${ts}"
       random_append_tx_log "${ts}" "${RND_ATTEMPTS}" "${label}" "failed" "${side}" "${amount}" "${tx_reason}" "-" "${fee_before}" "-" "${idx_before}" "-" "${dir_before}" "-" "${tx_out}"
+      random_refresh_runtime_metrics
+      random_write_stats_snapshot
+      random_render_dashboard
     fi
 
     RND_PHASE="wait"

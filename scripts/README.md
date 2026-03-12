@@ -1,125 +1,110 @@
 # Scripts
 
-This repository uses a small set of shell + Foundry scripts to:
-1) deploy the Uniswap v4 hook (CREATE2 mined address with hook flags),
-2) create + initialize a dynamic-fee pool,
-3) run the same test suite across environments.
+Top-level `scripts/` now contains only auxiliary tooling:
+1. observability / diagnostics helpers,
+2. release helpers,
+3. local gas-measurement helpers.
 
-## Configuration
+Canonical deployment and live operational flows are under:
+- `ops/local`
+- `ops/sepolia`
+- `ops/optimism`
 
-All scripts read dotenv-style config files from `./config/`.
+## Required hook flags
 
-### Pool binding (explicit roles)
+Deployment/mining must include:
+- `AFTER_INITIALIZE`
+- `AFTER_SWAP`
+- `AFTER_SWAP_RETURNS_DELTA`
 
-We **do not** rely on `TOKEN0/TOKEN1` in configs anymore. Use:
+## Core config concepts
 
-- `VOLATILE` — the risky asset (e.g. WETH)
-- `STABLE` — USD-like token used as the unit for `INIT_PRICE_USD`
-- `STABLE_DECIMALS` — decimals for `STABLE` (usually 6)
-- `TICK_SPACING` — pool tick spacing
+- `OWNER`: admin role and claim recipient for accrued HookFees.
+- `HOOK_FEE_PERCENT`: HookFee percent (0..10, timelocked in contract).
+- `FLOOR_TIER`, `CASH_TIER`, `EXTREME_TIER`: explicit LP fee regime model.
+- `STABLE`, `STABLE_DECIMALS`: telemetry quote token and scaling mode.
 
-### Init price
+## Canonical operational flows
 
-Use a human price:
-
-- `INIT_PRICE_USD` — interpreted as **STABLE per 1 VOLATILE**
-
-Scripts will automatically:
-- sort currencies by address to derive `currency0/currency1` (PoolKey ordering),
-- convert `INIT_PRICE_USD` into `INIT_SQRT_PRICE_X96` for pool initialization.
-
-### Secrets
-
-Secrets should live in `./.env` (repo root). Typical variables:
-
-- `DEFAULT_PRIVATE_KEY` — deployer key (used by configs via `PRIVATE_KEY=${DEFAULT_PRIVATE_KEY:-}`)
-- `DEFAULT_GUARDIAN` — guardian address (optional)
-- `REQUIRE_GUARDIAN_CONTRACT=1` — optional strict mode to require contract guardian (recommended for production)
-
-### Strategy / monetization params
-
-- `INITIAL_FEE_IDX`, `FLOOR_IDX`, `CAP_IDX` — dynamic LP fee tier bounds
-- `PAUSE_FEE_IDX` — fee tier used while paused
-- `CREATOR_FEE_PERCENT` — creator fee share in percent (for example `10` = 10%)
-
-## Unified test runner
-
-Single entry point:
-
-- `./test/scripts/test_run.sh <local|sepolia|prod> <fast|full> [chain] [--dry-run] [--anvil-port <port>]`
-
-Examples:
-
-- Local (Anvil fork of Sepolia):
-  - `./test/scripts/test_run.sh local fast`
-  - `./test/scripts/test_run.sh local full --anvil-port 8546`
-
-- Sepolia (live):
-  - `./test/scripts/test_run.sh sepolia fast --dry-run`
-  - `./test/scripts/test_run.sh sepolia fast`
-
-Notes:
-- `fast` is a quick pre-deploy gate.
-- `full` is a deeper run (more coverage / stress).
-
-## Core scripts
-
-### Deploy hook
-
-`./scripts/deploy_hook.sh --chain <chain> --rpc-url <url> --private-key <pk> --broadcast`
-
-This runs the Foundry script:
-
-- `scripts/foundry/DeployHook.s.sol`
-
-Outputs:
-- `./scripts/out/deploy.<chain>.json` (contains the deployed hook address)
-
-### Create + initialize pool
-
-`./scripts/create_pool.sh --chain <chain> --rpc-url <url> --private-key <pk> --broadcast`
-
-This:
-- reads `VOLATILE/STABLE/INIT_PRICE_USD` from config,
-- computes `INIT_SQRT_PRICE_X96`,
-- reads hook address from `./scripts/out/deploy.<chain>.json` if `HOOK_ADDRESS` is not set,
-- runs the Foundry script:
-  - `scripts/foundry/CreatePool.s.sol`
-
-### Hook + pool status
-
-`./scripts/hook_status.sh --chain <chain> [--watch-seconds <int>]`
-
-This script prints:
-- hook immutable params and current runtime state,
-- computed `pool_id` for the bound pool key,
-- pool slot0 + liquidity (if `StateView` is available),
-- live TVL estimate in USD (mark-to-market at current pool price),
-- pool activity from on-chain logs: lifetime + rolling windows (`24h/7d/30d/90d/180d/365d`).
-- fee-level activity split (swaps/volume/fees by fee tier).
-
-Notes:
-- `lpProviders` is counted by unique transaction senders (`tx.from`) in `ModifyLiquidity` calls for this pool over lifetime.
-
-Optional env tuning:
-- `HOOK_STATUS_START_BLOCK` — optional manual start block for lifetime activity (if unset, script tries CreatePool artifact and falls back to `0`).
-- `HOOK_STATUS_CHUNK_BLOCKS` — max block span per `eth_getLogs` chunk for lifetime backfill (default: `50000`).
-
-Output mode:
-- interactive terminal (TTY): dashboard view with screen redraw (no scrolling in watch mode),
-- piped/non-interactive: raw `key=value` lines (stable format for script integrations).
-
-Examples:
+Use the `ops/*` wrappers instead of ad-hoc deploy/create scripts:
 
 ```bash
-./scripts/hook_status.sh --chain optimism
-./scripts/hook_status.sh --chain optimism --watch-seconds 15
+ops/local/scripts/bootstrap.sh
+ops/sepolia/scripts/ensure-hook.sh
+ops/sepolia/scripts/ensure-pool.sh
+ops/sepolia/scripts/ensure-liquidity.sh
+ops/optimism/scripts/ensure-hook.sh
+ops/optimism/scripts/ensure-pool.sh
+ops/optimism/scripts/ensure-liquidity.sh
 ```
 
-## Outputs
+### Inspect hook state
 
-Runtime artifacts are stored under:
+```bash
+./scripts/hook_status.sh --chain <local|sepolia|optimism>
+./scripts/hook_status.sh --chain optimism --refresh 15
+./scripts/show_deposits.sh --chain optimism
+```
 
-- `./scripts/out/` — deploy JSON and Forge broadcast/cache outputs
+### Release helpers
 
-These are runtime outputs and typically should not be committed.
+```bash
+scripts/release/check.sh
+scripts/release/cut.sh --bump patch --push
+```
+
+## Gas artifacts (local)
+
+Use this reproducible flow for audit gas evidence:
+
+```bash
+export NO_PROXY='127.0.0.1,localhost'
+export no_proxy='127.0.0.1,localhost'
+export HTTP_PROXY='http://127.0.0.1:9'
+export HTTPS_PROXY='http://127.0.0.1:9'
+export ALL_PROXY='http://127.0.0.1:9'
+
+ops/local/scripts/anvil-up.sh
+forge test --offline --gas-report --match-contract VolumeDynamicFeeHookAdminTest > ops/local/out/reports/gas.admin.report.txt
+forge script scripts/foundry/MeasureGasLocal.s.sol:MeasureGasLocal --rpc-url http://127.0.0.1:8545 --broadcast
+ops/local/scripts/anvil-down.sh
+```
+
+Primary artifacts:
+- `ops/local/out/reports/gas.admin.report.txt`
+- `scripts/out/broadcast/MeasureGasLocal.s.sol/31337/run-latest.json`
+
+## Operational notes
+
+- `pause()`/`unpause()` are freeze/resume semantics (not swap stop, not HookFee stop).
+- Emergency resets are paused-only and explicit (`toFloor` / `toCash`).
+- `minCountedSwapUsd6` is telemetry-only dust filtering, not a swap gate.
+- Default telemetry dust threshold is `$4 / 4e6` (selected from observed v1 telemetry).
+- Threshold updates are pending-state only, bounded to `1e6..10e6`, and activate at next period boundary.
+- Threshold updates intentionally have no timelock; recalibration target cadence is 5 days offchain.
+- Claim payout path uses PoolManager accounting withdrawal (`unlock` -> `burn` -> `take`).
+- Oversized claim payouts are chunked automatically to fit PoolManager `int128` accounting bounds.
+- Full claim path is `claimAllHookFees()` only and always pays current `owner()`.
+- `MIN_COUNTED_SWAP_USD6` is the expected current telemetry threshold used for deploy/ensure/preflight reuse validation
+  (defaults to `4_000_000` if omitted).
+- For native-asset pools (`token0 == address(0)` or `token1 == address(0)`), deploy/ensure/preflight validates that current `owner()` can receive native payout from PoolManager sender context in the claim path.
+- Existing hook reuse is pinned to the canonical CREATE2 address derived from the current release and the frozen
+  `ops/<network>/config/deploy.env` constructor snapshot, while current runtime/admin expectations come from
+  `ops/<network>/config/defaults.env`. Reuse requires the exact minimal callback surface (`afterInitialize`,
+  `afterSwap`, `afterSwapReturnDelta` only), and requires full config identity match plus exact PoolManager binding
+  and zero pending state:
+  `owner()`, no `pendingOwner()`, stable decimals mode, current `minCountedSwapUsd6()`, fees, HookFee percent,
+  timing params, controller params, and no pending HookFee / min-counted-swap changes.
+- Auxiliary scripts resolve network defaults from `ops/<network>/config/defaults.env` and live addresses from
+  `ops/<network>/out/state/<network>.addresses.json`.
+- Ownership transfer (`proposeNewOwner` -> `acceptOwner`) automatically moves payout destination without extra sync calls.
+- `approxLpFeesUsd6` is approximate analytics, not accounting output.
+- Pool key uses strict dynamic fee flag matching (`key.fee == LPFeeLibrary.DYNAMIC_FEE_FLAG`).
+- `emergencyFloorCloseVolUsd6` must satisfy `0 < emergencyFloorCloseVolUsd6 < minCloseVolToCashUsd6`.
+- Hold semantics are `N -> N - 1` effective protected periods; production guidance is
+  `CASH_HOLD_PERIODS >= 2` and `EXTREME_HOLD_PERIODS >= 2` (recommended `3..4`).
+- Non-local deploy/ensure/preflight guardrails block weak hold configs by default; explicit override:
+  `ALLOW_WEAK_HOLD_PERIODS=1`.
+- Production owner baseline: multisig + cold/hardware key custody; hot-wallet ownership is not acceptable.
+- Overdue catch-up can close multiple periods in one swap; only the first close uses accumulated close volume while later closes use zero close volume.
+- Multi-close downward sequences are accepted architectural/economic behavior in current scope and should be monitored.

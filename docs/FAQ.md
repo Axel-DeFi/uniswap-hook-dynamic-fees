@@ -1,69 +1,167 @@
 # FAQ
 
-## Where are deployment instructions?
+## Where is the authoritative behavior definition?
 
-See `./scripts/README.md`.
+Short form: contract NatSpec in `src/VolumeDynamicFeeHook.sol` is primary, `docs/SPEC.md` is the normative operational mirror, and README/runbooks are operational guidance.
+Legacy concept PDFs are archival and non-normative for this repository behavior.
 
-## What is "lull"?
+## Can I change parameters without redeploy?
 
-"Lull" means a quiet period (low activity / inactivity). In this hook, a lull is detected when no swaps happened for at least `lullResetSeconds`.
+Yes, Owner can update runtime config onchain:
+- `setRegimeFees(...)` (paused only)
+- `setControllerParams(...)` (paused only)
+- `setTimingParams(...)` (paused only)
+- HookFee timelock flow (`schedule/cancel/execute`)
 
-## Why no oracles / TWAP?
+## What exactly happens on `setTimingParams(...)`?
 
+Two explicit paths:
+- Time-scale change (`periodSeconds` or `emaPeriods`) does a safe reset: FLOOR regime, EMA reset, counters reset, fresh open period, immediate LP-fee sync if tier changed.
+- Non-time-scale change (only `lullResetSeconds` / `deadbandBps`) preserves regime + EMA + counters and only restarts open period.
 
-This hook intentionally avoids on-chain price oracles (e.g., Chainlink) and cross-pool TWAP reads.
+## What exactly happens on `setControllerParams(...)`?
 
-### Motivation
-1. **Gas predictability**
-   - Oracle reads add overhead on every hook execution.
-   - In extreme gas conditions (Ethereum mainnet spikes), oracle-heavy hooks become economically unattractive.
+While paused, it preserves active regime and EMA, clears hold/streak counters, and starts a fresh open period.
+This avoids stale counter carry-over after config updates.
 
-2. **Reliability / liveness**
-   - External oracles can be paused, stale, or revert.
-   - A reverting oracle call inside a hook can break swaps (availability risk).
+## Is HookFee the same as LP fee?
 
-3. **Attack surface**
-   - Any dependency expands the audit scope and introduces new failure modes.
-   - Cross-pool TWAP introduces additional protocol and integration assumptions.
+No.
+- LP fee belongs to pool accounting.
+- HookFee is an extra trader-facing fee returned from `afterSwap` delta.
+- HookFee uses an approximate LP-fee estimate from the unspecified side, so exact-input vs exact-output can diverge by design.
 
-4. **Simplicity and auditability**
-   - The model is designed to be explainable and fully contained:
-     - fixed fee buckets,
-     - one step per period,
-     - EMA smoothing,
-     - hard cap (`capIdx`) and floor (`floorIdx`),
-     - bounded catch-up via a capped lull reset window.
+## Is `proposeNewOwner(currentOwner)` allowed?
 
-### Trade-off (explicitly accepted)
-- The hook treats the configured stable token as a USD proxy.
-- Depeg risk is handled operationally (monitoring + guardian pause), not by on-chain oracle logic.
+No. `proposeNewOwner(...)` rejects both zero address and current owner.
 
-### When to consider adding oracles anyway
-If your primary goal shifts from gas efficiency to maximizing *pricing accuracy* under stable depegs, then:
-- a stablecoin price oracle, or
-- a cross-pool TWAP (from a deep reference pool)
-may be appropriate — but this is a **different design point** with a higher complexity and reliability cost.
+## Does HookFee use `poolManager.take()` in swap path?
 
-## Does this assume every stable = $1?
+No. Swap path uses `afterSwap` return delta plus `poolManager.mint(...)` to persist claim accounting.
+Actual payout happens later in claim flow via `unlock` -> `burn` -> `take`.
 
-Yes. For stable-paired pools, the stable side is treated as USD.
-This is a deliberate simplification to keep the hook stateless and cheap.
-If a stable depegs, the USD proxy volume becomes inaccurate. This is an accepted risk.
+## How is HookFee bounded?
 
-## How should I choose tickSpacing?
+`hookFeePercent` is hard-capped at 10% and can only change through 48-hour timelock.
+Timelock transparency is intentional; the main exposed effect is HookFee timing. LP fee ownership/accrual is unchanged.
 
-This hook is compatible with any tickSpacing supported by the pool.
-In this repository, deployment configs are standardized to **tickSpacing = 10** across environments.
+## What does pause do now?
 
-## Can I use WBTC or other non-ETH assets?
+`pause()` freezes controller evolution but does not reset to floor by default.
+It preserves fee regime and EMA, clears only open period volume, and restarts period clock.
+It does not stop swaps and does not stop HookFee accrual.
+The active LP fee regime stays frozen until `unpause()` or explicit paused-mode emergency reset.
 
-Yes, as long as the pool has a stable (USD proxy) token on one side and you configure:
-- which currency is stable (`STABLE`)
-- stable decimals (`STABLE_DECIMALS`) — deployment script validates on-chain decimals()
+## How do hold periods work?
 
-## Does pause/unpause apply immediately?
+Hold counter is decremented at the start of each closed period.
+Configured hold `N` gives `N - 1` fully protected periods.
+`cashHoldPeriods = 1` means zero effective extra hold protection.
+Production guidance is `cashHoldPeriods >= 2` and `extremeHoldPeriods >= 2` (recommended `3..4`).
+Non-local deploy/preflight guardrails block weak hold configs by default unless `ALLOW_WEAK_HOLD_PERIODS=true` is explicitly set.
 
-Yes, for initialized pools.
-`pause()` / `unpause()` call `PoolManager.updateDynamicLPFee(...)` directly (the PoolManager authorizes the hook address as the caller).
+## Can the automatic emergency floor trigger bypass hold protection?
 
-If called before pool initialization, the hook only updates its internal state; `afterInitialize` will set the correct initial fee based on the paused flag.
+Yes.
+The automatic emergency floor trigger is evaluated before hold protection checks during normal unpaused runtime operation.
+If consecutive closed periods stay below `emergencyFloorCloseVolUsd6` long enough to satisfy `emergencyConfirmPeriods`,
+the controller resets to `FLOOR` even when `holdRemaining > 0`.
+
+## Can one swap close multiple overdue periods?
+
+Yes. If `elapsed / periodSeconds > 1`, one swap can close multiple overdue periods.
+Only the first closed period uses accumulated close volume; later closes in the same transaction use zero close volume.
+This can produce multi-step downward transitions and is accepted as an architectural/economic trade-off in current scope.
+Treat repeated multi-close downward `PeriodClosed` sequences as notable monitoring signals.
+
+## When should emergency reset be used?
+
+Only when paused and explicit reset is required:
+- `emergencyResetToFloor()` for full conservative reset.
+- `emergencyResetToCash()` when you need fast recovery without forcing floor regime.
+
+Operationally, `emergencyResetToCash()` is typically preferred default.
+Monitoring should track emergency reset events directly, not only fee update events.
+
+## What is `minCountedSwapUsd6`?
+
+A telemetry dust filter:
+- swaps below threshold are excluded from period volume statistics,
+- swaps still execute and still pay LP fee/HookFee.
+
+Default is `$4 / 4e6` (USD6), chosen from observed v1 telemetry.
+Allowed update range is `1e6..10e6`.
+
+This mitigates dust-splitting pressure but is not a formal proof against every fragmentation pattern on cheap L2.
+
+## Can threshold changes apply mid-period?
+
+No. Scheduled threshold changes are activated only at next period boundary.
+This path intentionally has no timelock.
+
+## How is HookFee payout recipient determined?
+
+Payout recipient is always current `owner()`. There is no separate recipient setter.
+After `proposeNewOwner(...)` + `acceptOwner()`, payout destination moves to new owner automatically, including for previously accrued and unclaimed HookFees.
+
+Very large claims are settled in chunks under the hood so that `burn` / `take` stay within PoolManager `int128` accounting bounds.
+
+## Do native-asset pools require a native-compatible owner?
+
+Yes. If one pool currency is native (`address(0)`), claim payout can include native transfer from the PoolManager claim path.
+Deployment/ensure/preflight flows validate owner native-payout compatibility; zero-address checks alone are not enough.
+If ownership changes later, this compatibility requirement must still be preserved.
+
+## Is `approxLpFeesUsd6` accounting-accurate?
+
+No. It is approximate telemetry for regime analytics.
+
+## When do ops flows reuse an existing hook?
+
+Only when the existing hook is the canonical CREATE2 deployment derived from the current release and the frozen
+`ops/<network>/config/deploy.env` constructor snapshot,
+exposes the exact minimal callback surface, and matches the expected config identity:
+- canonical mined hook address for current release + deployment snapshot,
+- `poolManager()`,
+- pool binding + exact permissions (`afterInitialize`, `afterSwap`, `afterSwapReturnDelta` only),
+- `owner()`,
+- no `pendingOwner()`,
+- configured stable decimals mode,
+- current `minCountedSwapUsd6()`,
+- regime fees,
+- `hookFeePercent`,
+- timing params,
+- controller params,
+- and no pending `HookFeePercent` / `minCountedSwapUsd6` changes.
+
+## Is wash-trading fully prevented onchain?
+
+No. Residual manipulation risk remains (especially competitor-funded distortion / fee-poisoning in low-cost, adversarial routing environments).
+Operational mitigations are conservative defaults plus monitoring of `PeriodClosed` and alerting on repeated abnormal regime escalations.
+
+## Does `setRegimeFees(...)` reset EMA?
+
+No. `setRegimeFees(...)` preserves EMA intentionally.
+While paused, it resets hold/streak counters, starts a fresh open period, and keeps the current regime id.
+
+## How does EMA bootstrap work after init/reset?
+
+EMA is seeded by the first non-zero close period.
+Early periods after init/reset should be treated as a calibration window.
+
+## Can `periodVol` overflow?
+
+It is intentionally bounded: `periodVol` saturates at `uint64.max` under theoretical/extreme flow.
+
+## Is any dynamic fee encoding accepted in callbacks?
+
+No. The key check is strict: `key.fee` must equal `LPFeeLibrary.DYNAMIC_FEE_FLAG` exactly.
+
+## Why does `receive()` revert?
+
+To avoid accidental ETH transfers into hook accounting. ETH movement is explicit through `rescueETH(uint256)`.
+
+## Can emergency floor threshold be zero?
+
+No. `emergencyFloorCloseVolUsd6` must be strictly greater than zero in constructor and paused config updates.
+It must also stay strictly below `minCloseVolToCashUsd6`.
