@@ -124,9 +124,6 @@
 - Added `lullResetSeconds` (immutable). On the first swap after a long lull, the hook resets
   `feeIdx` to floor regime and clears `emaVolume` to re-learn quickly.
 
-### License
-- Set license to Apache-2.0.
-
 ## 2026-02-15
 
 ### Catch-up for missed periods

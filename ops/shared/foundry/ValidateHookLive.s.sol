@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: LicenseRef-Audit-Only-Source-Available-1.0
 pragma solidity ^0.8.26;
 
 import {ConfigLoader} from "../lib/ConfigLoader.sol";
