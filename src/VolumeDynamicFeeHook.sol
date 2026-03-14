@@ -562,15 +562,15 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
                 emergencyStreak
             );
 
+            uint24 oldFee = _regimeFee(oldFeeIdx);
+            uint24 newFee = _regimeFee(feeIdx);
             if (feeIdx != oldFeeIdx) {
-                poolManager.updateDynamicLPFee(key, _regimeFee(feeIdx));
-                emit FeeUpdated(_regimeFee(feeIdx), feeIdx, 0, 0);
+                poolManager.updateDynamicLPFee(key, newFee);
+                emit FeeUpdated(newFee, feeIdx, 0, 0);
             }
 
-            emit PeriodClosed(
-                _regimeFee(oldFeeIdx), oldFeeIdx, _regimeFee(feeIdx), feeIdx, 0, 0, 0, REASON_LULL_RESET
-            );
-            emit LullReset(_regimeFee(feeIdx), feeIdx);
+            emit PeriodClosed(oldFee, oldFeeIdx, newFee, feeIdx, 0, 0, 0, REASON_LULL_RESET);
+            emit LullReset(newFee, feeIdx);
             return (IHooks.afterSwap.selector, hookFeeDelta);
         }
 
@@ -1364,8 +1364,9 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
         _state = _packState(0, 0, nowTs, targetFeeIdx, paused_, 0, 0, 0, 0);
 
         if (oldFeeIdx != targetFeeIdx) {
-            poolManager.updateDynamicLPFee(_poolKey(), _regimeFee(targetFeeIdx));
-            emit FeeUpdated(_regimeFee(targetFeeIdx), targetFeeIdx, 0, 0);
+            uint24 targetFee = _regimeFee(targetFeeIdx);
+            poolManager.updateDynamicLPFee(_poolKey(), targetFee);
+            emit FeeUpdated(targetFee, targetFeeIdx, 0, 0);
         }
 
         if (toFloor) {
@@ -1463,10 +1464,6 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
         if (idx == REGIME_CASH) return _config.cashFee;
         if (idx == REGIME_EXTREME) return _config.extremeFee;
         revert InvalidConfig();
-    }
-
-    function _emaFromState() internal view returns (uint96 emaVolScaled) {
-        (, emaVolScaled,,,,,,,) = _unpackState(_state);
     }
 
     /// @notice Accrues per-swap HookFee from an approximate LP-fee estimate.
@@ -1622,13 +1619,14 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
         bool deadbandBlocked;
 
         if (newFeeIdx == REGIME_FLOOR) {
-            bool upCashRaw = rBps >= uint256(_config.upRToCashBps);
-            bool upCashPass = rBps >= uint256(_config.upRToCashBps) + deadband;
+            uint256 cashThreshold = uint256(_config.upRToCashBps);
+            bool upCashRaw = rBps >= cashThreshold;
+            bool upCashPass = rBps >= cashThreshold + deadband;
             bool canJumpCash =
                 !bootstrapV2 && emaVolScaled != 0 && closeVol >= _config.minCloseVolToCashUsd6 && upCashPass;
             if (
                 !bootstrapV2 && emaVolScaled != 0 && closeVol >= _config.minCloseVolToCashUsd6 && upCashRaw
-                    && !upCashPass && newFeeIdx != REGIME_CASH
+                    && !upCashPass
             ) {
                 deadbandBlocked = true;
             }
@@ -1650,10 +1648,11 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
         }
 
         if (newFeeIdx == REGIME_CASH) {
+            uint256 extremeThreshold = uint256(_config.upRToExtremeBps);
             bool upExtremeRaw =
-                closeVol >= _config.minCloseVolToExtremeUsd6 && rBps >= uint256(_config.upRToExtremeBps);
+                closeVol >= _config.minCloseVolToExtremeUsd6 && rBps >= extremeThreshold;
             bool upExtremePass = closeVol >= _config.minCloseVolToExtremeUsd6
-                && rBps >= uint256(_config.upRToExtremeBps) + deadband;
+                && rBps >= extremeThreshold + deadband;
             if (upExtremePass) {
                 newUpExtremeStreak = _incrementStreak(newUpExtremeStreak, MAX_UP_EXTREME_STREAK);
             } else {
