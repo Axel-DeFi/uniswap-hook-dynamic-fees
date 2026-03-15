@@ -384,6 +384,13 @@ contract VolumeDynamicFeeHookConfigAndEdgesTest is Test, VolumeDynamicFeeHookV2D
         hook.scheduleHookFeePercentChange(5);
     }
 
+    function test_scheduleMinCountedSwapUsd6_rejects_parallel_pending_update() public {
+        hook.scheduleMinCountedSwapUsd6Change(4_500_000);
+
+        vm.expectRevert(VolumeDynamicFeeHook.PendingMinCountedSwapUsd6ChangeExists.selector);
+        hook.scheduleMinCountedSwapUsd6Change(5_000_000);
+    }
+
     function test_scheduleMinCountedSwapUsd6_reverts_below_min_bound() public {
         vm.expectRevert(VolumeDynamicFeeHook.InvalidMinCountedSwapUsd6.selector);
         hook.scheduleMinCountedSwapUsd6Change(999_999);

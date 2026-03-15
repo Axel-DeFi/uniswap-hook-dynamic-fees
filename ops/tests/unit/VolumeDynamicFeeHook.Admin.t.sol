@@ -778,6 +778,77 @@ contract VolumeDynamicFeeHookAdminTest is Test, VolumeDynamicFeeHookV2DeployHelp
         assertEq(manager.lastFee(), hook.floorFee(), "active fee must update to floor");
     }
 
+    function test_controllerTransitionTrace_catchUp_emergency_floor_triggers_mid_loop() public {
+        _enterCashRegime();
+
+        _countedSwap(EXTREME_STREAK1_CLOSEVOL_USD6);
+        _advanceOnePeriod();
+        _closeCurrentPeriod();
+
+        _countedSwap(EXTREME_STREAK2_CLOSEVOL_USD6);
+        _advanceOnePeriod();
+        _closeCurrentPeriod();
+
+        (uint8 feeIdxBeforeCatchUp, uint8 holdBeforeCatchUp,,,, uint64 periodStartBeforeCatchUp,,,) =
+            hook.getStateDebug();
+        assertEq(feeIdxBeforeCatchUp, hook.REGIME_EXTREME(), "precondition: active tier must be extreme");
+        assertEq(
+            holdBeforeCatchUp,
+            hook.extremeHoldPeriods(),
+            "precondition: extreme hold must be freshly set before catch-up"
+        );
+
+        vm.warp(block.timestamp + PERIOD_SECONDS * 3);
+        vm.recordLogs();
+        _closeCurrentPeriod();
+        SwapEventCapture memory capture = _decodeSwapEventCapture(vm.getRecordedLogs());
+
+        assertEq(capture.traceCount, 3, "catch-up should emit one trace per closed overdue period");
+        assertEq(capture.periodClosedCount, 3, "catch-up should emit PeriodClosed for each overdue period");
+        assertEq(capture.feeUpdatedCount, 1, "emergency floor should sync LP fee once after catch-up");
+        assertEq(capture.lullResetCount, 0, "catch-up below lull reset must not emit LullReset");
+
+        assertEq(capture.lastTrace.periodStart, periodStartBeforeCatchUp + uint64(PERIOD_SECONDS * 2));
+        assertEq(capture.lastTrace.fromFee, hook.extremeFee());
+        assertEq(capture.lastTrace.fromFeeIdx, hook.REGIME_EXTREME());
+        assertEq(capture.lastTrace.toFee, hook.floorFee());
+        assertEq(capture.lastTrace.toFeeIdx, hook.REGIME_FLOOR());
+        assertEq(capture.lastTrace.closeVolumeUsd6, 0);
+        assertEq(capture.lastTrace.approxLpFeesUsd6, 0);
+        assertEq(capture.lastTrace.decisionFlags, TRACE_FLAG_HOLD_WAS_ACTIVE | TRACE_FLAG_EMERGENCY_TRIGGERED);
+        assertEq(capture.lastTrace.countersBefore, _packTraceCounters(false, 2, 0, 0, 2));
+        assertEq(capture.lastTrace.countersAfter, _packTraceCounters(false, 0, 0, 0, 0));
+        assertEq(capture.lastTrace.reasonCode, hook.REASON_EMERGENCY_FLOOR());
+
+        assertEq(capture.lastPeriodClosed.fromFee, hook.extremeFee());
+        assertEq(capture.lastPeriodClosed.toFee, hook.floorFee());
+        assertEq(capture.lastPeriodClosed.closedVolumeUsd6, 0);
+        assertEq(capture.lastPeriodClosed.approxLpFeesUsd6, 0);
+        assertEq(capture.lastPeriodClosed.reasonCode, hook.REASON_EMERGENCY_FLOOR());
+
+        (
+            uint8 feeIdxAfterCatchUp,
+            uint8 holdAfterCatchUp,
+            uint8 upAfterCatchUp,
+            uint8 downAfterCatchUp,
+            uint8 emergencyAfterCatchUp,
+            uint64 periodStartAfterCatchUp,,,
+        ) = hook.getStateDebug();
+        assertEq(feeIdxAfterCatchUp, hook.REGIME_FLOOR(), "emergency floor should win inside catch-up loop");
+        assertEq(holdAfterCatchUp, 0, "hold must be cleared after emergency floor reset");
+        assertEq(upAfterCatchUp, 0, "up streak must reset after emergency floor");
+        assertEq(downAfterCatchUp, 0, "down streak must reset after emergency floor");
+        assertEq(emergencyAfterCatchUp, 0, "emergency streak must reset after trigger");
+        assertEq(
+            periodStartAfterCatchUp,
+            periodStartBeforeCatchUp + uint64(PERIOD_SECONDS * 3),
+            "periodStart must advance by the number of overdue closes"
+        );
+        assertEq(
+            manager.lastFee(), hook.floorFee(), "active LP fee must end at floor after emergency catch-up"
+        );
+    }
+
     function test_controllerTransitionTrace_lull_reset() public {
         uint96 emaBefore = _enterCashRegime();
         uint64 closedPeriodStart = _currentPeriodStart();
