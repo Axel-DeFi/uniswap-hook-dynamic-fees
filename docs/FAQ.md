@@ -17,7 +17,7 @@ Yes, Owner can update runtime config onchain:
 
 Two explicit paths:
 - Time-scale change (`periodSeconds` or `emaPeriods`) does a safe reset: FLOOR regime, EMA reset, counters reset, fresh open period, immediate LP-fee sync if tier changed.
-- Non-time-scale change (only `lullResetSeconds` / `deadbandBps`) preserves regime + EMA + counters and only restarts open period.
+- Non-time-scale change (only `lullResetSeconds`) preserves regime + EMA + counters and only restarts open period.
 
 ## What exactly happens on `setControllerParams(...)`?
 
@@ -124,13 +124,13 @@ It is a compact diagnostics event emitted alongside `PeriodClosed` on:
 - lull reset.
 
 It does not replace `PeriodClosed` or `FeeUpdated`.
-Use it when you need to understand why a close stayed in place, was blocked by deadband, was protected by hold, or was forced to floor by the emergency rule.
+Use it when you need to understand why a close stayed in place, which trigger thresholds were met, whether hold protection applied, or whether the emergency rule forced floor.
 
 Key points:
 - `periodStart` identifies the specific closed period.
 - `emaBeforeUsd6Scaled` / `emaAfterUsd6Scaled` show EMA before and after the close update.
 - `countersBefore` / `countersAfter` compact-pack paused/hold/up/down/emergency counters around the decision.
-- `decisionFlags` compact-pack bootstrap, deadband-blocked, hold-active, emergency-triggered, and raw directional signals.
+- `decisionFlags` compact-pack bootstrap, hold-active, emergency-triggered, and trigger-hit signals.
 - lull reset uses `closeVolumeUsd6 = 0`, `approxLpFeesUsd6 = 0`, and hard-resets `emaAfterUsd6Scaled` to `0`.
 
 ## When do ops flows reuse an existing hook?

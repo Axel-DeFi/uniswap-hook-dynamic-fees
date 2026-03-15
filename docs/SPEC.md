@@ -88,7 +88,7 @@ Events:
 - `setTimingParams(...)` semantics are explicit:
   - if `periodSeconds` or `emaPeriods` changes, this is a time-scale change and triggers a safe reset:
     FLOOR regime, EMA reset, hold/streak counters reset, fresh open period, immediate LP-fee sync when active tier changes.
-  - if only `lullResetSeconds` and/or `deadbandBps` changes, regime + EMA + counters are preserved and only a fresh open period is started.
+  - if only `lullResetSeconds` changes, regime + EMA + counters are preserved and only a fresh open period is started.
 
 ## Overdue catch-up semantics (accepted behavior)
 
@@ -113,10 +113,8 @@ Events:
 
 Controller params are validated with cross-invariants:
 - `minCloseVolToCashUsd6 <= minCloseVolToExtremeUsd6`
-- `upRToCashBps <= upRToExtremeBps`
-- `downRFromCashBps >= downRFromExtremeBps`
-- `deadbandBps < downRFromExtremeBps`
-- `deadbandBps < downRFromCashBps`
+- `cashEnterTriggerBps <= extremeEnterTriggerBps`
+- `cashExitTriggerBps >= extremeExitTriggerBps`
 - `0 < emergencyFloorCloseVolUsd6 < minCloseVolToCashUsd6`
 
 Invalid combinations revert with `InvalidConfig`.
@@ -269,19 +267,17 @@ Compact counter packing:
 
 Compact decision flag packing:
 - bit `0`: `bootstrapV2`
-- bit `1`: `deadbandBlocked`
 - bit `2`: `holdWasActive`
 - bit `3`: `emergencyTriggered`
-- bit `4`: `upCashRaw`
-- bit `5`: `upExtremeRaw`
-- bit `6`: `downExtremeRaw`
-- bit `7`: `downCashRaw`
+- bit `4`: `cashEnterTrigger`
+- bit `5`: `extremeEnterTrigger`
+- bit `6`: `extremeExitTrigger`
+- bit `7`: `cashExitTrigger`
 
 Interpretation notes:
 - `holdWasActive` refers to the pre-decrement hold state at close start; `countersAfter` reflects post-decrement/post-transition counters.
-- `deadbandBlocked` means a raw threshold was reached but the deadband still prevented the transition on that close.
 - `emergencyTriggered` means the automatic emergency-floor rule fired before ordinary regime logic.
-- raw-direction flags are diagnostic hints for what the controller observed on that close; they do not imply a transition actually happened.
+- trigger flags are diagnostic hints for which transition thresholds were met on that close; they do not imply a transition actually happened.
 
 Lull reset trace semantics:
 - `closeVolumeUsd6 = 0`
@@ -356,7 +352,7 @@ Monitoring interpretation note:
   controller params, and no pending HookFee / min-counted-swap changes.
 - monitor `PeriodClosed` and alert on repeated abnormal regime escalations.
 - consume `ControllerTransitionTrace` together with `PeriodClosed` when debugging controller decisions, especially
-  deadband-blocked closes, hold-protected closes, emergency-floor triggers, and lull resets.
+  hold-protected closes, emergency-floor triggers, trigger-threshold hits, and lull resets.
 - monitor admin/security events as a minimum set:
   `RegimeFeesUpdated`, `ControllerParamsUpdated`, `TimingParamsUpdated`, `Paused`, `Unpaused`,
   `EmergencyResetToFloorApplied`, `EmergencyResetToCashApplied`.

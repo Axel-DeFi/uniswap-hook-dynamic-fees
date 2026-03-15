@@ -51,7 +51,7 @@ See `LICENSE` for full terms.
 - `setControllerParams(...)` (paused-only) preserves active regime + EMA, clears hold/streak counters, and starts a fresh open period.
 - `setTimingParams(...)` (paused-only) has explicit split semantics:
   - time-scale change (`periodSeconds` or `emaPeriods`) => safe reset to FLOOR, EMA/counters cleared, fresh open period, immediate LP-fee sync if tier changed.
-  - non-time-scale change (`lullResetSeconds` / `deadbandBps` only) => preserve regime + EMA/counters, fresh open period only.
+  - non-time-scale change (`lullResetSeconds` only) => preserve regime + EMA/counters, fresh open period only.
 - Emergency resets are explicit and available only while paused:
   - `emergencyResetToFloor()`
   - `emergencyResetToCash()`
@@ -60,10 +60,8 @@ See `LICENSE` for full terms.
 - Automatic emergency floor evaluation has priority over hold protection and can reset to `FLOOR` even when `holdRemaining > 0`.
 - Controller parameter cross-checks are enforced:
   - `minCloseVolToCashUsd6 <= minCloseVolToExtremeUsd6`
-  - `upRToCashBps <= upRToExtremeBps`
-  - `downRFromCashBps >= downRFromExtremeBps`
-  - `deadbandBps < downRFromExtremeBps`
-  - `deadbandBps < downRFromCashBps`
+  - `cashEnterTriggerBps <= extremeEnterTriggerBps`
+  - `cashExitTriggerBps >= extremeExitTriggerBps`
   - `0 < emergencyFloorCloseVolUsd6 < minCloseVolToCashUsd6`
 - Pool key validation requires exact dynamic-fee flag: `key.fee == LPFeeLibrary.DYNAMIC_FEE_FLAG`.
 - Telemetry fields are explicit:
