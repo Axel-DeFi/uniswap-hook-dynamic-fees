@@ -662,6 +662,21 @@ percent_to_pips() {
   }' 2>/dev/null
 }
 
+percent_to_bps() {
+  local pct="$1"
+  awk -v pct="${pct}" 'BEGIN {
+    if (pct !~ /^[0-9]+([.][0-9]+)?$/) exit 1;
+    n = split(pct, parts, ".");
+    whole = parts[1] + 0;
+    frac = (n > 1 ? parts[2] : "");
+    while (length(frac) < 2) frac = frac "0";
+    frac = substr(frac, 1, 2);
+    bps = whole * 100 + (frac == "" ? 0 : frac + 0);
+    if (bps < 0 || bps > 65535) exit 1;
+    print bps;
+  }' 2>/dev/null
+}
+
 declare -a HOOK_FEE_TIER_VALUES=()
 HOOK_FEE_TIER_VALUES[0]="${HOOK_FLOOR_FEE_PIPS}"
 HOOK_FEE_TIER_VALUES[1]="${HOOK_CASH_FEE_PIPS}"
@@ -682,13 +697,25 @@ if [[ -n "${FLOOR_TIER:-}" && -n "${EXTREME_TIER:-}" ]]; then
   fi
 
   deadband_mismatch=0
-  if [[ "${DEADBAND_BPS:-}" =~ ^[0-9]+$ ]] && (( HOOK_DEADBAND_BPS != DEADBAND_BPS )); then
+  cfg_deadband_bps=""
+  if [[ -n "${DEADBAND_PERCENT:-}" ]]; then
+    cfg_deadband_bps="$(percent_to_bps "$(printf '%s' "${DEADBAND_PERCENT}" | tr -d '[:space:]')" || true)"
+  elif [[ "${DEADBAND_BPS:-}" =~ ^[0-9]+$ ]]; then
+    cfg_deadband_bps="${DEADBAND_BPS}"
+  fi
+  if [[ -n "${cfg_deadband_bps}" ]] && (( HOOK_DEADBAND_BPS != cfg_deadband_bps )); then
     deadband_mismatch=1
+  fi
+  cfg_deadband_display="${DEADBAND_PERCENT:-}"
+  if [[ -n "${cfg_deadband_display}" ]]; then
+    cfg_deadband_display="${cfg_deadband_display}%"
+  else
+    cfg_deadband_display="${DEADBAND_BPS:-?}"
   fi
   if [[ "${hook_floor_pips}" != "${cfg_floor_pips}" || "${hook_extreme_pips}" != "${cfg_extreme_pips}" || "${deadband_mismatch}" -eq 1 ]]; then
     echo "ERROR: hook params mismatch with config."
-    echo "       on-chain: floor=f${hook_floor_pips} cash=f${HOOK_CASH_FEE_PIPS} extreme=f${hook_extreme_pips} deadband=${HOOK_DEADBAND_BPS}"
-    echo "       config:   floor=${FLOOR_TIER}% (f${cfg_floor_pips}) extreme=${EXTREME_TIER}% (f${cfg_extreme_pips}) deadband=${DEADBAND_BPS:-?}"
+    echo "       on-chain: floor=f${hook_floor_pips} cash=f${HOOK_CASH_FEE_PIPS} extreme=f${hook_extreme_pips} deadband=$(bps_to_percent "${HOOK_DEADBAND_BPS}")"
+    echo "       config:   floor=${FLOOR_TIER}% (f${cfg_floor_pips}) extreme=${EXTREME_TIER}% (f${cfg_extreme_pips}) deadband=${cfg_deadband_display}"
     echo "       Deploy a new hook/pool with current config, then rerun simulate_fee_cycle."
     exit 1
   fi

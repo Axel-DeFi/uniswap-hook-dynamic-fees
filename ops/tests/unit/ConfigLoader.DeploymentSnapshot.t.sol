@@ -67,6 +67,7 @@ contract ConfigLoaderDeploymentSnapshotTest is Test {
         vm.setEnv("DEPLOY_OWNER", "0x0000000000000000000000000000000000000000");
         vm.expectRevert(abi.encodeWithSelector(ErrorLib.InvalidEnv.selector, "DEPLOY_OWNER", "zero address"));
         harness.loadDeploymentConfig();
+        vm.setEnv("DEPLOY_OWNER", "0x000000000000000000000000000000000000beef");
     }
 
     function test_requireDeploymentBindingConsistency_rejects_runtime_binding_drift() public {
@@ -75,7 +76,9 @@ contract ConfigLoaderDeploymentSnapshotTest is Test {
         OpsTypes.DeploymentConfig memory deployCfg = harness.loadDeploymentConfig();
 
         vm.expectRevert(
-            abi.encodeWithSelector(ErrorLib.InvalidEnv.selector, "POOL_MANAGER", "must match DEPLOY_POOL_MANAGER")
+            abi.encodeWithSelector(
+                ErrorLib.InvalidEnv.selector, "POOL_MANAGER", "must match DEPLOY_POOL_MANAGER"
+            )
         );
         harness.requireDeploymentBindingConsistency(runtimeCfg, deployCfg);
     }
@@ -95,22 +98,22 @@ contract ConfigLoaderDeploymentSnapshotTest is Test {
         vm.setEnv("EXTREME_FEE_PIPS", "9500");
         vm.setEnv("PERIOD_SECONDS", "600");
         vm.setEnv("EMA_PERIODS", "16");
-        vm.setEnv("DEADBAND_BPS", "1200");
+        vm.setEnv("DEADBAND_PERCENT", "12");
         vm.setEnv("LULL_RESET_SECONDS", "7200");
         vm.setEnv("HOOK_FEE_PERCENT", "3");
         vm.setEnv("MIN_COUNTED_SWAP_USD6", "4000000");
-        vm.setEnv("MIN_CLOSEVOL_TO_CASH_USD6", "1500000000");
-        vm.setEnv("UP_R_TO_CASH_BPS", "19000");
+        vm.setEnv("MIN_VOLUME_TO_ENTER_CASH_USD", "1500");
+        vm.setEnv("CASH_ENTER_EMA_PERCENT", "190");
         vm.setEnv("CASH_HOLD_PERIODS", "5");
-        vm.setEnv("MIN_CLOSEVOL_TO_EXTREME_USD6", "4500000000");
-        vm.setEnv("UP_R_TO_EXTREME_BPS", "42000");
-        vm.setEnv("UP_EXTREME_CONFIRM_PERIODS", "3");
+        vm.setEnv("MIN_VOLUME_TO_ENTER_EXTREME_USD", "4500");
+        vm.setEnv("EXTREME_ENTER_EMA_PERCENT", "420");
+        vm.setEnv("ENTER_EXTREME_CONFIRM_PERIODS", "3");
         vm.setEnv("EXTREME_HOLD_PERIODS", "5");
-        vm.setEnv("DOWN_R_FROM_EXTREME_BPS", "14000");
-        vm.setEnv("DOWN_EXTREME_CONFIRM_PERIODS", "3");
-        vm.setEnv("DOWN_R_FROM_CASH_BPS", "14000");
-        vm.setEnv("DOWN_CASH_CONFIRM_PERIODS", "4");
-        vm.setEnv("EMERGENCY_FLOOR_CLOSEVOL_USD6", "700000000");
+        vm.setEnv("EXTREME_EXIT_EMA_PERCENT", "140");
+        vm.setEnv("EXIT_EXTREME_CONFIRM_PERIODS", "3");
+        vm.setEnv("CASH_EXIT_EMA_PERCENT", "140");
+        vm.setEnv("EXIT_CASH_CONFIRM_PERIODS", "4");
+        vm.setEnv("EMERGENCY_FLOOR_TRIGGER_USD", "700");
         vm.setEnv("EMERGENCY_CONFIRM_PERIODS", "4");
 
         vm.setEnv("DEPLOY_POOL_MANAGER", "0x000000000000000000000000000000000000AaAa");
@@ -118,27 +121,28 @@ contract ConfigLoaderDeploymentSnapshotTest is Test {
         vm.setEnv("DEPLOY_STABLE", "0x0000000000000000000000000000000000009999");
         vm.setEnv("DEPLOY_STABLE_DECIMALS", "18");
         vm.setEnv("DEPLOY_TICK_SPACING", "60");
-        vm.setEnv("DEPLOY_OWNER", "0x000000000000000000000000000000000000bEEF");
+        vm.setEnv("DEPLOY_OWNER", "0x0000000000000000000000000000000000000001");
+        vm.setEnv("DEPLOY_OWNER", "0x000000000000000000000000000000000000beef");
         vm.setEnv("DEPLOY_FLOOR_FEE_PIPS", "400");
         vm.setEnv("DEPLOY_CASH_FEE_PIPS", "2500");
         vm.setEnv("DEPLOY_EXTREME_FEE_PIPS", "9000");
         vm.setEnv("DEPLOY_PERIOD_SECONDS", "300");
         vm.setEnv("DEPLOY_EMA_PERIODS", "8");
-        vm.setEnv("DEPLOY_DEADBAND_BPS", "500");
+        vm.setEnv("DEPLOY_DEADBAND_PERCENT", "5");
         vm.setEnv("DEPLOY_LULL_RESET_SECONDS", "3600");
         vm.setEnv("DEPLOY_HOOK_FEE_PERCENT", "1");
-        vm.setEnv("DEPLOY_MIN_CLOSEVOL_TO_CASH_USD6", "1000000000");
-        vm.setEnv("DEPLOY_UP_R_TO_CASH_BPS", "18000");
+        vm.setEnv("DEPLOY_MIN_VOLUME_TO_ENTER_CASH_USD", "1000");
+        vm.setEnv("DEPLOY_CASH_ENTER_EMA_PERCENT", "180");
         vm.setEnv("DEPLOY_CASH_HOLD_PERIODS", "4");
-        vm.setEnv("DEPLOY_MIN_CLOSEVOL_TO_EXTREME_USD6", "4000000000");
-        vm.setEnv("DEPLOY_UP_R_TO_EXTREME_BPS", "40000");
-        vm.setEnv("DEPLOY_UP_EXTREME_CONFIRM_PERIODS", "2");
+        vm.setEnv("DEPLOY_MIN_VOLUME_TO_ENTER_EXTREME_USD", "4000");
+        vm.setEnv("DEPLOY_EXTREME_ENTER_EMA_PERCENT", "400");
+        vm.setEnv("DEPLOY_ENTER_EXTREME_CONFIRM_PERIODS", "2");
         vm.setEnv("DEPLOY_EXTREME_HOLD_PERIODS", "4");
-        vm.setEnv("DEPLOY_DOWN_R_FROM_EXTREME_BPS", "13000");
-        vm.setEnv("DEPLOY_DOWN_EXTREME_CONFIRM_PERIODS", "2");
-        vm.setEnv("DEPLOY_DOWN_R_FROM_CASH_BPS", "13000");
-        vm.setEnv("DEPLOY_DOWN_CASH_CONFIRM_PERIODS", "3");
-        vm.setEnv("DEPLOY_EMERGENCY_FLOOR_CLOSEVOL_USD6", "600000000");
+        vm.setEnv("DEPLOY_EXTREME_EXIT_EMA_PERCENT", "130");
+        vm.setEnv("DEPLOY_EXIT_EXTREME_CONFIRM_PERIODS", "2");
+        vm.setEnv("DEPLOY_CASH_EXIT_EMA_PERCENT", "130");
+        vm.setEnv("DEPLOY_EXIT_CASH_CONFIRM_PERIODS", "3");
+        vm.setEnv("DEPLOY_EMERGENCY_FLOOR_TRIGGER_USD", "600");
         vm.setEnv("DEPLOY_EMERGENCY_CONFIRM_PERIODS", "3");
     }
 }

@@ -119,22 +119,62 @@ library EnvLib {
         }
     }
 
-    function envOrString(string memory key, string memory fallbackValue) internal view returns (string memory value) {
+    function envOrString(string memory key, string memory fallbackValue)
+        internal
+        view
+        returns (string memory value)
+    {
         if (!hasKey(key)) return fallbackValue;
         value = vm.envString(key);
     }
 
     function envOrDecimalE18(string memory key, uint256 fallbackValue) internal view returns (uint256) {
         if (!hasKey(key)) return fallbackValue;
-        return parseDecimalToE18(vm.envString(key), key);
+        return requireDecimalScaled(key, 18);
     }
 
     function requireDecimalE18(string memory key) internal view returns (uint256) {
+        return requireDecimalScaled(key, 18);
+    }
+
+    function envOrBpsFromPercent(string memory key, uint16 fallbackValue)
+        internal
+        view
+        returns (uint16 value)
+    {
+        if (!hasKey(key)) return fallbackValue;
+        value = toUint16Checked(parseDecimalToScale(vm.envString(key), key, 2), key);
+    }
+
+    function requireBpsFromPercent(string memory key) internal view returns (uint16 value) {
         if (!hasKey(key)) revert ErrorLib.MissingEnv(key);
-        return parseDecimalToE18(vm.envString(key), key);
+        value = toUint16Checked(parseDecimalToScale(vm.envString(key), key, 2), key);
+    }
+
+    function envOrUsd6FromUsd(string memory key, uint64 fallbackValue) internal view returns (uint64 value) {
+        if (!hasKey(key)) return fallbackValue;
+        value = toUint64Checked(parseDecimalToScale(vm.envString(key), key, 6), key);
+    }
+
+    function requireUsd6FromUsd(string memory key) internal view returns (uint64 value) {
+        if (!hasKey(key)) revert ErrorLib.MissingEnv(key);
+        value = toUint64Checked(parseDecimalToScale(vm.envString(key), key, 6), key);
+    }
+
+    function requireDecimalScaled(string memory key, uint8 scaleDecimals) internal view returns (uint256) {
+        if (!hasKey(key)) revert ErrorLib.MissingEnv(key);
+        return parseDecimalToScale(vm.envString(key), key, scaleDecimals);
     }
 
     function parseDecimalToE18(string memory raw, string memory key) internal pure returns (uint256) {
+        return parseDecimalToScale(raw, key, 18);
+    }
+
+    function parseDecimalToScale(string memory raw, string memory key, uint8 scaleDecimals)
+        internal
+        pure
+        returns (uint256)
+    {
         bytes memory b = bytes(raw);
         if (b.length == 0) revert ErrorLib.InvalidEnv(key, "empty decimal");
 
@@ -145,6 +185,9 @@ library EnvLib {
 
         for (uint256 i = 0; i < b.length; i++) {
             bytes1 ch = b[i];
+            if (ch == "_") {
+                continue;
+            }
             if (ch == ".") {
                 if (dotSeen) revert ErrorLib.InvalidEnv(key, "multiple dots");
                 dotSeen = true;
@@ -158,16 +201,17 @@ library EnvLib {
             uint256 digit = uint8(ch) - 48;
             if (!dotSeen) {
                 integerPart = integerPart * 10 + digit;
-            } else if (fractionalDigits < 18) {
+            } else if (fractionalDigits < scaleDecimals) {
                 fractionalPart = fractionalPart * 10 + digit;
                 fractionalDigits++;
             } else {
-                // Ignore precision beyond 18 decimals for deterministic truncation.
+                // Ignore precision beyond target scale for deterministic truncation.
             }
         }
 
-        uint256 scale = 10 ** (18 - fractionalDigits);
-        return integerPart * 1e18 + fractionalPart * scale;
+        uint256 unit = 10 ** uint256(scaleDecimals);
+        uint256 scale = 10 ** uint256(scaleDecimals - fractionalDigits);
+        return integerPart * unit + fractionalPart * scale;
     }
 
     function _toLower(string memory s) private pure returns (string memory) {
