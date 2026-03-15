@@ -68,7 +68,7 @@ scripts/build_audit_bundle.sh --refresh-gas --overwrite
 ```
 
 Archive naming format:
-- `audit_bundle/dynamic-fees_v<VERSION>_<short-sha>_nolib.zip`
+- `audit_bundle/dynamic-fees_v<VERSION>_<short-sha>.zip`
 
 Bundle policy:
 - excludes `lib/`,
