@@ -24,73 +24,76 @@ library ConfigLoader {
             cfg.deployer = EnvLib.envOrAddress("DEPLOYER", address(0));
         }
 
-        cfg.poolManager = EnvLib.requireAddress("POOL_MANAGER", false);
+        cfg.poolManager = _requireAddressEither("POOL_MANAGER", "DEPLOY_POOL_MANAGER", false);
         cfg.hookAddress = EnvLib.envOrAddress("HOOK_ADDRESS", address(0));
         cfg.poolAddress = EnvLib.envOrAddress("POOL_ADDRESS", address(0));
 
-        cfg.volatileToken = EnvLib.requireAddress("VOLATILE", true);
-        cfg.stableToken = EnvLib.requireAddress("STABLE", false);
+        cfg.volatileToken = _requireAddressEither("VOLATILE", "DEPLOY_VOLATILE", true);
+        cfg.stableToken = _requireAddressEither("STABLE", "DEPLOY_STABLE", false);
         if (cfg.stableToken == cfg.volatileToken) {
             revert ErrorLib.InvalidEnv("VOLATILE/STABLE", "tokens must differ");
         }
 
         (cfg.token0, cfg.token1) = sortPair(cfg.volatileToken, cfg.stableToken);
 
-        cfg.stableDecimals = EnvLib.requireUint8("STABLE_DECIMALS");
+        cfg.stableDecimals = _requireUint8Either("STABLE_DECIMALS", "DEPLOY_STABLE_DECIMALS");
         if (cfg.stableDecimals != 6 && cfg.stableDecimals != 18) {
             revert ErrorLib.InvalidEnv("STABLE_DECIMALS", "must be 6 or 18");
         }
 
-        cfg.tickSpacing = EnvLib.toPositiveInt24Checked(EnvLib.requireUint("TICK_SPACING"), "TICK_SPACING");
+        cfg.tickSpacing = _requirePositiveInt24Either("TICK_SPACING", "DEPLOY_TICK_SPACING");
         if (cfg.tickSpacing <= 0) {
             revert ErrorLib.InvalidEnv("TICK_SPACING", "must be > 0");
         }
 
-        cfg.owner = EnvLib.envOrAddress("OWNER", cfg.deployer);
+        cfg.owner = EnvLib.hasKey("OWNER")
+            ? EnvLib.requireAddress("OWNER", false)
+            : EnvLib.hasKey("DEPLOY_OWNER") ? EnvLib.requireAddress("DEPLOY_OWNER", false) : cfg.deployer;
         if (cfg.owner == address(0)) {
             revert ErrorLib.InvalidEnv("OWNER", "zero address");
         }
 
-        cfg.floorFeePips = EnvLib.requireUint24("FLOOR_FEE_PIPS");
-        cfg.cashFeePips = EnvLib.requireUint24("CASH_FEE_PIPS");
-        cfg.extremeFeePips = EnvLib.requireUint24("EXTREME_FEE_PIPS");
-        cfg.periodSeconds = EnvLib.requireUint32("PERIOD_SECONDS");
-        cfg.emaPeriods = EnvLib.requireUint8("EMA_PERIODS");
-        cfg.deadbandBps = _requirePercentBps("DEADBAND_PERCENT", "DEADBAND_BPS");
-        cfg.lullResetSeconds = EnvLib.requireUint32("LULL_RESET_SECONDS");
-        cfg.hookFeePercent = EnvLib.requireUint16("HOOK_FEE_PERCENT");
+        cfg.floorFeePips = _requirePipsFromPercentEither("FLOOR_FEE_PERCENT", "DEPLOY_FLOOR_FEE_PERCENT");
+        cfg.cashFeePips = _requirePipsFromPercentEither("CASH_FEE_PERCENT", "DEPLOY_CASH_FEE_PERCENT");
+        cfg.extremeFeePips =
+            _requirePipsFromPercentEither("EXTREME_FEE_PERCENT", "DEPLOY_EXTREME_FEE_PERCENT");
+        cfg.periodSeconds = _requireUint32Either("PERIOD_SECONDS", "DEPLOY_PERIOD_SECONDS");
+        cfg.emaPeriods = _requireUint8Either("EMA_PERIODS", "DEPLOY_EMA_PERIODS");
+        cfg.lullResetSeconds = _requireUint32Either("LULL_RESET_SECONDS", "DEPLOY_LULL_RESET_SECONDS");
+        cfg.hookFeePercent = _requireUint16Either("HOOK_FEE_PERCENT", "DEPLOY_HOOK_FEE_PERCENT");
         cfg.minCountedSwapUsd6 = EnvLib.envOrUint64("MIN_COUNTED_SWAP_USD6", DEFAULT_MIN_COUNTED_SWAP_USD6);
         if (cfg.minCountedSwapUsd6 < 1_000_000 || cfg.minCountedSwapUsd6 > 10_000_000) {
             revert ErrorLib.InvalidEnv("MIN_COUNTED_SWAP_USD6", "must be in 1000000..10000000");
         }
         cfg.minCloseVolToCashUsd6 =
-            _requireUsd6FromUsd("MIN_VOLUME_TO_ENTER_CASH_USD", "MIN_CLOSEVOL_TO_CASH_USD6");
-        cfg.upRToCashBps = _requirePercentBps("CASH_ENTER_EMA_PERCENT", "UP_R_TO_CASH_BPS");
-        cfg.cashHoldPeriods = EnvLib.requireUint8("CASH_HOLD_PERIODS");
-        cfg.minCloseVolToExtremeUsd6 =
-            _requireUsd6FromUsd("MIN_VOLUME_TO_ENTER_EXTREME_USD", "MIN_CLOSEVOL_TO_EXTREME_USD6");
-        cfg.upRToExtremeBps = _requirePercentBps("EXTREME_ENTER_EMA_PERCENT", "UP_R_TO_EXTREME_BPS");
+            _requireUsd6FromUsdEither("MIN_VOLUME_TO_ENTER_CASH_USD", "DEPLOY_MIN_VOLUME_TO_ENTER_CASH_USD");
+        cfg.cashEnterTriggerBps =
+            _requireBpsFromMultiplierXEither("CASH_ENTER_TRIGGER_EMA_X", "DEPLOY_CASH_ENTER_TRIGGER_EMA_X");
+        cfg.cashHoldPeriods = _requireUint8Either("CASH_HOLD_PERIODS", "DEPLOY_CASH_HOLD_PERIODS");
+        cfg.minCloseVolToExtremeUsd6 = _requireUsd6FromUsdEither(
+            "MIN_VOLUME_TO_ENTER_EXTREME_USD", "DEPLOY_MIN_VOLUME_TO_ENTER_EXTREME_USD"
+        );
+        cfg.extremeEnterTriggerBps = _requireBpsFromMultiplierXEither(
+            "EXTREME_ENTER_TRIGGER_EMA_X", "DEPLOY_EXTREME_ENTER_TRIGGER_EMA_X"
+        );
         cfg.upExtremeConfirmPeriods =
-            _requireUint8WithLegacy("ENTER_EXTREME_CONFIRM_PERIODS", "UP_EXTREME_CONFIRM_PERIODS");
-        cfg.extremeHoldPeriods = EnvLib.requireUint8("EXTREME_HOLD_PERIODS");
-        cfg.downRFromExtremeBps = _requirePercentBps("EXTREME_EXIT_EMA_PERCENT", "DOWN_R_FROM_EXTREME_BPS");
+            _requireUint8Either("ENTER_EXTREME_CONFIRM_PERIODS", "DEPLOY_ENTER_EXTREME_CONFIRM_PERIODS");
+        cfg.extremeHoldPeriods = _requireUint8Either("EXTREME_HOLD_PERIODS", "DEPLOY_EXTREME_HOLD_PERIODS");
+        cfg.extremeExitTriggerBps = _requireBpsFromMultiplierXEither(
+            "EXTREME_EXIT_TRIGGER_EMA_X", "DEPLOY_EXTREME_EXIT_TRIGGER_EMA_X"
+        );
         cfg.downExtremeConfirmPeriods =
-            _requireUint8WithLegacy("EXIT_EXTREME_CONFIRM_PERIODS", "DOWN_EXTREME_CONFIRM_PERIODS");
-        cfg.downRFromCashBps = _requirePercentBps("CASH_EXIT_EMA_PERCENT", "DOWN_R_FROM_CASH_BPS");
+            _requireUint8Either("EXIT_EXTREME_CONFIRM_PERIODS", "DEPLOY_EXIT_EXTREME_CONFIRM_PERIODS");
+        cfg.cashExitTriggerBps =
+            _requireBpsFromMultiplierXEither("CASH_EXIT_TRIGGER_EMA_X", "DEPLOY_CASH_EXIT_TRIGGER_EMA_X");
         cfg.downCashConfirmPeriods =
-            _requireUint8WithLegacy("EXIT_CASH_CONFIRM_PERIODS", "DOWN_CASH_CONFIRM_PERIODS");
+            _requireUint8Either("EXIT_CASH_CONFIRM_PERIODS", "DEPLOY_EXIT_CASH_CONFIRM_PERIODS");
         cfg.emergencyFloorCloseVolUsd6 =
-            _requireUsd6FromUsd("EMERGENCY_FLOOR_TRIGGER_USD", "EMERGENCY_FLOOR_CLOSEVOL_USD6");
-        cfg.emergencyConfirmPeriods = EnvLib.requireUint8("EMERGENCY_CONFIRM_PERIODS");
+            _requireUsd6FromUsdEither("EMERGENCY_FLOOR_TRIGGER_USD", "DEPLOY_EMERGENCY_FLOOR_TRIGGER_USD");
+        cfg.emergencyConfirmPeriods =
+            _requireUint8Either("EMERGENCY_CONFIRM_PERIODS", "DEPLOY_EMERGENCY_CONFIRM_PERIODS");
 
         cfg.initPriceUsdE18 = EnvLib.envOrDecimalE18("INIT_PRICE_USD", 0);
-        cfg.liqRangeMinUsdE18 = EnvLib.envOrDecimalE18("LIQ_RANGE_MIN_USD", 0);
-        cfg.liqRangeMaxUsdE18 = EnvLib.envOrDecimalE18("LIQ_RANGE_MAX_USD", 0);
-
-        cfg.maxSwapFractionBps = EnvLib.envOrUint("MAX_SWAP_FRACTION_BPS", 1_500);
-        if (cfg.maxSwapFractionBps == 0 || cfg.maxSwapFractionBps > 10_000) {
-            revert ErrorLib.InvalidEnv("MAX_SWAP_FRACTION_BPS", "must be in 1..10000");
-        }
 
         cfg.minEthBalanceWei = EnvLib.envOrUint("BUDGET_MIN_ETH_WEI", 0);
         cfg.minStableBalanceRaw = EnvLib.envOrUint("BUDGET_MIN_STABLE_RAW", 0);
@@ -149,23 +152,20 @@ library ConfigLoader {
             ? EnvLib.requireAddress("DEPLOY_OWNER", false)
             : EnvLib.envOrAddress("DEPLOY_OWNER", runtimeCfg.owner);
         cfg.floorFeePips = strict
-            ? EnvLib.requireUint24("DEPLOY_FLOOR_FEE_PIPS")
-            : EnvLib.envOrUint24("DEPLOY_FLOOR_FEE_PIPS", runtimeCfg.floorFeePips);
+            ? EnvLib.requirePipsFromPercent("DEPLOY_FLOOR_FEE_PERCENT")
+            : EnvLib.envOrPipsFromPercent("DEPLOY_FLOOR_FEE_PERCENT", runtimeCfg.floorFeePips);
         cfg.cashFeePips = strict
-            ? EnvLib.requireUint24("DEPLOY_CASH_FEE_PIPS")
-            : EnvLib.envOrUint24("DEPLOY_CASH_FEE_PIPS", runtimeCfg.cashFeePips);
+            ? EnvLib.requirePipsFromPercent("DEPLOY_CASH_FEE_PERCENT")
+            : EnvLib.envOrPipsFromPercent("DEPLOY_CASH_FEE_PERCENT", runtimeCfg.cashFeePips);
         cfg.extremeFeePips = strict
-            ? EnvLib.requireUint24("DEPLOY_EXTREME_FEE_PIPS")
-            : EnvLib.envOrUint24("DEPLOY_EXTREME_FEE_PIPS", runtimeCfg.extremeFeePips);
+            ? EnvLib.requirePipsFromPercent("DEPLOY_EXTREME_FEE_PERCENT")
+            : EnvLib.envOrPipsFromPercent("DEPLOY_EXTREME_FEE_PERCENT", runtimeCfg.extremeFeePips);
         cfg.periodSeconds = strict
             ? EnvLib.requireUint32("DEPLOY_PERIOD_SECONDS")
             : EnvLib.envOrUint32("DEPLOY_PERIOD_SECONDS", runtimeCfg.periodSeconds);
         cfg.emaPeriods = strict
             ? EnvLib.requireUint8("DEPLOY_EMA_PERIODS")
             : EnvLib.envOrUint8("DEPLOY_EMA_PERIODS", runtimeCfg.emaPeriods);
-        cfg.deadbandBps = strict
-            ? _requirePercentBps("DEPLOY_DEADBAND_PERCENT", "DEPLOY_DEADBAND_BPS")
-            : _envOrPercentBps("DEPLOY_DEADBAND_PERCENT", "DEPLOY_DEADBAND_BPS", runtimeCfg.deadbandBps);
         cfg.lullResetSeconds = strict
             ? EnvLib.requireUint32("DEPLOY_LULL_RESET_SECONDS")
             : EnvLib.envOrUint32("DEPLOY_LULL_RESET_SECONDS", runtimeCfg.lullResetSeconds);
@@ -173,83 +173,51 @@ library ConfigLoader {
             ? EnvLib.requireUint16("DEPLOY_HOOK_FEE_PERCENT")
             : EnvLib.envOrUint16("DEPLOY_HOOK_FEE_PERCENT", runtimeCfg.hookFeePercent);
         cfg.minCloseVolToCashUsd6 = strict
-            ? _requireUsd6FromUsd("DEPLOY_MIN_VOLUME_TO_ENTER_CASH_USD", "DEPLOY_MIN_CLOSEVOL_TO_CASH_USD6")
-            : _envOrUsd6FromUsd(
-                "DEPLOY_MIN_VOLUME_TO_ENTER_CASH_USD",
-                "DEPLOY_MIN_CLOSEVOL_TO_CASH_USD6",
-                runtimeCfg.minCloseVolToCashUsd6
-            );
-        cfg.upRToCashBps = strict
-            ? _requirePercentBps("DEPLOY_CASH_ENTER_EMA_PERCENT", "DEPLOY_UP_R_TO_CASH_BPS")
-            : _envOrPercentBps(
-                "DEPLOY_CASH_ENTER_EMA_PERCENT", "DEPLOY_UP_R_TO_CASH_BPS", runtimeCfg.upRToCashBps
-            );
+            ? EnvLib.requireUsd6FromUsd("DEPLOY_MIN_VOLUME_TO_ENTER_CASH_USD")
+            : EnvLib.envOrUsd6FromUsd("DEPLOY_MIN_VOLUME_TO_ENTER_CASH_USD", runtimeCfg.minCloseVolToCashUsd6);
+        cfg.cashEnterTriggerBps = strict
+            ? EnvLib.requireBpsFromMultiplierX("DEPLOY_CASH_ENTER_TRIGGER_EMA_X")
+            : EnvLib.envOrBpsFromMultiplierX(
+                    "DEPLOY_CASH_ENTER_TRIGGER_EMA_X", runtimeCfg.cashEnterTriggerBps
+                );
         cfg.cashHoldPeriods = strict
             ? EnvLib.requireUint8("DEPLOY_CASH_HOLD_PERIODS")
             : EnvLib.envOrUint8("DEPLOY_CASH_HOLD_PERIODS", runtimeCfg.cashHoldPeriods);
         cfg.minCloseVolToExtremeUsd6 = strict
-            ? _requireUsd6FromUsd(
-                "DEPLOY_MIN_VOLUME_TO_ENTER_EXTREME_USD", "DEPLOY_MIN_CLOSEVOL_TO_EXTREME_USD6"
-            )
-            : _envOrUsd6FromUsd(
-                "DEPLOY_MIN_VOLUME_TO_ENTER_EXTREME_USD",
-                "DEPLOY_MIN_CLOSEVOL_TO_EXTREME_USD6",
-                runtimeCfg.minCloseVolToExtremeUsd6
+            ? EnvLib.requireUsd6FromUsd("DEPLOY_MIN_VOLUME_TO_ENTER_EXTREME_USD")
+            : EnvLib.envOrUsd6FromUsd(
+                "DEPLOY_MIN_VOLUME_TO_ENTER_EXTREME_USD", runtimeCfg.minCloseVolToExtremeUsd6
             );
-        cfg.upRToExtremeBps = strict
-            ? _requirePercentBps("DEPLOY_EXTREME_ENTER_EMA_PERCENT", "DEPLOY_UP_R_TO_EXTREME_BPS")
-            : _envOrPercentBps(
-                "DEPLOY_EXTREME_ENTER_EMA_PERCENT", "DEPLOY_UP_R_TO_EXTREME_BPS", runtimeCfg.upRToExtremeBps
+        cfg.extremeEnterTriggerBps = strict
+            ? EnvLib.requireBpsFromMultiplierX("DEPLOY_EXTREME_ENTER_TRIGGER_EMA_X")
+            : EnvLib.envOrBpsFromMultiplierX(
+                "DEPLOY_EXTREME_ENTER_TRIGGER_EMA_X", runtimeCfg.extremeEnterTriggerBps
             );
         cfg.upExtremeConfirmPeriods = strict
-            ? _requireUint8WithLegacy(
-                "DEPLOY_ENTER_EXTREME_CONFIRM_PERIODS", "DEPLOY_UP_EXTREME_CONFIRM_PERIODS"
-            )
-            : _envOrUint8WithLegacy(
-                "DEPLOY_ENTER_EXTREME_CONFIRM_PERIODS",
-                "DEPLOY_UP_EXTREME_CONFIRM_PERIODS",
-                runtimeCfg.upExtremeConfirmPeriods
-            );
+            ? EnvLib.requireUint8("DEPLOY_ENTER_EXTREME_CONFIRM_PERIODS")
+            : EnvLib.envOrUint8("DEPLOY_ENTER_EXTREME_CONFIRM_PERIODS", runtimeCfg.upExtremeConfirmPeriods);
         cfg.extremeHoldPeriods = strict
             ? EnvLib.requireUint8("DEPLOY_EXTREME_HOLD_PERIODS")
             : EnvLib.envOrUint8("DEPLOY_EXTREME_HOLD_PERIODS", runtimeCfg.extremeHoldPeriods);
-        cfg.downRFromExtremeBps = strict
-            ? _requirePercentBps("DEPLOY_EXTREME_EXIT_EMA_PERCENT", "DEPLOY_DOWN_R_FROM_EXTREME_BPS")
-            : _envOrPercentBps(
-                "DEPLOY_EXTREME_EXIT_EMA_PERCENT",
-                "DEPLOY_DOWN_R_FROM_EXTREME_BPS",
-                runtimeCfg.downRFromExtremeBps
+        cfg.extremeExitTriggerBps = strict
+            ? EnvLib.requireBpsFromMultiplierX("DEPLOY_EXTREME_EXIT_TRIGGER_EMA_X")
+            : EnvLib.envOrBpsFromMultiplierX(
+                "DEPLOY_EXTREME_EXIT_TRIGGER_EMA_X", runtimeCfg.extremeExitTriggerBps
             );
         cfg.downExtremeConfirmPeriods = strict
-            ? _requireUint8WithLegacy(
-                "DEPLOY_EXIT_EXTREME_CONFIRM_PERIODS", "DEPLOY_DOWN_EXTREME_CONFIRM_PERIODS"
-            )
-            : _envOrUint8WithLegacy(
-                "DEPLOY_EXIT_EXTREME_CONFIRM_PERIODS",
-                "DEPLOY_DOWN_EXTREME_CONFIRM_PERIODS",
-                runtimeCfg.downExtremeConfirmPeriods
-            );
-        cfg.downRFromCashBps = strict
-            ? _requirePercentBps("DEPLOY_CASH_EXIT_EMA_PERCENT", "DEPLOY_DOWN_R_FROM_CASH_BPS")
-            : _envOrPercentBps(
-                "DEPLOY_CASH_EXIT_EMA_PERCENT", "DEPLOY_DOWN_R_FROM_CASH_BPS", runtimeCfg.downRFromCashBps
-            );
+            ? EnvLib.requireUint8("DEPLOY_EXIT_EXTREME_CONFIRM_PERIODS")
+            : EnvLib.envOrUint8("DEPLOY_EXIT_EXTREME_CONFIRM_PERIODS", runtimeCfg.downExtremeConfirmPeriods);
+        cfg.cashExitTriggerBps = strict
+            ? EnvLib.requireBpsFromMultiplierX("DEPLOY_CASH_EXIT_TRIGGER_EMA_X")
+            : EnvLib.envOrBpsFromMultiplierX("DEPLOY_CASH_EXIT_TRIGGER_EMA_X", runtimeCfg.cashExitTriggerBps);
         cfg.downCashConfirmPeriods = strict
-            ? _requireUint8WithLegacy("DEPLOY_EXIT_CASH_CONFIRM_PERIODS", "DEPLOY_DOWN_CASH_CONFIRM_PERIODS")
-            : _envOrUint8WithLegacy(
-                "DEPLOY_EXIT_CASH_CONFIRM_PERIODS",
-                "DEPLOY_DOWN_CASH_CONFIRM_PERIODS",
-                runtimeCfg.downCashConfirmPeriods
-            );
+            ? EnvLib.requireUint8("DEPLOY_EXIT_CASH_CONFIRM_PERIODS")
+            : EnvLib.envOrUint8("DEPLOY_EXIT_CASH_CONFIRM_PERIODS", runtimeCfg.downCashConfirmPeriods);
         cfg.emergencyFloorCloseVolUsd6 = strict
-            ? _requireUsd6FromUsd(
-                "DEPLOY_EMERGENCY_FLOOR_TRIGGER_USD", "DEPLOY_EMERGENCY_FLOOR_CLOSEVOL_USD6"
-            )
-            : _envOrUsd6FromUsd(
-                    "DEPLOY_EMERGENCY_FLOOR_TRIGGER_USD",
-                    "DEPLOY_EMERGENCY_FLOOR_CLOSEVOL_USD6",
-                    runtimeCfg.emergencyFloorCloseVolUsd6
-                );
+            ? EnvLib.requireUsd6FromUsd("DEPLOY_EMERGENCY_FLOOR_TRIGGER_USD")
+            : EnvLib.envOrUsd6FromUsd(
+                "DEPLOY_EMERGENCY_FLOOR_TRIGGER_USD", runtimeCfg.emergencyFloorCloseVolUsd6
+            );
         cfg.emergencyConfirmPeriods = strict
             ? EnvLib.requireUint8("DEPLOY_EMERGENCY_CONFIRM_PERIODS")
             : EnvLib.envOrUint8("DEPLOY_EMERGENCY_CONFIRM_PERIODS", runtimeCfg.emergencyConfirmPeriods);
@@ -302,87 +270,79 @@ library ConfigLoader {
         return string(b);
     }
 
-    function _requireUint8WithLegacy(string memory key, string memory legacyKey)
+    function _requireAddressEither(string memory key, string memory fallbackKey, bool allowZero)
         private
         view
-        returns (uint8 value)
+        returns (address)
     {
-        if (EnvLib.hasKey(key)) {
-            return EnvLib.requireUint8(key);
-        }
-        if (EnvLib.hasKey(legacyKey)) {
-            return EnvLib.requireUint8(legacyKey);
-        }
+        if (EnvLib.hasKey(key)) return EnvLib.requireAddress(key, allowZero);
+        if (EnvLib.hasKey(fallbackKey)) return EnvLib.requireAddress(fallbackKey, allowZero);
         revert ErrorLib.MissingEnv(key);
     }
 
-    function _envOrUint8WithLegacy(string memory key, string memory legacyKey, uint8 fallbackValue)
-        private
-        view
-        returns (uint8 value)
-    {
-        if (EnvLib.hasKey(key)) {
-            return EnvLib.requireUint8(key);
-        }
-        if (EnvLib.hasKey(legacyKey)) {
-            return EnvLib.requireUint8(legacyKey);
-        }
-        return fallbackValue;
-    }
-
-    function _requirePercentBps(string memory key, string memory legacyKey)
-        private
-        view
-        returns (uint16 value)
-    {
-        if (EnvLib.hasKey(key)) {
-            return EnvLib.requireBpsFromPercent(key);
-        }
-        if (EnvLib.hasKey(legacyKey)) {
-            return EnvLib.requireUint16(legacyKey);
-        }
+    function _requireUint8Either(string memory key, string memory fallbackKey) private view returns (uint8) {
+        if (EnvLib.hasKey(key)) return EnvLib.requireUint8(key);
+        if (EnvLib.hasKey(fallbackKey)) return EnvLib.requireUint8(fallbackKey);
         revert ErrorLib.MissingEnv(key);
     }
 
-    function _envOrPercentBps(string memory key, string memory legacyKey, uint16 fallbackValue)
+    function _requireUint16Either(string memory key, string memory fallbackKey)
         private
         view
-        returns (uint16 value)
+        returns (uint16)
     {
-        if (EnvLib.hasKey(key)) {
-            return EnvLib.requireBpsFromPercent(key);
-        }
-        if (EnvLib.hasKey(legacyKey)) {
-            return EnvLib.requireUint16(legacyKey);
-        }
-        return fallbackValue;
-    }
-
-    function _requireUsd6FromUsd(string memory key, string memory legacyKey)
-        private
-        view
-        returns (uint64 value)
-    {
-        if (EnvLib.hasKey(key)) {
-            return EnvLib.requireUsd6FromUsd(key);
-        }
-        if (EnvLib.hasKey(legacyKey)) {
-            return EnvLib.requireUint64(legacyKey);
-        }
+        if (EnvLib.hasKey(key)) return EnvLib.requireUint16(key);
+        if (EnvLib.hasKey(fallbackKey)) return EnvLib.requireUint16(fallbackKey);
         revert ErrorLib.MissingEnv(key);
     }
 
-    function _envOrUsd6FromUsd(string memory key, string memory legacyKey, uint64 fallbackValue)
+    function _requireUint32Either(string memory key, string memory fallbackKey)
         private
         view
-        returns (uint64 value)
+        returns (uint32)
     {
-        if (EnvLib.hasKey(key)) {
-            return EnvLib.requireUsd6FromUsd(key);
-        }
-        if (EnvLib.hasKey(legacyKey)) {
-            return EnvLib.requireUint64(legacyKey);
-        }
-        return fallbackValue;
+        if (EnvLib.hasKey(key)) return EnvLib.requireUint32(key);
+        if (EnvLib.hasKey(fallbackKey)) return EnvLib.requireUint32(fallbackKey);
+        revert ErrorLib.MissingEnv(key);
+    }
+
+    function _requirePositiveInt24Either(string memory key, string memory fallbackKey)
+        private
+        view
+        returns (int24)
+    {
+        if (EnvLib.hasKey(key)) return EnvLib.requirePositiveInt24(key);
+        if (EnvLib.hasKey(fallbackKey)) return EnvLib.requirePositiveInt24(fallbackKey);
+        revert ErrorLib.MissingEnv(key);
+    }
+
+    function _requirePipsFromPercentEither(string memory key, string memory fallbackKey)
+        private
+        view
+        returns (uint24)
+    {
+        if (EnvLib.hasKey(key)) return EnvLib.requirePipsFromPercent(key);
+        if (EnvLib.hasKey(fallbackKey)) return EnvLib.requirePipsFromPercent(fallbackKey);
+        revert ErrorLib.MissingEnv(key);
+    }
+
+    function _requireUsd6FromUsdEither(string memory key, string memory fallbackKey)
+        private
+        view
+        returns (uint64)
+    {
+        if (EnvLib.hasKey(key)) return EnvLib.requireUsd6FromUsd(key);
+        if (EnvLib.hasKey(fallbackKey)) return EnvLib.requireUsd6FromUsd(fallbackKey);
+        revert ErrorLib.MissingEnv(key);
+    }
+
+    function _requireBpsFromMultiplierXEither(string memory key, string memory fallbackKey)
+        private
+        view
+        returns (uint16)
+    {
+        if (EnvLib.hasKey(key)) return EnvLib.requireBpsFromMultiplierX(key);
+        if (EnvLib.hasKey(fallbackKey)) return EnvLib.requireBpsFromMultiplierX(fallbackKey);
+        revert ErrorLib.MissingEnv(key);
     }
 }

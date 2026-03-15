@@ -12,7 +12,6 @@ Scenario files are dotenv overlays loaded **after** `defaults.env`.
 ## Recommended override keys
 
 - `OPS_SCENARIO`
-- `MAX_SWAP_FRACTION_BPS`
 - `SMOKE_SWAP_STABLE_RAW`
 - `FULL_SWAP_STABLE_RAW`
 - `FULL_SWAP_ITERATIONS`

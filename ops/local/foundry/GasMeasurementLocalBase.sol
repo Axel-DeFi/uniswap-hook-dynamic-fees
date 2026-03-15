@@ -31,20 +31,19 @@ contract VolumeDynamicFeeHookGasLocalHarness is VolumeDynamicFeeHook {
         uint24 _extremeFee,
         uint32 _periodSeconds,
         uint8 _emaPeriods,
-        uint16 _deadbandBps,
         uint32 _lullResetSeconds,
         address ownerAddr,
         uint16 hookFeePercent,
         uint64 _minCloseVolToCashUsd6,
-        uint16 _upRToCashBps,
+        uint16 _cashEnterTriggerBps,
         uint8 _cashHoldPeriods,
         uint64 _minCloseVolToExtremeUsd6,
-        uint16 _upRToExtremeBps,
+        uint16 _extremeEnterTriggerBps,
         uint8 _upExtremeConfirmPeriods,
         uint8 _extremeHoldPeriods,
-        uint16 _downRFromExtremeBps,
+        uint16 _extremeExitTriggerBps,
         uint8 _downExtremeConfirmPeriods,
-        uint16 _downRFromCashBps,
+        uint16 _cashExitTriggerBps,
         uint8 _downCashConfirmPeriods,
         uint64 _emergencyFloorCloseVolUsd6,
         uint8 _emergencyConfirmPeriods
@@ -61,20 +60,19 @@ contract VolumeDynamicFeeHookGasLocalHarness is VolumeDynamicFeeHook {
             _extremeFee,
             _periodSeconds,
             _emaPeriods,
-            _deadbandBps,
             _lullResetSeconds,
             ownerAddr,
             hookFeePercent,
             _minCloseVolToCashUsd6,
-            _upRToCashBps,
+            _cashEnterTriggerBps,
             _cashHoldPeriods,
             _minCloseVolToExtremeUsd6,
-            _upRToExtremeBps,
+            _extremeEnterTriggerBps,
             _upExtremeConfirmPeriods,
             _extremeHoldPeriods,
-            _downRFromExtremeBps,
+            _extremeExitTriggerBps,
             _downExtremeConfirmPeriods,
-            _downRFromCashBps,
+            _cashExitTriggerBps,
             _downCashConfirmPeriods,
             _emergencyFloorCloseVolUsd6,
             _emergencyConfirmPeriods
@@ -94,7 +92,7 @@ abstract contract GasMeasurementLocalBase is CommonBase {
     OpsTypes.CoreConfig internal cfg;
 
     function _setUpMeasurementEnv() internal {
-        cfg = ConfigLoader.loadCoreConfig();
+        cfg = _loadMeasurementConfig();
         address ownerAddr = cfg.privateKey != 0 ? vm.addr(cfg.privateKey) : cfg.owner;
         manager = new MockPoolManager();
         hook = new VolumeDynamicFeeHookGasLocalHarness(
@@ -109,20 +107,19 @@ abstract contract GasMeasurementLocalBase is CommonBase {
             cfg.extremeFeePips,
             cfg.periodSeconds,
             cfg.emaPeriods,
-            cfg.deadbandBps,
             cfg.lullResetSeconds,
             ownerAddr,
             cfg.hookFeePercent,
             cfg.minCloseVolToCashUsd6,
-            cfg.upRToCashBps,
+            cfg.cashEnterTriggerBps,
             cfg.cashHoldPeriods,
             cfg.minCloseVolToExtremeUsd6,
-            cfg.upRToExtremeBps,
+            cfg.extremeEnterTriggerBps,
             cfg.upExtremeConfirmPeriods,
             cfg.extremeHoldPeriods,
-            cfg.downRFromExtremeBps,
+            cfg.extremeExitTriggerBps,
             cfg.downExtremeConfirmPeriods,
-            cfg.downRFromCashBps,
+            cfg.cashExitTriggerBps,
             cfg.downCashConfirmPeriods,
             cfg.emergencyFloorCloseVolUsd6,
             cfg.emergencyConfirmPeriods
@@ -137,6 +134,10 @@ abstract contract GasMeasurementLocalBase is CommonBase {
         });
 
         manager.callAfterInitialize(hook, key);
+    }
+
+    function _loadMeasurementConfig() internal view virtual returns (OpsTypes.CoreConfig memory) {
+        return ConfigLoader.loadCoreConfig();
     }
 
     function _runOperation(GasMeasurementLib.Operation op) internal {
@@ -247,7 +248,7 @@ abstract contract GasMeasurementLocalBase is CommonBase {
         uint64 seedUsd6 = _seedUsd6();
         _swapStable(GasMeasurementLib.usd6ToStableRaw(seedUsd6, cfg.stableDecimals));
 
-        uint16 passThreshold = cfg.upRToCashBps + cfg.deadbandBps;
+        uint16 passThreshold = cfg.cashEnterTriggerBps;
         uint64 cashUsd6 = _chooseNextUpOpenPeriodUsd6(passThreshold, cfg.minCloseVolToCashUsd6);
         _warpPeriod();
         _swapStable(GasMeasurementLib.usd6ToStableRaw(cashUsd6, cfg.stableDecimals));
@@ -261,7 +262,7 @@ abstract contract GasMeasurementLocalBase is CommonBase {
     }
 
     function _primeCashToExtreme() internal {
-        uint16 passThreshold = cfg.upRToExtremeBps + cfg.deadbandBps;
+        uint16 passThreshold = cfg.extremeEnterTriggerBps;
         _primeFloorToCash();
         _completeFloorToCash(_chooseNextUpOpenPeriodUsd6(passThreshold, cfg.minCloseVolToExtremeUsd6));
 
@@ -281,7 +282,7 @@ abstract contract GasMeasurementLocalBase is CommonBase {
     }
 
     function _primeExtremeToCash() internal {
-        uint16 downPassThreshold = cfg.downRFromExtremeBps - cfg.deadbandBps;
+        uint16 downPassThreshold = cfg.extremeExitTriggerBps;
         _primeCashToExtreme();
         _completeCashToExtreme(_chooseNextDownOpenPeriodUsd6(downPassThreshold));
 
@@ -294,7 +295,7 @@ abstract contract GasMeasurementLocalBase is CommonBase {
     }
 
     function _primeCashToFloor() internal {
-        uint16 downPassThreshold = cfg.downRFromCashBps - cfg.deadbandBps;
+        uint16 downPassThreshold = cfg.cashExitTriggerBps;
         _primeExtremeToCash();
 
         _warpPeriod();

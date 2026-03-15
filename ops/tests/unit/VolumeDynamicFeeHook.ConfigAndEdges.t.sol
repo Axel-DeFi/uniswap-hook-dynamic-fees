@@ -30,20 +30,19 @@ contract VolumeDynamicFeeHookConfigHarness is VolumeDynamicFeeHook {
         uint24 _extremeFee,
         uint32 _periodSeconds,
         uint8 _emaPeriods,
-        uint16 _deadbandBps,
         uint32 _lullResetSeconds,
         address ownerAddr,
         uint16 hookFeePercent,
         uint64 _minCloseVolToCashUsd6,
-        uint16 _upRToCashBps,
+        uint16 _cashEnterTriggerBps,
         uint8 _cashHoldPeriods,
         uint64 _minCloseVolToExtremeUsd6,
-        uint16 _upRToExtremeBps,
+        uint16 _extremeEnterTriggerBps,
         uint8 _upExtremeConfirmPeriods,
         uint8 _extremeHoldPeriods,
-        uint16 _downRFromExtremeBps,
+        uint16 _extremeExitTriggerBps,
         uint8 _downExtremeConfirmPeriods,
-        uint16 _downRFromCashBps,
+        uint16 _cashExitTriggerBps,
         uint8 _downCashConfirmPeriods,
         uint64 _emergencyFloorCloseVolUsd6,
         uint8 _emergencyConfirmPeriods
@@ -60,20 +59,19 @@ contract VolumeDynamicFeeHookConfigHarness is VolumeDynamicFeeHook {
             _extremeFee,
             _periodSeconds,
             _emaPeriods,
-            _deadbandBps,
             _lullResetSeconds,
             ownerAddr,
             hookFeePercent,
             _minCloseVolToCashUsd6,
-            _upRToCashBps,
+            _cashEnterTriggerBps,
             _cashHoldPeriods,
             _minCloseVolToExtremeUsd6,
-            _upRToExtremeBps,
+            _extremeEnterTriggerBps,
             _upExtremeConfirmPeriods,
             _extremeHoldPeriods,
-            _downRFromExtremeBps,
+            _extremeExitTriggerBps,
             _downExtremeConfirmPeriods,
-            _downRFromCashBps,
+            _cashExitTriggerBps,
             _downCashConfirmPeriods,
             _emergencyFloorCloseVolUsd6,
             _emergencyConfirmPeriods
@@ -106,7 +104,6 @@ contract VolumeDynamicFeeHookConfigAndEdgesTest is Test, VolumeDynamicFeeHookV2D
         uint24 extremeFee;
         uint32 periodSeconds;
         uint8 emaPeriods;
-        uint16 deadbandBps;
         uint32 lullResetSeconds;
         address owner;
         uint16 hookFeePercent;
@@ -135,11 +132,10 @@ contract VolumeDynamicFeeHookConfigAndEdgesTest is Test, VolumeDynamicFeeHookV2D
             extremeFee: V2_DEFAULT_EXTREME_FEE,
             periodSeconds: PERIOD_SECONDS,
             emaPeriods: 8,
-            deadbandBps: 500,
             lullResetSeconds: LULL_RESET_SECONDS,
             owner: address(this),
             hookFeePercent: V2_INITIAL_HOOK_FEE_PERCENT,
-            emergencyFloorCloseVolUsd6: V2_EMERGENCY_FLOOR_CLOSEVOL_USD6,
+            emergencyFloorCloseVolUsd6: V2_EMERGENCY_FLOOR_TRIGGER_USD6,
             emergencyConfirmPeriods: V2_EMERGENCY_CONFIRM_PERIODS
         });
     }
@@ -157,20 +153,19 @@ contract VolumeDynamicFeeHookConfigAndEdgesTest is Test, VolumeDynamicFeeHookV2D
             cfg.extremeFee,
             cfg.periodSeconds,
             cfg.emaPeriods,
-            cfg.deadbandBps,
             cfg.lullResetSeconds,
             cfg.owner,
             cfg.hookFeePercent,
-            V2_MIN_CLOSEVOL_TO_CASH_USD6,
-            V2_UP_R_TO_CASH_BPS,
+            V2_MIN_VOLUME_TO_ENTER_CASH_USD6,
+            V2_CASH_ENTER_TRIGGER_BPS,
             V2_CASH_HOLD_PERIODS,
-            V2_MIN_CLOSEVOL_TO_EXTREME_USD6,
-            V2_UP_R_TO_EXTREME_BPS,
+            V2_MIN_VOLUME_TO_ENTER_EXTREME_USD6,
+            V2_EXTREME_ENTER_TRIGGER_BPS,
             V2_UP_EXTREME_CONFIRM_PERIODS,
             V2_EXTREME_HOLD_PERIODS,
-            V2_DOWN_R_FROM_EXTREME_BPS,
+            V2_EXTREME_EXIT_TRIGGER_BPS,
             V2_DOWN_EXTREME_CONFIRM_PERIODS,
-            V2_DOWN_R_FROM_CASH_BPS,
+            V2_CASH_EXIT_TRIGGER_BPS,
             V2_DOWN_CASH_CONFIRM_PERIODS,
             cfg.emergencyFloorCloseVolUsd6,
             cfg.emergencyConfirmPeriods
@@ -213,22 +208,21 @@ contract VolumeDynamicFeeHookConfigAndEdgesTest is Test, VolumeDynamicFeeHookV2D
             cfg.extremeFee,
             cfg.periodSeconds,
             cfg.emaPeriods,
-            cfg.deadbandBps,
             cfg.lullResetSeconds,
             cfg.owner,
             cfg.hookFeePercent,
-            V2_MIN_CLOSEVOL_TO_CASH_USD6,
-            V2_UP_R_TO_CASH_BPS,
+            V2_MIN_VOLUME_TO_ENTER_CASH_USD6,
+            V2_CASH_ENTER_TRIGGER_BPS,
             V2_CASH_HOLD_PERIODS,
-            V2_MIN_CLOSEVOL_TO_EXTREME_USD6,
-            V2_UP_R_TO_EXTREME_BPS,
+            V2_MIN_VOLUME_TO_ENTER_EXTREME_USD6,
+            V2_EXTREME_ENTER_TRIGGER_BPS,
             V2_UP_EXTREME_CONFIRM_PERIODS,
             V2_EXTREME_HOLD_PERIODS,
-            V2_DOWN_R_FROM_EXTREME_BPS,
+            V2_EXTREME_EXIT_TRIGGER_BPS,
             V2_DOWN_EXTREME_CONFIRM_PERIODS,
-            V2_DOWN_R_FROM_CASH_BPS,
+            V2_CASH_EXIT_TRIGGER_BPS,
             V2_DOWN_CASH_CONFIRM_PERIODS,
-            V2_EMERGENCY_FLOOR_CLOSEVOL_USD6,
+            V2_EMERGENCY_FLOOR_TRIGGER_USD6,
             V2_EMERGENCY_CONFIRM_PERIODS
         );
     }
@@ -288,7 +282,7 @@ contract VolumeDynamicFeeHookConfigAndEdgesTest is Test, VolumeDynamicFeeHookV2D
 
     function test_constructor_reverts_when_emergency_floor_threshold_is_not_below_cash_threshold() public {
         DeployCfg memory cfg = _defaultCfg();
-        cfg.emergencyFloorCloseVolUsd6 = V2_MIN_CLOSEVOL_TO_CASH_USD6;
+        cfg.emergencyFloorCloseVolUsd6 = V2_MIN_VOLUME_TO_ENTER_CASH_USD6;
 
         vm.expectRevert(VolumeDynamicFeeHook.InvalidConfig.selector);
         _deploy(cfg);

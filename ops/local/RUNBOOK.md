@@ -31,6 +31,9 @@ ops/local/scripts/rerun-safe.sh
 ops/local/scripts/emergency.sh
 ```
 
+Populate constructor and bootstrap values in `ops/local/config/deploy.env`.
+Leave `ops/local/config/defaults.env` for runtime wiring, budgets, and optional runtime overrides.
+
 ## Gas evidence reproduction
 
 ```bash
@@ -86,7 +89,7 @@ Timelock visibility is intentional. The main exposed effect is HookFee timing; L
 - `setControllerParams(...)` preserves active regime + EMA, clears hold/streak counters, and starts a fresh open period.
 - `setTimingParams(...)` behavior depends on what changed:
   - if `periodSeconds` or `emaPeriods` changed: safe reset to FLOOR, EMA/counters cleared, fresh open period, immediate LP-fee sync if needed.
-  - if only `lullResetSeconds` and/or `deadbandBps` changed: preserve regime + EMA + counters, fresh open period only.
+  - if only `lullResetSeconds` changed: preserve regime + EMA + counters, fresh open period only.
 
 ### Emergency resets (paused-only)
 
@@ -121,8 +124,9 @@ Notes:
 - Hot-wallet owner usage is unacceptable for production; use cold/hardware custody.
 - Reuse of an existing hook in deploy/ensure/preflight is pinned to the canonical CREATE2 address derived from the
   current release and the frozen `ops/local/config/deploy.env` constructor snapshot; current runtime/admin
-  expectations come from `ops/local/config/defaults.env`. Reuse also requires the exact minimal callback surface,
-  exact PoolManager binding, current `minCountedSwapUsd6`, and zero pending owner / pending config changes.
+  expectations come from `ops/local/config/defaults.env` only when explicitly overridden, otherwise they inherit the
+  frozen snapshot. Reuse also requires the exact minimal callback surface, exact PoolManager binding, current
+  `minCountedSwapUsd6`, and zero pending owner / pending config changes.
 - `deploy.env` is loaded after scenario overlays and root `.env`, so `DEPLOY_*` keys remain the winning constructor
   snapshot even when runtime env overlays are used.
 

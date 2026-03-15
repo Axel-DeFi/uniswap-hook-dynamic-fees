@@ -39,7 +39,6 @@ contract CollectGasObservationsLocal is Script {
         MockPoolManager manager = MockPoolManager(payable(cfg.poolManager));
         uint32 periodSeconds = hook.periodSeconds();
         uint8 emaPeriods = hook.emaPeriods();
-        uint16 deadbandBps = hook.deadbandBps();
         uint32 lullResetSeconds = hook.lullResetSeconds();
         uint256 worstCaseLullResetRaw = uint256(periodSeconds) * uint256(MAX_LULL_PERIODS);
         require(worstCaseLullResetRaw <= type(uint32).max, "periodSeconds too large");
@@ -52,7 +51,7 @@ contract CollectGasObservationsLocal is Script {
         }
         if (lullResetSeconds != worstCaseLullResetSeconds) {
             hook.pause();
-            hook.setTimingParams(periodSeconds, emaPeriods, worstCaseLullResetSeconds, deadbandBps);
+            hook.setTimingParams(periodSeconds, emaPeriods, worstCaseLullResetSeconds);
             hook.unpause();
             lullResetSeconds = worstCaseLullResetSeconds;
         }

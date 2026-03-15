@@ -42,6 +42,9 @@ constructor snapshot.
 Helper drivers are reused only if runtime codehash and bound `manager()` match the expected canonical helper for the
 configured `POOL_MANAGER`; otherwise wrappers reprovision them before liquidity/swap phases.
 
+Fill `ops/sepolia/config/deploy.env` for constructor and bootstrap values.
+Leave `ops/sepolia/config/defaults.env` for runtime wiring, budgets, and optional runtime overrides.
+
 ## Validation suite
 
 ```bash
@@ -102,7 +105,7 @@ Timelock visibility is intentional. The main exposed effect is HookFee timing; L
 - Monitoring should consume reset events, not only fee update events.
 - Paused maintenance updates:
   - `setControllerParams(...)` preserves regime + EMA, clears counters, and starts a fresh open period.
-  - `setTimingParams(...)` does a safe reset only for time-scale changes (`periodSeconds`/`emaPeriods`); otherwise it preserves regime + EMA + counters and restarts open period only.
+  - `setTimingParams(...)` does a safe reset only for time-scale changes (`periodSeconds`/`emaPeriods`); changing only `lullResetSeconds` preserves regime + EMA + counters and restarts the open period only.
 
 ## Telemetry controls
 
@@ -124,8 +127,9 @@ Timelock visibility is intentional. The main exposed effect is HookFee timing; L
 - Owner key custody should be cold/hardware.
 - Reuse of an existing hook in deploy/ensure/preflight is pinned to the canonical CREATE2 address derived from the
   current release and the frozen `ops/sepolia/config/deploy.env` constructor snapshot; current runtime/admin
-  expectations come from `ops/sepolia/config/defaults.env`. Reuse also requires the exact minimal callback surface,
-  exact PoolManager binding, current `minCountedSwapUsd6`, and zero pending owner / pending config changes.
+  expectations come from `ops/sepolia/config/defaults.env` only when explicitly overridden, otherwise they inherit the
+  frozen snapshot. Reuse also requires the exact minimal callback surface, exact PoolManager binding, current
+  `minCountedSwapUsd6`, and zero pending owner / pending config changes.
 
 Controller safety note:
 - `emergencyFloorCloseVolUsd6` must remain strictly greater than zero.

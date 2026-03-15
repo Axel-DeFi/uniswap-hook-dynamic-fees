@@ -106,7 +106,7 @@ library HookValidationLib {
 
         if (
             hook.periodSeconds() != cfg.periodSeconds || hook.emaPeriods() != cfg.emaPeriods
-                || hook.deadbandBps() != cfg.deadbandBps || hook.lullResetSeconds() != cfg.lullResetSeconds
+                || hook.lullResetSeconds() != cfg.lullResetSeconds
         ) {
             validation.ok = false;
             validation.reason = "hook timing config mismatch";
@@ -114,15 +114,15 @@ library HookValidationLib {
         }
 
         if (
-            hook.minCloseVolToCashUsd6() != cfg.minCloseVolToCashUsd6 || hook.upRToCashBps() != cfg.upRToCashBps
+            hook.minCloseVolToCashUsd6() != cfg.minCloseVolToCashUsd6 || hook.cashEnterTriggerBps() != cfg.cashEnterTriggerBps
                 || hook.cashHoldPeriods() != cfg.cashHoldPeriods
                 || hook.minCloseVolToExtremeUsd6() != cfg.minCloseVolToExtremeUsd6
-                || hook.upRToExtremeBps() != cfg.upRToExtremeBps
+                || hook.extremeEnterTriggerBps() != cfg.extremeEnterTriggerBps
                 || hook.upExtremeConfirmPeriods() != cfg.upExtremeConfirmPeriods
                 || hook.extremeHoldPeriods() != cfg.extremeHoldPeriods
-                || hook.downRFromExtremeBps() != cfg.downRFromExtremeBps
+                || hook.extremeExitTriggerBps() != cfg.extremeExitTriggerBps
                 || hook.downExtremeConfirmPeriods() != cfg.downExtremeConfirmPeriods
-                || hook.downRFromCashBps() != cfg.downRFromCashBps
+                || hook.cashExitTriggerBps() != cfg.cashExitTriggerBps
                 || hook.downCashConfirmPeriods() != cfg.downCashConfirmPeriods
                 || hook.emergencyFloorCloseVolUsd6() != cfg.emergencyFloorCloseVolUsd6
                 || hook.emergencyConfirmPeriods() != cfg.emergencyConfirmPeriods
@@ -191,18 +191,17 @@ interface IVolumeHook {
     function extremeFee() external view returns (uint24);
     function periodSeconds() external view returns (uint32);
     function emaPeriods() external view returns (uint8);
-    function deadbandBps() external view returns (uint16);
     function lullResetSeconds() external view returns (uint32);
     function minCloseVolToCashUsd6() external view returns (uint64);
-    function upRToCashBps() external view returns (uint16);
+    function cashEnterTriggerBps() external view returns (uint16);
     function cashHoldPeriods() external view returns (uint8);
     function minCloseVolToExtremeUsd6() external view returns (uint64);
-    function upRToExtremeBps() external view returns (uint16);
+    function extremeEnterTriggerBps() external view returns (uint16);
     function upExtremeConfirmPeriods() external view returns (uint8);
     function extremeHoldPeriods() external view returns (uint8);
-    function downRFromExtremeBps() external view returns (uint16);
+    function extremeExitTriggerBps() external view returns (uint16);
     function downExtremeConfirmPeriods() external view returns (uint8);
-    function downRFromCashBps() external view returns (uint16);
+    function cashExitTriggerBps() external view returns (uint16);
     function downCashConfirmPeriods() external view returns (uint8);
     function emergencyFloorCloseVolUsd6() external view returns (uint64);
     function emergencyConfirmPeriods() external view returns (uint8);

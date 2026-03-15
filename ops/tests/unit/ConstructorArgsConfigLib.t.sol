@@ -19,7 +19,6 @@ contract ConstructorArgsConfigLibTest is Test, VolumeDynamicFeeHookV2DeployHelpe
     uint32 internal constant PERIOD_SECONDS = 300;
     uint32 internal constant LULL_RESET_SECONDS = 3600;
     uint8 internal constant EMA_PERIODS = 8;
-    uint16 internal constant DEADBAND_BPS = 500;
 
     MockPoolManager internal manager;
 
@@ -45,19 +44,18 @@ contract ConstructorArgsConfigLibTest is Test, VolumeDynamicFeeHookV2DeployHelpe
         assertEq(decoded.extremeFeePips, original.extremeFeePips);
         assertEq(decoded.periodSeconds, original.periodSeconds);
         assertEq(decoded.emaPeriods, original.emaPeriods);
-        assertEq(decoded.deadbandBps, original.deadbandBps);
         assertEq(decoded.lullResetSeconds, original.lullResetSeconds);
         assertEq(decoded.hookFeePercent, original.hookFeePercent);
         assertEq(decoded.minCloseVolToCashUsd6, original.minCloseVolToCashUsd6);
-        assertEq(decoded.upRToCashBps, original.upRToCashBps);
+        assertEq(decoded.cashEnterTriggerBps, original.cashEnterTriggerBps);
         assertEq(decoded.cashHoldPeriods, original.cashHoldPeriods);
         assertEq(decoded.minCloseVolToExtremeUsd6, original.minCloseVolToExtremeUsd6);
-        assertEq(decoded.upRToExtremeBps, original.upRToExtremeBps);
+        assertEq(decoded.extremeEnterTriggerBps, original.extremeEnterTriggerBps);
         assertEq(decoded.upExtremeConfirmPeriods, original.upExtremeConfirmPeriods);
         assertEq(decoded.extremeHoldPeriods, original.extremeHoldPeriods);
-        assertEq(decoded.downRFromExtremeBps, original.downRFromExtremeBps);
+        assertEq(decoded.extremeExitTriggerBps, original.extremeExitTriggerBps);
         assertEq(decoded.downExtremeConfirmPeriods, original.downExtremeConfirmPeriods);
-        assertEq(decoded.downRFromCashBps, original.downRFromCashBps);
+        assertEq(decoded.cashExitTriggerBps, original.cashExitTriggerBps);
         assertEq(decoded.downCashConfirmPeriods, original.downCashConfirmPeriods);
         assertEq(decoded.emergencyFloorCloseVolUsd6, original.emergencyFloorCloseVolUsd6);
         assertEq(decoded.emergencyConfirmPeriods, original.emergencyConfirmPeriods);
@@ -91,21 +89,20 @@ contract ConstructorArgsConfigLibTest is Test, VolumeDynamicFeeHookV2DeployHelpe
         cfg.extremeFeePips = V2_DEFAULT_EXTREME_FEE;
         cfg.periodSeconds = PERIOD_SECONDS;
         cfg.emaPeriods = EMA_PERIODS;
-        cfg.deadbandBps = DEADBAND_BPS;
         cfg.lullResetSeconds = LULL_RESET_SECONDS;
         cfg.hookFeePercent = hookFeePercent_;
-        cfg.minCloseVolToCashUsd6 = V2_MIN_CLOSEVOL_TO_CASH_USD6;
-        cfg.upRToCashBps = V2_UP_R_TO_CASH_BPS;
+        cfg.minCloseVolToCashUsd6 = V2_MIN_VOLUME_TO_ENTER_CASH_USD6;
+        cfg.cashEnterTriggerBps = V2_CASH_ENTER_TRIGGER_BPS;
         cfg.cashHoldPeriods = V2_CASH_HOLD_PERIODS;
-        cfg.minCloseVolToExtremeUsd6 = V2_MIN_CLOSEVOL_TO_EXTREME_USD6;
-        cfg.upRToExtremeBps = V2_UP_R_TO_EXTREME_BPS;
+        cfg.minCloseVolToExtremeUsd6 = V2_MIN_VOLUME_TO_ENTER_EXTREME_USD6;
+        cfg.extremeEnterTriggerBps = V2_EXTREME_ENTER_TRIGGER_BPS;
         cfg.upExtremeConfirmPeriods = V2_UP_EXTREME_CONFIRM_PERIODS;
         cfg.extremeHoldPeriods = V2_EXTREME_HOLD_PERIODS;
-        cfg.downRFromExtremeBps = V2_DOWN_R_FROM_EXTREME_BPS;
+        cfg.extremeExitTriggerBps = V2_EXTREME_EXIT_TRIGGER_BPS;
         cfg.downExtremeConfirmPeriods = V2_DOWN_EXTREME_CONFIRM_PERIODS;
-        cfg.downRFromCashBps = V2_DOWN_R_FROM_CASH_BPS;
+        cfg.cashExitTriggerBps = V2_CASH_EXIT_TRIGGER_BPS;
         cfg.downCashConfirmPeriods = V2_DOWN_CASH_CONFIRM_PERIODS;
-        cfg.emergencyFloorCloseVolUsd6 = V2_EMERGENCY_FLOOR_CLOSEVOL_USD6;
+        cfg.emergencyFloorCloseVolUsd6 = V2_EMERGENCY_FLOOR_TRIGGER_USD6;
         cfg.emergencyConfirmPeriods = V2_EMERGENCY_CONFIRM_PERIODS;
     }
 }

@@ -93,6 +93,8 @@ Primary artifacts:
 
 ## Operational notes
 
+- In normal ops, fill `ops/<network>/config/deploy.env`; leave `defaults.env` for runtime wiring, budgets, and
+  explicit runtime overrides.
 - `pause()`/`unpause()` are freeze/resume semantics (not swap stop, not HookFee stop).
 - Emergency resets are paused-only and explicit (`toFloor` / `toCash`).
 - `minCountedSwapUsd6` is telemetry-only dust filtering, not a swap gate.
@@ -102,8 +104,8 @@ Primary artifacts:
 - Claim payout path uses PoolManager accounting withdrawal (`unlock` -> `burn` -> `take`).
 - Oversized claim payouts are chunked automatically to fit PoolManager `int128` accounting bounds.
 - Full claim path is `claimAllHookFees()` only and always pays current `owner()`.
-- `MIN_COUNTED_SWAP_USD6` is the expected current telemetry threshold used for deploy/ensure/preflight reuse validation
-  (defaults to `4_000_000` if omitted).
+- `MIN_COUNTED_SWAP_USD6` defaults to `4_000_000` when omitted; set it only when deploy/ensure/preflight should
+  expect a non-default runtime telemetry threshold.
 - For native-asset pools (`token0 == address(0)` or `token1 == address(0)`), deploy/ensure/preflight validates that current `owner()` can receive native payout from PoolManager sender context in the claim path.
 - Existing hook reuse is pinned to the canonical CREATE2 address derived from the current release and the frozen
   `ops/<network>/config/deploy.env` constructor snapshot, while current runtime/admin expectations come from

@@ -18,7 +18,7 @@ library EnvLib {
 
     function requireAddress(string memory key, bool allowZero) internal view returns (address value) {
         if (!hasKey(key)) revert ErrorLib.MissingEnv(key);
-        value = vm.envAddress(key);
+        value = _parseAddress(vm.envString(key), key);
         if (!allowZero && value == address(0)) {
             revert ErrorLib.InvalidEnv(key, "zero address");
         }
@@ -26,7 +26,7 @@ library EnvLib {
 
     function envOrAddress(string memory key, address fallbackValue) internal view returns (address value) {
         if (!hasKey(key)) return fallbackValue;
-        value = vm.envAddress(key);
+        value = _parseAddress(vm.envString(key), key);
     }
 
     function requireUint(string memory key) internal view returns (uint256 value) {
@@ -151,6 +151,34 @@ library EnvLib {
         value = toUint16Checked(parseDecimalToScale(vm.envString(key), key, 2), key);
     }
 
+    function envOrPipsFromPercent(string memory key, uint24 fallbackValue)
+        internal
+        view
+        returns (uint24 value)
+    {
+        if (!hasKey(key)) return fallbackValue;
+        value = toUint24Checked(parseDecimalToScale(vm.envString(key), key, 4), key);
+    }
+
+    function requirePipsFromPercent(string memory key) internal view returns (uint24 value) {
+        if (!hasKey(key)) revert ErrorLib.MissingEnv(key);
+        value = toUint24Checked(parseDecimalToScale(vm.envString(key), key, 4), key);
+    }
+
+    function envOrBpsFromMultiplierX(string memory key, uint16 fallbackValue)
+        internal
+        view
+        returns (uint16 value)
+    {
+        if (!hasKey(key)) return fallbackValue;
+        value = toUint16Checked(parseDecimalToScale(vm.envString(key), key, 4), key);
+    }
+
+    function requireBpsFromMultiplierX(string memory key) internal view returns (uint16 value) {
+        if (!hasKey(key)) revert ErrorLib.MissingEnv(key);
+        value = toUint16Checked(parseDecimalToScale(vm.envString(key), key, 4), key);
+    }
+
     function envOrUsd6FromUsd(string memory key, uint64 fallbackValue) internal view returns (uint64 value) {
         if (!hasKey(key)) return fallbackValue;
         value = toUint64Checked(parseDecimalToScale(vm.envString(key), key, 6), key);
@@ -230,6 +258,26 @@ library EnvLib {
             if (a[i] != b[i]) return false;
         }
         return true;
+    }
+
+    function _parseAddress(string memory raw, string memory key) private pure returns (address value) {
+        bytes memory b = bytes(raw);
+        if (b.length != 42 || b[0] != "0" || (b[1] != "x" && b[1] != "X")) {
+            revert ErrorLib.InvalidEnv(key, "must be 0x-prefixed 40-hex address");
+        }
+
+        uint160 parsed = 0;
+        for (uint256 i = 2; i < 42; i++) {
+            parsed = (parsed << 4) | uint160(_hexCharToNibble(b[i], key));
+        }
+        value = address(parsed);
+    }
+
+    function _hexCharToNibble(bytes1 ch, string memory key) private pure returns (uint8 value) {
+        if (ch >= "0" && ch <= "9") return uint8(ch) - 48;
+        if (ch >= "a" && ch <= "f") return uint8(ch) - 87;
+        if (ch >= "A" && ch <= "F") return uint8(ch) - 55;
+        revert ErrorLib.InvalidEnv(key, "non-hex address char");
     }
 
     function toUint8Checked(uint256 raw, string memory key) internal pure returns (uint8 value) {

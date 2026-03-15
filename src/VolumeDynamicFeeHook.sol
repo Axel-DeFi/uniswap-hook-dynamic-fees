@@ -64,7 +64,6 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
     // Period-close reason codes.
     uint8 public constant REASON_NO_SWAPS = 7;
     uint8 public constant REASON_LULL_RESET = 8;
-    uint8 public constant REASON_DEADBAND = 9;
     uint8 public constant REASON_EMA_BOOTSTRAP = 10;
     uint8 public constant REASON_JUMP_CASH = 11;
     uint8 public constant REASON_JUMP_EXTREME = 12;
@@ -89,13 +88,12 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
 
     // Compact trace decision flags.
     uint16 private constant TRACE_FLAG_BOOTSTRAP_V2 = 0x0001;
-    uint16 private constant TRACE_FLAG_DEADBAND_BLOCKED = 0x0002;
     uint16 private constant TRACE_FLAG_HOLD_WAS_ACTIVE = 0x0004;
     uint16 private constant TRACE_FLAG_EMERGENCY_TRIGGERED = 0x0008;
-    uint16 private constant TRACE_FLAG_UP_CASH_RAW = 0x0010;
-    uint16 private constant TRACE_FLAG_UP_EXTREME_RAW = 0x0020;
-    uint16 private constant TRACE_FLAG_DOWN_EXTREME_RAW = 0x0040;
-    uint16 private constant TRACE_FLAG_DOWN_CASH_RAW = 0x0080;
+    uint16 private constant TRACE_FLAG_CASH_ENTER_TRIGGER = 0x0010;
+    uint16 private constant TRACE_FLAG_EXTREME_ENTER_TRIGGER = 0x0020;
+    uint16 private constant TRACE_FLAG_EXTREME_EXIT_TRIGGER = 0x0040;
+    uint16 private constant TRACE_FLAG_CASH_EXIT_TRIGGER = 0x0080;
 
     // -----------------------------------------------------------------------
     // Types
@@ -118,11 +116,10 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
         uint64 minCountedSwapUsd6;
         uint32 periodSeconds;
         uint32 lullResetSeconds;
-        uint16 upRToCashBps;
-        uint16 upRToExtremeBps;
-        uint16 downRFromExtremeBps;
-        uint16 downRFromCashBps;
-        uint16 deadbandBps;
+        uint16 cashEnterTriggerBps;
+        uint16 extremeEnterTriggerBps;
+        uint16 extremeExitTriggerBps;
+        uint16 cashExitTriggerBps;
         uint16 hookFeePercent;
         uint8 emaPeriods;
         uint8 cashHoldPeriods;
@@ -136,17 +133,17 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
     /// @notice Runtime state-machine parameters exposed as a grouped API.
     struct ControllerParams {
         uint64 minCloseVolToCashUsd6;
-        uint16 upRToCashBps;
+        uint16 cashEnterTriggerBps;
         // Configured hold length N; effective fully protected periods are N - 1 (N = 1 gives zero extra hold protection).
         uint8 cashHoldPeriods;
         uint64 minCloseVolToExtremeUsd6;
-        uint16 upRToExtremeBps;
+        uint16 extremeEnterTriggerBps;
         uint8 upExtremeConfirmPeriods;
         // Same semantics as cash hold: configured N gives N - 1 fully protected periods.
         uint8 extremeHoldPeriods;
-        uint16 downRFromExtremeBps;
+        uint16 extremeExitTriggerBps;
         uint8 downExtremeConfirmPeriods;
-        uint16 downRFromCashBps;
+        uint16 cashExitTriggerBps;
         uint8 downCashConfirmPeriods;
         uint64 emergencyFloorCloseVolUsd6;
         uint8 emergencyConfirmPeriods;
@@ -202,8 +199,8 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
     /// bit 0 paused, bits 1..5 holdRemaining, bits 6..7 upExtremeStreak, bits 8..10 downStreak,
     /// bits 11..12 emergencyStreak.
     /// @dev `decisionFlags` packs:
-    /// bit 0 bootstrapV2, bit 1 deadbandBlocked, bit 2 holdWasActive, bit 3 emergencyTriggered,
-    /// bit 4 upCashRaw, bit 5 upExtremeRaw, bit 6 downExtremeRaw, bit 7 downCashRaw.
+    /// bit 0 bootstrapV2, bit 2 holdWasActive, bit 3 emergencyTriggered,
+    /// bit 4 cashEnterTrigger, bit 5 extremeEnterTrigger, bit 6 extremeExitTrigger, bit 7 cashExitTrigger.
     event ControllerTransitionTrace(
         uint64 periodStart,
         uint24 fromFee,
@@ -255,24 +252,22 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
     /// @notice Emitted when core controller thresholds/confirm params are updated.
     event ControllerParamsUpdated(
         uint64 minCloseVolToCashUsd6,
-        uint16 upRToCashBps,
+        uint16 cashEnterTriggerBps,
         uint8 cashHoldPeriods,
         uint64 minCloseVolToExtremeUsd6,
-        uint16 upRToExtremeBps,
+        uint16 extremeEnterTriggerBps,
         uint8 upExtremeConfirmPeriods,
         uint8 extremeHoldPeriods,
-        uint16 downRFromExtremeBps,
+        uint16 extremeExitTriggerBps,
         uint8 downExtremeConfirmPeriods,
-        uint16 downRFromCashBps,
+        uint16 cashExitTriggerBps,
         uint8 downCashConfirmPeriods,
         uint64 emergencyFloorCloseVolUsd6,
         uint8 emergencyConfirmPeriods
     );
 
     /// @notice Emitted when timing and smoothing params are updated.
-    event TimingParamsUpdated(
-        uint32 periodSeconds, uint8 emaPeriods, uint32 lullResetSeconds, uint16 deadbandBps
-    );
+    event TimingParamsUpdated(uint32 periodSeconds, uint8 emaPeriods, uint32 lullResetSeconds);
 
     /// @notice Emitted when a HookFee percent change is scheduled through timelock.
     event HookFeePercentChangeScheduled(uint16 newHookFeePercent, uint64 executeAfter);
@@ -398,20 +393,19 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
     /// @param _extremeFee Extreme LP fee in hundredths of a bip.
     /// @param _periodSeconds Period length in seconds.
     /// @param _emaPeriods EMA denominator.
-    /// @param _deadbandBps Deadband threshold in bps.
     /// @param _lullResetSeconds Lull-reset inactivity threshold in seconds. Must be strictly greater than `_periodSeconds`.
     /// @param ownerAddr Initial owner address.
     /// @param hookFeePercent_ Initial HookFee percent of LP fee.
     /// @param _minCloseVolToCashUsd6 Minimum close volume for floor->cash transition.
-    /// @param _upRToCashBps Ratio threshold for floor->cash transition.
+    /// @param _cashEnterTriggerBps Close-volume trigger for floor->cash transition, as `closeVol / EMA` in bps.
     /// @param _cashHoldPeriods Configured cash hold length `N` (effective fully protected periods are `N - 1`; `N = 1` gives zero extra hold protection).
     /// @param _minCloseVolToExtremeUsd6 Minimum close volume for cash->extreme transition.
-    /// @param _upRToExtremeBps Ratio threshold for cash->extreme transition.
+    /// @param _extremeEnterTriggerBps Close-volume trigger for cash->extreme transition, as `closeVol / EMA` in bps.
     /// @param _upExtremeConfirmPeriods Confirmation periods for cash->extreme transition.
     /// @param _extremeHoldPeriods Hold periods after entering extreme.
-    /// @param _downRFromExtremeBps Ratio threshold for extreme->cash transition.
+    /// @param _extremeExitTriggerBps Close-volume trigger for extreme->cash transition, as `closeVol / EMA` in bps.
     /// @param _downExtremeConfirmPeriods Confirmation periods for extreme->cash transition.
-    /// @param _downRFromCashBps Ratio threshold for cash->floor transition.
+    /// @param _cashExitTriggerBps Close-volume trigger for cash->floor transition, as `closeVol / EMA` in bps.
     /// @param _downCashConfirmPeriods Confirmation periods for cash->floor transition.
     /// @param _emergencyFloorCloseVolUsd6 Emergency floor trigger threshold (`> 0` and strictly below `_minCloseVolToCashUsd6`).
     /// @param _emergencyConfirmPeriods Consecutive confirmations for emergency floor trigger.
@@ -427,20 +421,19 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
         uint24 _extremeFee,
         uint32 _periodSeconds,
         uint8 _emaPeriods,
-        uint16 _deadbandBps,
         uint32 _lullResetSeconds,
         address ownerAddr,
         uint16 hookFeePercent_,
         uint64 _minCloseVolToCashUsd6,
-        uint16 _upRToCashBps,
+        uint16 _cashEnterTriggerBps,
         uint8 _cashHoldPeriods,
         uint64 _minCloseVolToExtremeUsd6,
-        uint16 _upRToExtremeBps,
+        uint16 _extremeEnterTriggerBps,
         uint8 _upExtremeConfirmPeriods,
         uint8 _extremeHoldPeriods,
-        uint16 _downRFromExtremeBps,
+        uint16 _extremeExitTriggerBps,
         uint8 _downExtremeConfirmPeriods,
-        uint16 _downRFromCashBps,
+        uint16 _cashExitTriggerBps,
         uint8 _downCashConfirmPeriods,
         uint64 _emergencyFloorCloseVolUsd6,
         uint8 _emergencyConfirmPeriods
@@ -469,22 +462,22 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
         if (stableDecimals_ == 6) _stableScale = 1;
         else _stableScale = 1_000_000_000_000;
 
-        _setTimingParamsInternal(_periodSeconds, _emaPeriods, _lullResetSeconds, _deadbandBps);
+        _setTimingParamsInternal(_periodSeconds, _emaPeriods, _lullResetSeconds);
         _setOwnerInternal(ownerAddr);
         _setHookFeePercentInternal(hookFeePercent_);
         _setRegimeFeesInternal(_floorFee, _cashFee, _extremeFee);
 
         ControllerParams memory p = ControllerParams({
             minCloseVolToCashUsd6: _minCloseVolToCashUsd6,
-            upRToCashBps: _upRToCashBps,
+            cashEnterTriggerBps: _cashEnterTriggerBps,
             cashHoldPeriods: _cashHoldPeriods,
             minCloseVolToExtremeUsd6: _minCloseVolToExtremeUsd6,
-            upRToExtremeBps: _upRToExtremeBps,
+            extremeEnterTriggerBps: _extremeEnterTriggerBps,
             upExtremeConfirmPeriods: _upExtremeConfirmPeriods,
             extremeHoldPeriods: _extremeHoldPeriods,
-            downRFromExtremeBps: _downRFromExtremeBps,
+            extremeExitTriggerBps: _extremeExitTriggerBps,
             downExtremeConfirmPeriods: _downExtremeConfirmPeriods,
-            downRFromCashBps: _downRFromCashBps,
+            cashExitTriggerBps: _cashExitTriggerBps,
             downCashConfirmPeriods: _downCashConfirmPeriods,
             emergencyFloorCloseVolUsd6: _emergencyFloorCloseVolUsd6,
             emergencyConfirmPeriods: _emergencyConfirmPeriods
@@ -498,20 +491,20 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
         emit RegimeFeesUpdated(_floorFee, _cashFee, _extremeFee);
         emit ControllerParamsUpdated(
             p.minCloseVolToCashUsd6,
-            p.upRToCashBps,
+            p.cashEnterTriggerBps,
             p.cashHoldPeriods,
             p.minCloseVolToExtremeUsd6,
-            p.upRToExtremeBps,
+            p.extremeEnterTriggerBps,
             p.upExtremeConfirmPeriods,
             p.extremeHoldPeriods,
-            p.downRFromExtremeBps,
+            p.extremeExitTriggerBps,
             p.downExtremeConfirmPeriods,
-            p.downRFromCashBps,
+            p.cashExitTriggerBps,
             p.downCashConfirmPeriods,
             p.emergencyFloorCloseVolUsd6,
             p.emergencyConfirmPeriods
         );
-        emit TimingParamsUpdated(_periodSeconds, _emaPeriods, _lullResetSeconds, _deadbandBps);
+        emit TimingParamsUpdated(_periodSeconds, _emaPeriods, _lullResetSeconds);
         emit MinCountedSwapUsd6Changed(0, DEFAULT_MIN_COUNTED_SWAP_USD6);
     }
 
@@ -811,14 +804,14 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
         return _config.extremeFee;
     }
 
-    /// @notice Returns threshold for floor->cash transition.
+    /// @notice Returns minimum close volume for floor->cash transition.
     function minCloseVolToCashUsd6() public view returns (uint64) {
         return _config.minCloseVolToCashUsd6;
     }
 
-    /// @notice Returns ratio threshold for floor->cash transition.
-    function upRToCashBps() public view returns (uint16) {
-        return _config.upRToCashBps;
+    /// @notice Returns close-volume trigger for floor->cash transition, as `closeVol / EMA` in bps.
+    function cashEnterTriggerBps() public view returns (uint16) {
+        return _config.cashEnterTriggerBps;
     }
 
     /// @notice Returns configured cash hold length `N` after entering cash regime.
@@ -827,14 +820,14 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
         return _config.cashHoldPeriods;
     }
 
-    /// @notice Returns threshold for cash->extreme transition.
+    /// @notice Returns minimum close volume for cash->extreme transition.
     function minCloseVolToExtremeUsd6() public view returns (uint64) {
         return _config.minCloseVolToExtremeUsd6;
     }
 
-    /// @notice Returns ratio threshold for cash->extreme transition.
-    function upRToExtremeBps() public view returns (uint16) {
-        return _config.upRToExtremeBps;
+    /// @notice Returns close-volume trigger for cash->extreme transition, as `closeVol / EMA` in bps.
+    function extremeEnterTriggerBps() public view returns (uint16) {
+        return _config.extremeEnterTriggerBps;
     }
 
     /// @notice Returns confirmation periods for cash->extreme transition.
@@ -847,9 +840,9 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
         return _config.extremeHoldPeriods;
     }
 
-    /// @notice Returns ratio threshold for extreme->cash transition.
-    function downRFromExtremeBps() public view returns (uint16) {
-        return _config.downRFromExtremeBps;
+    /// @notice Returns close-volume trigger for extreme->cash transition, as `closeVol / EMA` in bps.
+    function extremeExitTriggerBps() public view returns (uint16) {
+        return _config.extremeExitTriggerBps;
     }
 
     /// @notice Returns confirmation periods for extreme->cash transition.
@@ -857,9 +850,9 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
         return _config.downExtremeConfirmPeriods;
     }
 
-    /// @notice Returns ratio threshold for cash->floor transition.
-    function downRFromCashBps() public view returns (uint16) {
-        return _config.downRFromCashBps;
+    /// @notice Returns close-volume trigger for cash->floor transition, as `closeVol / EMA` in bps.
+    function cashExitTriggerBps() public view returns (uint16) {
+        return _config.cashExitTriggerBps;
     }
 
     /// @notice Returns confirmation periods for cash->floor transition.
@@ -885,11 +878,6 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
     /// @notice Returns EMA denominator.
     function emaPeriods() public view returns (uint8) {
         return _config.emaPeriods;
-    }
-
-    /// @notice Returns deadband threshold in bps.
-    function deadbandBps() public view returns (uint16) {
-        return _config.deadbandBps;
     }
 
     /// @notice Returns lull reset threshold in seconds.
@@ -937,15 +925,15 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
     function getControllerParams() external view returns (ControllerParams memory p) {
         p = ControllerParams({
             minCloseVolToCashUsd6: _config.minCloseVolToCashUsd6,
-            upRToCashBps: _config.upRToCashBps,
+            cashEnterTriggerBps: _config.cashEnterTriggerBps,
             cashHoldPeriods: _config.cashHoldPeriods,
             minCloseVolToExtremeUsd6: _config.minCloseVolToExtremeUsd6,
-            upRToExtremeBps: _config.upRToExtremeBps,
+            extremeEnterTriggerBps: _config.extremeEnterTriggerBps,
             upExtremeConfirmPeriods: _config.upExtremeConfirmPeriods,
             extremeHoldPeriods: _config.extremeHoldPeriods,
-            downRFromExtremeBps: _config.downRFromExtremeBps,
+            extremeExitTriggerBps: _config.extremeExitTriggerBps,
             downExtremeConfirmPeriods: _config.downExtremeConfirmPeriods,
-            downRFromCashBps: _config.downRFromCashBps,
+            cashExitTriggerBps: _config.cashExitTriggerBps,
             downCashConfirmPeriods: _config.downCashConfirmPeriods,
             emergencyFloorCloseVolUsd6: _config.emergencyFloorCloseVolUsd6,
             emergencyConfirmPeriods: _config.emergencyConfirmPeriods
@@ -1134,15 +1122,15 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
         _setControllerParamsInternal(p);
         emit ControllerParamsUpdated(
             p.minCloseVolToCashUsd6,
-            p.upRToCashBps,
+            p.cashEnterTriggerBps,
             p.cashHoldPeriods,
             p.minCloseVolToExtremeUsd6,
-            p.upRToExtremeBps,
+            p.extremeEnterTriggerBps,
             p.upExtremeConfirmPeriods,
             p.extremeHoldPeriods,
-            p.downRFromExtremeBps,
+            p.extremeExitTriggerBps,
             p.downExtremeConfirmPeriods,
-            p.downRFromCashBps,
+            p.cashExitTriggerBps,
             p.downCashConfirmPeriods,
             p.emergencyFloorCloseVolUsd6,
             p.emergencyConfirmPeriods
@@ -1157,14 +1145,13 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
     /// @dev Requires `lullResetSeconds_ > periodSeconds_`; equality is rejected.
     /// @dev Time-scale updates (`periodSeconds` or `emaPeriods`) perform a safe reset:
     /// floor regime, zero EMA/counters, fresh open period, and immediate LP fee sync when active tier changes.
-    /// @dev Non-time-scale updates (only `lullResetSeconds` and/or `deadbandBps`) preserve regime and EMA/counters,
+    /// @dev Non-time-scale updates (only `lullResetSeconds`) preserve regime and EMA/counters,
     /// and only restart a fresh open period.
-    function setTimingParams(
-        uint32 periodSeconds_,
-        uint8 emaPeriods_,
-        uint32 lullResetSeconds_,
-        uint16 deadbandBps_
-    ) external onlyOwner whenPaused {
+    function setTimingParams(uint32 periodSeconds_, uint8 emaPeriods_, uint32 lullResetSeconds_)
+        external
+        onlyOwner
+        whenPaused
+    {
         (
             ,
             uint96 emaVolScaled,
@@ -1180,8 +1167,8 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
         bool timeScaleChanged = periodSeconds_ != _config.periodSeconds || emaPeriods_ != _config.emaPeriods;
         uint24 oldActiveFee = _regimeFee(feeIdx);
 
-        _setTimingParamsInternal(periodSeconds_, emaPeriods_, lullResetSeconds_, deadbandBps_);
-        emit TimingParamsUpdated(periodSeconds_, emaPeriods_, lullResetSeconds_, deadbandBps_);
+        _setTimingParamsInternal(periodSeconds_, emaPeriods_, lullResetSeconds_);
+        emit TimingParamsUpdated(periodSeconds_, emaPeriods_, lullResetSeconds_);
 
         if (periodStart == 0) return;
 
@@ -1376,34 +1363,16 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
     function _setTimingParamsInternal(
         uint32 periodSeconds_,
         uint8 emaPeriods_,
-        uint32 lullResetSeconds_,
-        uint16 deadbandBps_
+        uint32 lullResetSeconds_
     ) internal {
         if (periodSeconds_ == 0) revert InvalidConfig();
         if (emaPeriods_ < 2 || emaPeriods_ > MAX_EMA_PERIODS) revert InvalidConfig();
-        if (deadbandBps_ > 5_000) revert InvalidConfig();
         if (lullResetSeconds_ <= periodSeconds_) revert InvalidConfig();
         if (uint256(lullResetSeconds_) > uint256(periodSeconds_) * MAX_LULL_PERIODS) revert InvalidConfig();
-        if (_config.downRFromExtremeBps != 0 && _config.downRFromCashBps != 0) {
-            _validateDeadbandVsDownThresholds(
-                deadbandBps_, _config.downRFromExtremeBps, _config.downRFromCashBps
-            );
-        }
 
         _config.periodSeconds = periodSeconds_;
         _config.emaPeriods = emaPeriods_;
         _config.lullResetSeconds = lullResetSeconds_;
-        _config.deadbandBps = deadbandBps_;
-    }
-
-    function _validateDeadbandVsDownThresholds(
-        uint16 deadbandBps_,
-        uint16 downRFromExtremeBps_,
-        uint16 downRFromCashBps_
-    ) internal pure {
-        if (deadbandBps_ >= downRFromExtremeBps_ || deadbandBps_ >= downRFromCashBps_) {
-            revert InvalidConfig();
-        }
     }
 
     function _setControllerParamsInternal(ControllerParams memory p) internal {
@@ -1429,20 +1398,19 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
         // Cross-parameter consistency guards.
         if (p.emergencyFloorCloseVolUsd6 >= p.minCloseVolToCashUsd6) revert InvalidConfig();
         if (p.minCloseVolToCashUsd6 > p.minCloseVolToExtremeUsd6) revert InvalidConfig();
-        if (p.upRToCashBps > p.upRToExtremeBps) revert InvalidConfig();
-        if (p.downRFromCashBps < p.downRFromExtremeBps) revert InvalidConfig();
-        _validateDeadbandVsDownThresholds(_config.deadbandBps, p.downRFromExtremeBps, p.downRFromCashBps);
+        if (p.cashEnterTriggerBps > p.extremeEnterTriggerBps) revert InvalidConfig();
+        if (p.cashExitTriggerBps < p.extremeExitTriggerBps) revert InvalidConfig();
 
         _config.minCloseVolToCashUsd6 = p.minCloseVolToCashUsd6;
-        _config.upRToCashBps = p.upRToCashBps;
+        _config.cashEnterTriggerBps = p.cashEnterTriggerBps;
         _config.cashHoldPeriods = p.cashHoldPeriods;
         _config.minCloseVolToExtremeUsd6 = p.minCloseVolToExtremeUsd6;
-        _config.upRToExtremeBps = p.upRToExtremeBps;
+        _config.extremeEnterTriggerBps = p.extremeEnterTriggerBps;
         _config.upExtremeConfirmPeriods = p.upExtremeConfirmPeriods;
         _config.extremeHoldPeriods = p.extremeHoldPeriods;
-        _config.downRFromExtremeBps = p.downRFromExtremeBps;
+        _config.extremeExitTriggerBps = p.extremeExitTriggerBps;
         _config.downExtremeConfirmPeriods = p.downExtremeConfirmPeriods;
-        _config.downRFromCashBps = p.downRFromCashBps;
+        _config.cashExitTriggerBps = p.cashExitTriggerBps;
         _config.downCashConfirmPeriods = p.downCashConfirmPeriods;
         _config.emergencyFloorCloseVolUsd6 = p.emergencyFloorCloseVolUsd6;
         _config.emergencyConfirmPeriods = p.emergencyConfirmPeriods;
@@ -1743,26 +1711,15 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
 
         uint256 rBps =
             emaVolScaled == 0 ? 0 : (uint256(closeVol) * EMA_SCALE * BPS_SCALE) / uint256(emaVolScaled);
-        uint256 deadband = uint256(_config.deadbandBps);
-        bool deadbandBlocked;
-        bool downExtremeRaw;
-        bool downCashRaw;
 
         if (result.feeIdx == REGIME_FLOOR) {
-            uint256 cashThreshold = uint256(_config.upRToCashBps);
-            bool upCashRaw = rBps >= cashThreshold;
-            if (upCashRaw) {
-                result.decisionFlags |= TRACE_FLAG_UP_CASH_RAW;
+            uint256 cashThreshold = uint256(_config.cashEnterTriggerBps);
+            bool cashEnterTriggered = rBps >= cashThreshold;
+            if (cashEnterTriggered) {
+                result.decisionFlags |= TRACE_FLAG_CASH_ENTER_TRIGGER;
             }
-            bool upCashPass = rBps >= cashThreshold + deadband;
             bool canJumpCash =
-                !bootstrapV2 && emaVolScaled != 0 && closeVol >= _config.minCloseVolToCashUsd6 && upCashPass;
-            if (
-                !bootstrapV2 && emaVolScaled != 0 && closeVol >= _config.minCloseVolToCashUsd6 && upCashRaw
-                    && !upCashPass
-            ) {
-                deadbandBlocked = true;
-            }
+                !bootstrapV2 && emaVolScaled != 0 && closeVol >= _config.minCloseVolToCashUsd6 && cashEnterTriggered;
             if (canJumpCash && result.feeIdx != REGIME_CASH) {
                 result.feeIdx = REGIME_CASH;
                 result.holdRemaining = _config.cashHoldPeriods;
@@ -1775,24 +1732,14 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
         }
 
         if (result.feeIdx == REGIME_CASH) {
-            uint256 extremeThreshold = uint256(_config.upRToExtremeBps);
-            bool upExtremeRaw = closeVol >= _config.minCloseVolToExtremeUsd6 && rBps >= extremeThreshold;
-            if (upExtremeRaw) {
-                result.decisionFlags |= TRACE_FLAG_UP_EXTREME_RAW;
+            uint256 extremeThreshold = uint256(_config.extremeEnterTriggerBps);
+            bool extremeEnterTriggered = closeVol >= _config.minCloseVolToExtremeUsd6 && rBps >= extremeThreshold;
+            if (extremeEnterTriggered) {
+                result.decisionFlags |= TRACE_FLAG_EXTREME_ENTER_TRIGGER;
             }
-            bool upExtremePass =
-                closeVol >= _config.minCloseVolToExtremeUsd6 && rBps >= extremeThreshold + deadband;
-            if (upExtremePass) {
+            if (extremeEnterTriggered) {
                 result.upExtremeStreak = _incrementStreak(result.upExtremeStreak, MAX_UP_EXTREME_STREAK);
             } else {
-                if (
-                    upExtremeRaw
-                        && _incrementStreak(result.upExtremeStreak, MAX_UP_EXTREME_STREAK)
-                            >= _config.upExtremeConfirmPeriods && !bootstrapV2
-                        && result.feeIdx != REGIME_EXTREME
-                ) {
-                    deadbandBlocked = true;
-                }
                 result.upExtremeStreak = 0;
             }
             if (
@@ -1812,14 +1759,12 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
         }
 
         if (result.feeIdx == REGIME_EXTREME) {
-            downExtremeRaw = rBps <= uint256(_config.downRFromExtremeBps);
-            if (downExtremeRaw) {
-                result.decisionFlags |= TRACE_FLAG_DOWN_EXTREME_RAW;
+            if (rBps <= uint256(_config.extremeExitTriggerBps)) {
+                result.decisionFlags |= TRACE_FLAG_EXTREME_EXIT_TRIGGER;
             }
         } else if (result.feeIdx == REGIME_CASH) {
-            downCashRaw = rBps <= uint256(_config.downRFromCashBps);
-            if (downCashRaw) {
-                result.decisionFlags |= TRACE_FLAG_DOWN_CASH_RAW;
+            if (rBps <= uint256(_config.cashExitTriggerBps)) {
+                result.decisionFlags |= TRACE_FLAG_CASH_EXIT_TRIGGER;
             }
         }
 
@@ -1830,19 +1775,10 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
         }
 
         if (result.feeIdx == REGIME_EXTREME) {
-            uint256 downExtremeThreshold = uint256(_config.downRFromExtremeBps);
-            uint256 downExtremePassThreshold = downExtremeThreshold - deadband;
-            bool downExtremePass = rBps <= downExtremePassThreshold;
+            bool downExtremePass = rBps <= uint256(_config.extremeExitTriggerBps);
             if (downExtremePass) {
                 result.downStreak = _incrementStreak(result.downStreak, MAX_DOWN_STREAK);
             } else {
-                if (
-                    downExtremeRaw
-                        && _incrementStreak(result.downStreak, MAX_DOWN_STREAK)
-                            >= _config.downExtremeConfirmPeriods && result.feeIdx != REGIME_CASH
-                ) {
-                    deadbandBlocked = true;
-                }
                 result.downStreak = 0;
             }
             if (result.downStreak >= _config.downExtremeConfirmPeriods) {
@@ -1854,19 +1790,10 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
                 }
             }
         } else if (result.feeIdx == REGIME_CASH) {
-            uint256 downCashThreshold = uint256(_config.downRFromCashBps);
-            uint256 downCashPassThreshold = downCashThreshold - deadband;
-            bool downCashPass = rBps <= downCashPassThreshold;
+            bool downCashPass = rBps <= uint256(_config.cashExitTriggerBps);
             if (downCashPass) {
                 result.downStreak = _incrementStreak(result.downStreak, MAX_DOWN_STREAK);
             } else {
-                if (
-                    downCashRaw
-                        && _incrementStreak(result.downStreak, MAX_DOWN_STREAK)
-                            >= _config.downCashConfirmPeriods && result.feeIdx != REGIME_FLOOR
-                ) {
-                    deadbandBlocked = true;
-                }
                 result.downStreak = 0;
             }
             if (result.downStreak >= _config.downCashConfirmPeriods) {
@@ -1881,10 +1808,6 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
             result.downStreak = 0;
         }
 
-        if (deadbandBlocked) {
-            result.reasonCode = REASON_DEADBAND;
-            result.decisionFlags |= TRACE_FLAG_DEADBAND_BLOCKED;
-        }
         if (bootstrapV2) {
             result.reasonCode = REASON_EMA_BOOTSTRAP;
         }

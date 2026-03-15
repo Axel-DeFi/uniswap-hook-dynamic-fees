@@ -63,12 +63,12 @@ CASES_STAGE_REF_EMA=0
 CASES_RUN_CAP_OK=0
 CASES_RUN_FLOOR_OK=0
 CASES_RUN_REV_OK=0
-CASES_RUN_DEADBAND_OK=0
+CASES_RUN_NO_CHANGE_OK=0
 CASES_RUN_LULL_OK=0
 CASES_BASE_CAP_PASS=0
 CASES_BASE_FLOOR_PASS=0
 CASES_BASE_REV_PASS=0
-CASES_BASE_DEADBAND_PASS=0
+CASES_BASE_NO_CHANGE_PASS=0
 CASES_BASE_LULL_PASS=0
 CASES_RUN_BOOTSTRAP_OK=0
 CASES_RUN_JUMP_CASH_OK=0
@@ -104,21 +104,21 @@ HOOK_DUST_CLOSE_VOL_USD6=1000000
 HOOK_REGIME_FLOOR=0
 HOOK_REGIME_CASH=0
 HOOK_REGIME_EXTREME=0
-HOOK_FLOOR_FEE_PIPS=0
-HOOK_CASH_FEE_PIPS=0
-HOOK_EXTREME_FEE_PIPS=0
-HOOK_MIN_CLOSEVOL_TO_CASH_USD6=0
-HOOK_UP_R_TO_CASH_BPS=0
+HOOK_FLOOR_FEE_RAW=0
+HOOK_CASH_FEE_RAW=0
+HOOK_EXTREME_FEE_RAW=0
+HOOK_MIN_VOLUME_TO_ENTER_CASH_USD6=0
+HOOK_CASH_ENTER_TRIGGER_BPS=0
 HOOK_CASH_HOLD_PERIODS=0
-HOOK_MIN_CLOSEVOL_TO_EXTREME_USD6=0
-HOOK_UP_R_TO_EXTREME_BPS=0
+HOOK_MIN_VOLUME_TO_ENTER_EXTREME_USD6=0
+HOOK_EXTREME_ENTER_TRIGGER_BPS=0
 HOOK_UP_EXTREME_CONFIRM_PERIODS=0
 HOOK_EXTREME_HOLD_PERIODS=0
-HOOK_DOWN_R_FROM_EXTREME_BPS=0
+HOOK_EXTREME_EXIT_TRIGGER_BPS=0
 HOOK_DOWN_EXTREME_CONFIRM_PERIODS=0
-HOOK_DOWN_R_FROM_CASH_BPS=0
+HOOK_CASH_EXIT_TRIGGER_BPS=0
 HOOK_DOWN_CASH_CONFIRM_PERIODS=0
-HOOK_EMERGENCY_FLOOR_CLOSEVOL_USD6=0
+HOOK_EMERGENCY_FLOOR_TRIGGER_USD6=0
 HOOK_EMERGENCY_CONFIRM_PERIODS=0
 HOOK_MAX_HOOK_FEE_PERCENT=0
 HOOK_OWNER_ADDR=""
@@ -145,8 +145,6 @@ TX_MAX_FEE_GWEI="${TX_MAX_FEE_GWEI:-35}"
 TX_PRIORITY_FEE_GWEI="${TX_PRIORITY_FEE_GWEI:-2}"
 TX_WAIT_TIMEOUT_SECONDS="${TX_WAIT_TIMEOUT_SECONDS:-600}"
 CASES_CENTER_TICK_BAND="${CASES_CENTER_TICK_BAND:-40}"
-# Extra directional overshoot versus deadband edge for one-direction cases (basis points).
-CASES_DEADBAND_EXCEED_BPS="${CASES_DEADBAND_EXCEED_BPS:-3500}"
 # Cases mode guardrail disabled by default (0 = no liquidity cap).
 CASES_MAX_POOL_LIQUIDITY_PCT="${CASES_MAX_POOL_LIQUIDITY_PCT:-0}"
 # Actions table length in random mode (latest N events; cases mode is unlimited).
@@ -154,10 +152,7 @@ RANDOM_ACTIONS_TABLE_LENGTH="${RANDOM_ACTIONS_TABLE_LENGTH:-10}"
 # Keep a native coin reserve for gas when native asset is used as tokenIn.
 NATIVE_GAS_RESERVE_WEI=20000000000000000
 
-# Compatibility with orchestrator:
-# - Orchestrator may pass --private-key and --broadcast (forge-style). This script uses cast and treats --broadcast as a no-op.
 PRIVATE_KEY_CLI=""
-HAS_BROADCAST=1
 DRY_RUN=0
 
 while [[ $# -gt 0 ]]; do
@@ -186,9 +181,8 @@ Options:
   --no-live                    Disable terminal dashboard redraw.
   (Cases mode runs deterministic suite for v2 controller logic + governance + anomaly checks.)
   (Random mode uses adaptive traffic heuristics.)
-  --private-key <hex>           Signer key (optional if PRIVATE_KEY is in config).
-  --broadcast                    No-op compatibility flag (broadcast is enabled by default).
-  --dry-run                      Skip sending transactions.
+  --private-key <hex>          Signer key (optional if PRIVATE_KEY is in config).
+  --dry-run                    Skip sending transactions.
 EOF
       exit 0
       ;;
@@ -276,10 +270,6 @@ EOF
       if [[ -z "${PRIVATE_KEY_CLI}" ]]; then echo "ERROR: --private-key requires a value"; exit 1; fi
       shift 2
       ;;
-    --broadcast)
-      HAS_BROADCAST=1
-      shift
-      ;;
     --dry-run|dry)
       DRY_RUN=1
       shift
@@ -308,8 +298,8 @@ if [[ "${MODE}" == "cases" ]]; then
   CASES_MODE=1
 fi
 
-if ! [[ "${TX_MAX_FEE_GWEI}" =~ ^[0-9]+$ && "${TX_PRIORITY_FEE_GWEI}" =~ ^[0-9]+$ && "${TX_WAIT_TIMEOUT_SECONDS}" =~ ^[0-9]+$ && "${CASES_CENTER_TICK_BAND}" =~ ^[0-9]+$ && "${CASES_DEADBAND_EXCEED_BPS}" =~ ^[0-9]+$ && "${RANDOM_ACTIONS_TABLE_LENGTH}" =~ ^[0-9]+$ ]]; then
-  echo "ERROR: TX_MAX_FEE_GWEI, TX_PRIORITY_FEE_GWEI, TX_WAIT_TIMEOUT_SECONDS, CASES_CENTER_TICK_BAND, CASES_DEADBAND_EXCEED_BPS and RANDOM_ACTIONS_TABLE_LENGTH must be non-negative integers."
+if ! [[ "${TX_MAX_FEE_GWEI}" =~ ^[0-9]+$ && "${TX_PRIORITY_FEE_GWEI}" =~ ^[0-9]+$ && "${TX_WAIT_TIMEOUT_SECONDS}" =~ ^[0-9]+$ && "${CASES_CENTER_TICK_BAND}" =~ ^[0-9]+$ && "${RANDOM_ACTIONS_TABLE_LENGTH}" =~ ^[0-9]+$ ]]; then
+  echo "ERROR: TX_MAX_FEE_GWEI, TX_PRIORITY_FEE_GWEI, TX_WAIT_TIMEOUT_SECONDS, CASES_CENTER_TICK_BAND and RANDOM_ACTIONS_TABLE_LENGTH must be non-negative integers."
   exit 1
 fi
 if (( TX_MAX_FEE_GWEI <= 0 )); then
@@ -348,6 +338,11 @@ fi
 set -a
 # shellcheck disable=SC1090
 source "${HOOK_CONF}"
+DEPLOY_HOOK_CONF="$(dirname "${HOOK_CONF}")/deploy.env"
+if [[ -f "${DEPLOY_HOOK_CONF}" ]]; then
+  # shellcheck disable=SC1090
+  source "${DEPLOY_HOOK_CONF}"
+fi
 if [[ -f "./.env" ]]; then
   # shellcheck disable=SC1091
   source "./.env"
@@ -365,6 +360,11 @@ fi
 if [[ -n "${HOOK_ADDRESS_OVERRIDE}" ]]; then
   HOOK_ADDRESS="${HOOK_ADDRESS_OVERRIDE}"
 fi
+
+if [[ -z "${VOLATILE:-}" && -n "${DEPLOY_VOLATILE:-}" ]]; then VOLATILE="${DEPLOY_VOLATILE}"; fi
+if [[ -z "${STABLE:-}" && -n "${DEPLOY_STABLE:-}" ]]; then STABLE="${DEPLOY_STABLE}"; fi
+if [[ -z "${STABLE_DECIMALS:-}" && -n "${DEPLOY_STABLE_DECIMALS:-}" ]]; then STABLE_DECIMALS="${DEPLOY_STABLE_DECIMALS}"; fi
+if [[ -z "${TICK_SPACING:-}" && -n "${DEPLOY_TICK_SPACING:-}" ]]; then TICK_SPACING="${DEPLOY_TICK_SPACING}"; fi
 
 if [[ -z "${VOLATILE:-}" || -z "${STABLE:-}" || -z "${STABLE_DECIMALS:-}" || -z "${TICK_SPACING:-}" ]]; then
   echo "ERROR: VOLATILE, STABLE, STABLE_DECIMALS and TICK_SPACING must be set in ${HOOK_CONF}."
@@ -584,28 +584,27 @@ if [[ -z "${PERIOD_SECONDS}" || "${PERIOD_SECONDS}" -le 0 ]]; then
   exit 1
 fi
 
-HOOK_FLOOR_FEE_PIPS="$(cast_rpc call --rpc-url "${RPC_URL}" "${HOOK_ADDRESS}" "floorFee()(uint24)" | awk '{print $1}')"
-HOOK_CASH_FEE_PIPS="$(cast_rpc call --rpc-url "${RPC_URL}" "${HOOK_ADDRESS}" "cashFee()(uint24)" | awk '{print $1}')"
-HOOK_EXTREME_FEE_PIPS="$(cast_rpc call --rpc-url "${RPC_URL}" "${HOOK_ADDRESS}" "extremeFee()(uint24)" | awk '{print $1}')"
+HOOK_FLOOR_FEE_RAW="$(cast_rpc call --rpc-url "${RPC_URL}" "${HOOK_ADDRESS}" "floorFee()(uint24)" | awk '{print $1}')"
+HOOK_CASH_FEE_RAW="$(cast_rpc call --rpc-url "${RPC_URL}" "${HOOK_ADDRESS}" "cashFee()(uint24)" | awk '{print $1}')"
+HOOK_EXTREME_FEE_RAW="$(cast_rpc call --rpc-url "${RPC_URL}" "${HOOK_ADDRESS}" "extremeFee()(uint24)" | awk '{print $1}')"
 HOOK_REGIME_FLOOR=0
 HOOK_REGIME_CASH=1
 HOOK_REGIME_EXTREME=2
 HOOK_FEE_TIER_COUNT=3
 HOOK_EMA_PERIODS="$(cast_rpc call --rpc-url "${RPC_URL}" "${HOOK_ADDRESS}" "emaPeriods()(uint8)" | awk '{print $1}')"
-HOOK_DEADBAND_BPS="$(cast_rpc call --rpc-url "${RPC_URL}" "${HOOK_ADDRESS}" "deadbandBps()(uint16)" | awk '{print $1}')"
 HOOK_LULL_RESET_SECONDS="$(cast_rpc call --rpc-url "${RPC_URL}" "${HOOK_ADDRESS}" "lullResetSeconds()(uint32)" | awk '{print $1}')"
-HOOK_MIN_CLOSEVOL_TO_CASH_USD6="$(cast_rpc call --rpc-url "${RPC_URL}" "${HOOK_ADDRESS}" "minCloseVolToCashUsd6()(uint64)" | awk '{print $1}')"
-HOOK_UP_R_TO_CASH_BPS="$(cast_rpc call --rpc-url "${RPC_URL}" "${HOOK_ADDRESS}" "upRToCashBps()(uint16)" | awk '{print $1}')"
+HOOK_MIN_VOLUME_TO_ENTER_CASH_USD6="$(cast_rpc call --rpc-url "${RPC_URL}" "${HOOK_ADDRESS}" "minCloseVolToCashUsd6()(uint64)" | awk '{print $1}')"
+HOOK_CASH_ENTER_TRIGGER_BPS="$(cast_rpc call --rpc-url "${RPC_URL}" "${HOOK_ADDRESS}" "cashEnterTriggerBps()(uint16)" | awk '{print $1}')"
 HOOK_CASH_HOLD_PERIODS="$(cast_rpc call --rpc-url "${RPC_URL}" "${HOOK_ADDRESS}" "cashHoldPeriods()(uint8)" | awk '{print $1}')"
-HOOK_MIN_CLOSEVOL_TO_EXTREME_USD6="$(cast_rpc call --rpc-url "${RPC_URL}" "${HOOK_ADDRESS}" "minCloseVolToExtremeUsd6()(uint64)" | awk '{print $1}')"
-HOOK_UP_R_TO_EXTREME_BPS="$(cast_rpc call --rpc-url "${RPC_URL}" "${HOOK_ADDRESS}" "upRToExtremeBps()(uint16)" | awk '{print $1}')"
+HOOK_MIN_VOLUME_TO_ENTER_EXTREME_USD6="$(cast_rpc call --rpc-url "${RPC_URL}" "${HOOK_ADDRESS}" "minCloseVolToExtremeUsd6()(uint64)" | awk '{print $1}')"
+HOOK_EXTREME_ENTER_TRIGGER_BPS="$(cast_rpc call --rpc-url "${RPC_URL}" "${HOOK_ADDRESS}" "extremeEnterTriggerBps()(uint16)" | awk '{print $1}')"
 HOOK_UP_EXTREME_CONFIRM_PERIODS="$(cast_rpc call --rpc-url "${RPC_URL}" "${HOOK_ADDRESS}" "upExtremeConfirmPeriods()(uint8)" | awk '{print $1}')"
 HOOK_EXTREME_HOLD_PERIODS="$(cast_rpc call --rpc-url "${RPC_URL}" "${HOOK_ADDRESS}" "extremeHoldPeriods()(uint8)" | awk '{print $1}')"
-HOOK_DOWN_R_FROM_EXTREME_BPS="$(cast_rpc call --rpc-url "${RPC_URL}" "${HOOK_ADDRESS}" "downRFromExtremeBps()(uint16)" | awk '{print $1}')"
+HOOK_EXTREME_EXIT_TRIGGER_BPS="$(cast_rpc call --rpc-url "${RPC_URL}" "${HOOK_ADDRESS}" "extremeExitTriggerBps()(uint16)" | awk '{print $1}')"
 HOOK_DOWN_EXTREME_CONFIRM_PERIODS="$(cast_rpc call --rpc-url "${RPC_URL}" "${HOOK_ADDRESS}" "downExtremeConfirmPeriods()(uint8)" | awk '{print $1}')"
-HOOK_DOWN_R_FROM_CASH_BPS="$(cast_rpc call --rpc-url "${RPC_URL}" "${HOOK_ADDRESS}" "downRFromCashBps()(uint16)" | awk '{print $1}')"
+HOOK_CASH_EXIT_TRIGGER_BPS="$(cast_rpc call --rpc-url "${RPC_URL}" "${HOOK_ADDRESS}" "cashExitTriggerBps()(uint16)" | awk '{print $1}')"
 HOOK_DOWN_CASH_CONFIRM_PERIODS="$(cast_rpc call --rpc-url "${RPC_URL}" "${HOOK_ADDRESS}" "downCashConfirmPeriods()(uint8)" | awk '{print $1}')"
-HOOK_EMERGENCY_FLOOR_CLOSEVOL_USD6="$(cast_rpc call --rpc-url "${RPC_URL}" "${HOOK_ADDRESS}" "emergencyFloorCloseVolUsd6()(uint64)" | awk '{print $1}')"
+HOOK_EMERGENCY_FLOOR_TRIGGER_USD6="$(cast_rpc call --rpc-url "${RPC_URL}" "${HOOK_ADDRESS}" "emergencyFloorCloseVolUsd6()(uint64)" | awk '{print $1}')"
 HOOK_EMERGENCY_CONFIRM_PERIODS="$(cast_rpc call --rpc-url "${RPC_URL}" "${HOOK_ADDRESS}" "emergencyConfirmPeriods()(uint8)" | awk '{print $1}')"
 HOOK_MAX_HOOK_FEE_PERCENT="$(cast_rpc call --rpc-url "${RPC_URL}" "${HOOK_ADDRESS}" "MAX_HOOK_FEE_PERCENT()(uint16)" | awk '{print $1}')"
 HOOK_OWNER_ADDR="$(cast_rpc call --rpc-url "${RPC_URL}" "${HOOK_ADDRESS}" "owner()(address)" | awk '{print $1}')"
@@ -613,24 +612,23 @@ if ! [[ "${HOOK_REGIME_FLOOR}" =~ ^[0-9]+$ \
      && "${HOOK_REGIME_EXTREME}" =~ ^[0-9]+$ \
      && "${HOOK_REGIME_CASH}" =~ ^[0-9]+$ \
      && "${HOOK_FEE_TIER_COUNT}" =~ ^[0-9]+$ \
-     && "${HOOK_FLOOR_FEE_PIPS}" =~ ^[0-9]+$ \
-     && "${HOOK_CASH_FEE_PIPS}" =~ ^[0-9]+$ \
-     && "${HOOK_EXTREME_FEE_PIPS}" =~ ^[0-9]+$ \
+     && "${HOOK_FLOOR_FEE_RAW}" =~ ^[0-9]+$ \
+     && "${HOOK_CASH_FEE_RAW}" =~ ^[0-9]+$ \
+     && "${HOOK_EXTREME_FEE_RAW}" =~ ^[0-9]+$ \
      && "${HOOK_EMA_PERIODS}" =~ ^[0-9]+$ \
-     && "${HOOK_DEADBAND_BPS}" =~ ^[0-9]+$ \
      && "${HOOK_LULL_RESET_SECONDS}" =~ ^[0-9]+$ \
-     && "${HOOK_MIN_CLOSEVOL_TO_CASH_USD6}" =~ ^[0-9]+$ \
-     && "${HOOK_UP_R_TO_CASH_BPS}" =~ ^[0-9]+$ \
+     && "${HOOK_MIN_VOLUME_TO_ENTER_CASH_USD6}" =~ ^[0-9]+$ \
+     && "${HOOK_CASH_ENTER_TRIGGER_BPS}" =~ ^[0-9]+$ \
      && "${HOOK_CASH_HOLD_PERIODS}" =~ ^[0-9]+$ \
-     && "${HOOK_MIN_CLOSEVOL_TO_EXTREME_USD6}" =~ ^[0-9]+$ \
-     && "${HOOK_UP_R_TO_EXTREME_BPS}" =~ ^[0-9]+$ \
+     && "${HOOK_MIN_VOLUME_TO_ENTER_EXTREME_USD6}" =~ ^[0-9]+$ \
+     && "${HOOK_EXTREME_ENTER_TRIGGER_BPS}" =~ ^[0-9]+$ \
      && "${HOOK_UP_EXTREME_CONFIRM_PERIODS}" =~ ^[0-9]+$ \
      && "${HOOK_EXTREME_HOLD_PERIODS}" =~ ^[0-9]+$ \
-     && "${HOOK_DOWN_R_FROM_EXTREME_BPS}" =~ ^[0-9]+$ \
+     && "${HOOK_EXTREME_EXIT_TRIGGER_BPS}" =~ ^[0-9]+$ \
      && "${HOOK_DOWN_EXTREME_CONFIRM_PERIODS}" =~ ^[0-9]+$ \
-     && "${HOOK_DOWN_R_FROM_CASH_BPS}" =~ ^[0-9]+$ \
+     && "${HOOK_CASH_EXIT_TRIGGER_BPS}" =~ ^[0-9]+$ \
      && "${HOOK_DOWN_CASH_CONFIRM_PERIODS}" =~ ^[0-9]+$ \
-     && "${HOOK_EMERGENCY_FLOOR_CLOSEVOL_USD6}" =~ ^[0-9]+$ \
+     && "${HOOK_EMERGENCY_FLOOR_TRIGGER_USD6}" =~ ^[0-9]+$ \
      && "${HOOK_EMERGENCY_CONFIRM_PERIODS}" =~ ^[0-9]+$ \
      && "${HOOK_MAX_HOOK_FEE_PERCENT}" =~ ^[0-9]+$ \
      && "${HOOK_OWNER_ADDR}" =~ ^0x[0-9a-fA-F]{40}$ ]]; then
@@ -645,7 +643,7 @@ if (( HOOK_REGIME_FLOOR >= HOOK_REGIME_CASH || HOOK_REGIME_CASH >= HOOK_REGIME_E
   echo "ERROR: invalid fixed regime ids."
   exit 1
 fi
-if (( HOOK_FLOOR_FEE_PIPS <= 0 || HOOK_FLOOR_FEE_PIPS >= HOOK_CASH_FEE_PIPS || HOOK_CASH_FEE_PIPS >= HOOK_EXTREME_FEE_PIPS )); then
+if (( HOOK_FLOOR_FEE_RAW <= 0 || HOOK_FLOOR_FEE_RAW >= HOOK_CASH_FEE_RAW || HOOK_CASH_FEE_RAW >= HOOK_EXTREME_FEE_RAW )); then
   echo "ERROR: invalid on-chain regime fee ordering."
   exit 1
 fi
@@ -678,9 +676,9 @@ percent_to_bps() {
 }
 
 declare -a HOOK_FEE_TIER_VALUES=()
-HOOK_FEE_TIER_VALUES[0]="${HOOK_FLOOR_FEE_PIPS}"
-HOOK_FEE_TIER_VALUES[1]="${HOOK_CASH_FEE_PIPS}"
-HOOK_FEE_TIER_VALUES[2]="${HOOK_EXTREME_FEE_PIPS}"
+HOOK_FEE_TIER_VALUES[0]="${HOOK_FLOOR_FEE_RAW}"
+HOOK_FEE_TIER_VALUES[1]="${HOOK_CASH_FEE_RAW}"
+HOOK_FEE_TIER_VALUES[2]="${HOOK_EXTREME_FEE_RAW}"
 
 if [[ -n "${FLOOR_TIER:-}" && -n "${EXTREME_TIER:-}" ]]; then
   cfg_floor_pips="$(percent_to_pips "$(printf '%s' "${FLOOR_TIER}" | tr -d '[:space:]')" || true)"
@@ -689,33 +687,17 @@ if [[ -n "${FLOOR_TIER:-}" && -n "${EXTREME_TIER:-}" ]]; then
     echo "ERROR: invalid FLOOR_TIER/EXTREME_TIER in config. Use decimal percent values (for example 0.04 and 0.45)."
     exit 1
   fi
-  hook_floor_pips="${HOOK_FLOOR_FEE_PIPS}"
-  hook_extreme_pips="${HOOK_EXTREME_FEE_PIPS}"
-  if [[ -z "${hook_floor_pips}" || -z "${hook_extreme_pips}" ]]; then
+  hook_floor_fee_raw="${HOOK_FLOOR_FEE_RAW}"
+  hook_extreme_fee_raw="${HOOK_EXTREME_FEE_RAW}"
+  if [[ -z "${hook_floor_fee_raw}" || -z "${hook_extreme_fee_raw}" ]]; then
     echo "ERROR: failed to read on-chain floor/extreme regime fees."
     exit 1
   fi
 
-  deadband_mismatch=0
-  cfg_deadband_bps=""
-  if [[ -n "${DEADBAND_PERCENT:-}" ]]; then
-    cfg_deadband_bps="$(percent_to_bps "$(printf '%s' "${DEADBAND_PERCENT}" | tr -d '[:space:]')" || true)"
-  elif [[ "${DEADBAND_BPS:-}" =~ ^[0-9]+$ ]]; then
-    cfg_deadband_bps="${DEADBAND_BPS}"
-  fi
-  if [[ -n "${cfg_deadband_bps}" ]] && (( HOOK_DEADBAND_BPS != cfg_deadband_bps )); then
-    deadband_mismatch=1
-  fi
-  cfg_deadband_display="${DEADBAND_PERCENT:-}"
-  if [[ -n "${cfg_deadband_display}" ]]; then
-    cfg_deadband_display="${cfg_deadband_display}%"
-  else
-    cfg_deadband_display="${DEADBAND_BPS:-?}"
-  fi
-  if [[ "${hook_floor_pips}" != "${cfg_floor_pips}" || "${hook_extreme_pips}" != "${cfg_extreme_pips}" || "${deadband_mismatch}" -eq 1 ]]; then
+  if [[ "${hook_floor_fee_raw}" != "${cfg_floor_pips}" || "${hook_extreme_fee_raw}" != "${cfg_extreme_pips}" ]]; then
     echo "ERROR: hook params mismatch with config."
-    echo "       on-chain: floor=f${hook_floor_pips} cash=f${HOOK_CASH_FEE_PIPS} extreme=f${hook_extreme_pips} deadband=$(bps_to_percent "${HOOK_DEADBAND_BPS}")"
-    echo "       config:   floor=${FLOOR_TIER}% (f${cfg_floor_pips}) extreme=${EXTREME_TIER}% (f${cfg_extreme_pips}) deadband=${cfg_deadband_display}"
+    echo "       on-chain: floor=f${hook_floor_fee_raw} cash=f${HOOK_CASH_FEE_RAW} extreme=f${hook_extreme_fee_raw}"
+    echo "       config:   floor=${FLOOR_TIER}% (f${cfg_floor_pips}) extreme=${EXTREME_TIER}% (f${cfg_extreme_pips})"
     echo "       Deploy a new hook/pool with current config, then rerun simulate_fee_cycle."
     exit 1
   fi
@@ -953,8 +935,8 @@ run_cases_anomaly_checks() {
   if [[ -z "${sel_invalid_rescue}" ]]; then sel_invalid_rescue="InvalidRescueCurrency"; fi
   if [[ -z "${sel_not_owner}" ]]; then sel_not_owner="NotOwner"; fi
 
-  bad_params_hold="(${HOOK_MIN_CLOSEVOL_TO_CASH_USD6},${HOOK_UP_R_TO_CASH_BPS},0,${HOOK_MIN_CLOSEVOL_TO_EXTREME_USD6},${HOOK_UP_R_TO_EXTREME_BPS},${HOOK_UP_EXTREME_CONFIRM_PERIODS},${HOOK_EXTREME_HOLD_PERIODS},${HOOK_DOWN_R_FROM_EXTREME_BPS},${HOOK_DOWN_EXTREME_CONFIRM_PERIODS},${HOOK_DOWN_R_FROM_CASH_BPS},${HOOK_DOWN_CASH_CONFIRM_PERIODS},${HOOK_EMERGENCY_FLOOR_CLOSEVOL_USD6},${HOOK_EMERGENCY_CONFIRM_PERIODS})"
-  bad_params_confirm="(${HOOK_MIN_CLOSEVOL_TO_CASH_USD6},${HOOK_UP_R_TO_CASH_BPS},${HOOK_CASH_HOLD_PERIODS},${HOOK_MIN_CLOSEVOL_TO_EXTREME_USD6},${HOOK_UP_R_TO_EXTREME_BPS},${HOOK_UP_EXTREME_CONFIRM_PERIODS},${HOOK_EXTREME_HOLD_PERIODS},${HOOK_DOWN_R_FROM_EXTREME_BPS},${HOOK_DOWN_EXTREME_CONFIRM_PERIODS},${HOOK_DOWN_R_FROM_CASH_BPS},0,${HOOK_EMERGENCY_FLOOR_CLOSEVOL_USD6},${HOOK_EMERGENCY_CONFIRM_PERIODS})"
+  bad_params_hold="(${HOOK_MIN_VOLUME_TO_ENTER_CASH_USD6},${HOOK_CASH_ENTER_TRIGGER_BPS},0,${HOOK_MIN_VOLUME_TO_ENTER_EXTREME_USD6},${HOOK_EXTREME_ENTER_TRIGGER_BPS},${HOOK_UP_EXTREME_CONFIRM_PERIODS},${HOOK_EXTREME_HOLD_PERIODS},${HOOK_EXTREME_EXIT_TRIGGER_BPS},${HOOK_DOWN_EXTREME_CONFIRM_PERIODS},${HOOK_CASH_EXIT_TRIGGER_BPS},${HOOK_DOWN_CASH_CONFIRM_PERIODS},${HOOK_EMERGENCY_FLOOR_TRIGGER_USD6},${HOOK_EMERGENCY_CONFIRM_PERIODS})"
+  bad_params_confirm="(${HOOK_MIN_VOLUME_TO_ENTER_CASH_USD6},${HOOK_CASH_ENTER_TRIGGER_BPS},${HOOK_CASH_HOLD_PERIODS},${HOOK_MIN_VOLUME_TO_ENTER_EXTREME_USD6},${HOOK_EXTREME_ENTER_TRIGGER_BPS},${HOOK_UP_EXTREME_CONFIRM_PERIODS},${HOOK_EXTREME_HOLD_PERIODS},${HOOK_EXTREME_EXIT_TRIGGER_BPS},${HOOK_DOWN_EXTREME_CONFIRM_PERIODS},${HOOK_CASH_EXIT_TRIGGER_BPS},0,${HOOK_EMERGENCY_FLOOR_TRIGGER_USD6},${HOOK_EMERGENCY_CONFIRM_PERIODS})"
 
   expect_hook_call_revert_contains \
     "ANOM-01 scheduleHookFeePercentChange above limit" \
@@ -985,19 +967,18 @@ run_cases_anomaly_checks() {
     "ANOM-06 setTimingParams requires paused" \
     "${sel_requires_paused}" \
     "${HOOK_OWNER_ADDR}" \
-    "setTimingParams(uint32,uint8,uint32,uint16)" \
+    "setTimingParams(uint32,uint8,uint32)" \
     "${PERIOD_SECONDS}" \
     "${HOOK_EMA_PERIODS}" \
-    "${HOOK_LULL_RESET_SECONDS}" \
-    "${HOOK_DEADBAND_BPS}" || return 1
+    "${HOOK_LULL_RESET_SECONDS}" || return 1
   expect_hook_call_revert_contains \
     "ANOM-07 setRegimeFees requires paused" \
     "${sel_requires_paused}" \
     "${HOOK_OWNER_ADDR}" \
     "setRegimeFees(uint24,uint24,uint24)" \
-    "${HOOK_FLOOR_FEE_PIPS}" \
-    "${HOOK_CASH_FEE_PIPS}" \
-    "${HOOK_EXTREME_FEE_PIPS}" || return 1
+    "${HOOK_FLOOR_FEE_RAW}" \
+    "${HOOK_CASH_FEE_RAW}" \
+    "${HOOK_EXTREME_FEE_RAW}" || return 1
   expect_hook_call_revert_contains \
     "ANOM-08 setControllerParams requires paused (hold not evaluated hot)" \
     "${sel_requires_paused}" \
@@ -2490,13 +2471,13 @@ pick_high_amount() {
 
 pick_low_amount() {
   local state="$1"
-  local ema target
-  IFS='|' read -r _ _ ema _ _ _ <<<"${state}"
+  local ema idx target
+  IFS='|' read -r _ _ ema _ idx _ <<<"${state}"
   if [[ -n "${LOW_SWAP_AMOUNT}" ]]; then
     echo "${LOW_SWAP_AMOUNT}"
     return
   fi
-  target="$(random_target_deadband_volume "${ema}")"
+  target="$(random_target_no_change_volume "${ema}" "${idx}")"
   echo "$(amount_for_target_vol "${target}")"
 }
 
@@ -2522,12 +2503,12 @@ random_target_up_volume_raw() {
 
 random_target_up_cash_volume() {
   local ema="$1"
-  random_target_up_volume_raw "${ema}" "${HOOK_UP_R_TO_CASH_BPS}" "${HOOK_MIN_CLOSEVOL_TO_CASH_USD6}"
+  random_target_up_volume_raw "${ema}" "${HOOK_CASH_ENTER_TRIGGER_BPS}" "${HOOK_MIN_VOLUME_TO_ENTER_CASH_USD6}"
 }
 
 random_target_up_extreme_volume() {
   local ema="$1"
-  random_target_up_volume_raw "${ema}" "${HOOK_UP_R_TO_EXTREME_BPS}" "${HOOK_MIN_CLOSEVOL_TO_EXTREME_USD6}"
+  random_target_up_volume_raw "${ema}" "${HOOK_EXTREME_ENTER_TRIGGER_BPS}" "${HOOK_MIN_VOLUME_TO_ENTER_EXTREME_USD6}"
 }
 
 random_target_down_volume_raw() {
@@ -2552,28 +2533,49 @@ random_target_down_volume_raw() {
 
 random_target_down_extreme_volume() {
   local ema="$1"
-  random_target_down_volume_raw "${ema}" "${HOOK_DOWN_R_FROM_EXTREME_BPS}"
+  random_target_down_volume_raw "${ema}" "${HOOK_EXTREME_EXIT_TRIGGER_BPS}"
 }
 
 random_target_down_cash_volume() {
   local ema="$1"
-  random_target_down_volume_raw "${ema}" "${HOOK_DOWN_R_FROM_CASH_BPS}"
+  random_target_down_volume_raw "${ema}" "${HOOK_CASH_EXIT_TRIGGER_BPS}"
 }
 
-random_target_deadband_volume() {
+random_target_no_change_volume() {
   local ema="$1"
-  local lower upper band target
+  local idx="$2"
+  local target lower upper
   if ! [[ "${ema}" =~ ^[0-9]+$ ]]; then ema=0; fi
+  if ! [[ "${idx}" =~ ^[0-9]+$ ]]; then idx="${HOOK_REGIME_FLOOR}"; fi
   if (( ema <= 0 )); then
     echo "2000000"
     return
   fi
-  lower=$(( ema * (10000 - HOOK_DEADBAND_BPS) / 10000 ))
-  upper=$(( ema * (10000 + HOOK_DEADBAND_BPS) / 10000 ))
-  band=$((upper - lower))
-  target=$(( lower + band / 2 ))
-  if (( target < lower )); then target="${lower}"; fi
-  if (( target > upper )); then target="${upper}"; fi
+  if (( idx <= HOOK_REGIME_FLOOR )); then
+    upper="${HOOK_CASH_ENTER_TRIGGER_BPS}"
+    if ! [[ "${upper}" =~ ^[0-9]+$ ]] || (( upper <= 1200 )); then
+      upper=18500
+    fi
+    target=$(( ema * (upper - 900) / 10000 ))
+  elif (( idx >= HOOK_REGIME_EXTREME )); then
+    lower="${HOOK_EXTREME_EXIT_TRIGGER_BPS}"
+    if ! [[ "${lower}" =~ ^[0-9]+$ ]]; then
+      lower=12500
+    fi
+    target=$(( ema * (lower + 1200) / 10000 ))
+  else
+    lower="${HOOK_CASH_EXIT_TRIGGER_BPS}"
+    upper="${HOOK_EXTREME_ENTER_TRIGGER_BPS}"
+    if ! [[ "${lower}" =~ ^[0-9]+$ ]]; then lower=12500; fi
+    if ! [[ "${upper}" =~ ^[0-9]+$ ]]; then upper=40500; fi
+    lower=$(( ema * (lower + 500) / 10000 ))
+    upper=$(( ema * (upper - 500) / 10000 ))
+    if (( upper <= lower )); then
+      target=$(( ema * 15000 / 10000 ))
+    else
+      target=$(((lower + upper) / 2))
+    fi
+  fi
   if (( target < 2000000 )); then target=2000000; fi
   echo "${target}"
 }
@@ -2608,8 +2610,8 @@ random_plan_v2_amount() {
       target="$(random_target_up_cash_volume "${ema}")"
       reason="v2-up-cash"
     elif (( roll <= 90 )); then
-      target="$(random_target_deadband_volume "${ema}")"
-      reason="v2-deadband"
+      target="$(random_target_no_change_volume "${ema}" "${idx}")"
+      reason="v2-no-change"
     else
       target="${HOOK_DUST_CLOSE_VOL_USD6}"
       reason="v2-no-swaps"
@@ -2617,7 +2619,7 @@ random_plan_v2_amount() {
   elif (( idx >= HOOK_REGIME_EXTREME )); then
     if [[ "${hold_remaining}" =~ ^[0-9]+$ ]] && (( hold_remaining > 0 )); then
       if (( roll <= 75 )); then
-        target="$(random_target_deadband_volume "${ema}")"
+        target="$(random_target_no_change_volume "${ema}" "${idx}")"
         reason="v2-hold"
       else
         target="${HOOK_DUST_CLOSE_VOL_USD6}"
@@ -2628,8 +2630,8 @@ random_plan_v2_amount() {
         target="$(random_target_down_extreme_volume "${ema}")"
         reason="v2-down-to-cash"
       elif (( roll <= 85 )); then
-        target="$(random_target_deadband_volume "${ema}")"
-        reason="v2-deadband"
+        target="$(random_target_no_change_volume "${ema}" "${idx}")"
+        reason="v2-no-change"
       else
         target="${HOOK_DUST_CLOSE_VOL_USD6}"
         reason="v2-no-swaps"
@@ -2643,8 +2645,8 @@ random_plan_v2_amount() {
       target="$(random_target_down_cash_volume "${ema}")"
       reason="v2-down-floor-seed"
     else
-      target="$(random_target_deadband_volume "${ema}")"
-      reason="v2-deadband"
+      target="$(random_target_no_change_volume "${ema}" "${idx}")"
+      reason="v2-no-change"
     fi
   else
     if (( roll <= 45 )); then
@@ -2654,8 +2656,8 @@ random_plan_v2_amount() {
       target="$(random_target_down_cash_volume "${ema}")"
       reason="v2-down-floor"
     else
-      target="$(random_target_deadband_volume "${ema}")"
-      reason="v2-deadband"
+      target="$(random_target_no_change_volume "${ema}" "${idx}")"
+      reason="v2-no-change"
     fi
   fi
 
@@ -2942,7 +2944,6 @@ reason_code_to_label() {
     6) echo "ZERO_EMA_DECAY" ;;
     7) echo "NO_SWAPS" ;;
     8) echo "LULL_RESET" ;;
-    9) echo "DEADBAND" ;;
     10) echo "EMA_BOOTSTRAP" ;;
     11) echo "JUMP_CASH" ;;
     12) echo "JUMP_EXTREME" ;;
@@ -2950,7 +2951,7 @@ reason_code_to_label() {
     14) echo "DOWN_TO_FLOOR" ;;
     15) echo "HOLD" ;;
     16) echo "EMERGENCY_FLOOR" ;;
-    17) echo "BOOTSTRAP_V2" ;;
+    17) echo "NO_CHANGE" ;;
     *) echo "UNKNOWN" ;;
   esac
 }
@@ -3130,8 +3131,13 @@ cases_track_period_event() {
   TC_MODEL_CLOSE_PASS=$((TC_MODEL_CLOSE_PASS + 1))
 
   case "${reason_code}" in
-    10|17)
+    10)
       CASES_RUN_BOOTSTRAP_OK=1
+      ;;
+    17)
+      CASES_RUN_NO_CHANGE_OK=1
+      TC_NO_CHANGE_OBS=$((TC_NO_CHANGE_OBS + 1))
+      TC_NO_CHANGE_PASS=$((TC_NO_CHANGE_PASS + 1))
       ;;
     11)
       CASES_RUN_JUMP_CASH_OK=1
@@ -3158,11 +3164,6 @@ cases_track_period_event() {
       ;;
     16)
       CASES_RUN_EMERGENCY_OK=1
-      ;;
-    9)
-      CASES_RUN_DEADBAND_OK=1
-      TC_DEADBAND_OBS=$((TC_DEADBAND_OBS + 1))
-      TC_DEADBAND_PASS=$((TC_DEADBAND_PASS + 1))
       ;;
     7)
       CASES_RUN_NO_SWAPS_OK=1
@@ -3511,9 +3512,9 @@ TC_LULL_RESET_FAIL=0
 TC_REVERSAL_LOCK_OBS=0
 TC_REVERSAL_LOCK_PASS=0
 TC_REVERSAL_LOCK_FAIL=0
-TC_DEADBAND_OBS=0
-TC_DEADBAND_PASS=0
-TC_DEADBAND_FAIL=0
+TC_NO_CHANGE_OBS=0
+TC_NO_CHANGE_PASS=0
+TC_NO_CHANGE_FAIL=0
 TC_CAP_CLAMP_OBS=0
 TC_CAP_CLAMP_PASS=0
 TC_CAP_CLAMP_FAIL=0
@@ -3552,21 +3553,6 @@ tc_status() {
   else
     echo "PENDING"
   fi
-}
-
-cases_case_allowed_for_stage() {
-  local case_key="$1"
-  if (( CASES_MODE != 1 )); then
-    return 0
-  fi
-  case "${case_key}:${CASES_STAGE}" in
-    cap:cap_probe) return 0 ;;
-    floor:floor_probe) return 0 ;;
-    reversal:reversal_opposite) return 0 ;;
-    deadband:deadband_probe) return 0 ;;
-    lull:lull_wait|lull:post_lull_trigger|lull:await_lull_validation) return 0 ;;
-    *) return 1 ;;
-  esac
 }
 
 evaluate_hook_invariants() {
@@ -3674,7 +3660,7 @@ render_hook_cases_table() {
   print_hook_flag_row "V2-4" "hold blocks down" "${CASES_RUN_HOLD_OK}"
   print_hook_flag_row "V2-5" "down extreme -> cash" "${CASES_RUN_DOWN_CASH_OK}"
   print_hook_flag_row "V2-6" "down cash -> floor" "${CASES_RUN_FLOOR_OK}"
-  print_hook_flag_row "V2-7" "deadband no-change" "${CASES_RUN_DEADBAND_OK}"
+  print_hook_flag_row "V2-7" "no-change close" "${CASES_RUN_NO_CHANGE_OK}"
   print_hook_flag_row "V2-8" "no-swaps close" "${CASES_RUN_NO_SWAPS_OK}"
   print_hook_flag_row "V2-9" "emergency floor guard" "${CASES_RUN_EMERGENCY_OK}"
   print_hook_flag_row "V2-10" "lull reset" "${CASES_RUN_LULL_OK}"
@@ -3852,7 +3838,7 @@ cases_all_required_done() {
         || CASES_RUN_FLOOR_OK != 1 \
         || CASES_RUN_NO_SWAPS_OK != 1 \
         || CASES_RUN_EMERGENCY_OK != 1 \
-        || CASES_RUN_DEADBAND_OK != 1 \
+        || CASES_RUN_NO_CHANGE_OK != 1 \
         || CASES_RUN_LULL_OK != 1 \
         || CASES_RUN_ANOMALY_OK != 1 )); then
     return 1
@@ -3889,11 +3875,6 @@ cases_reversal_mid_idx() {
     mid="${HOOK_REGIME_EXTREME}"
   fi
   echo "${mid}"
-}
-
-cases_mark_completion_for_stage() {
-  # Legacy stage completion helper is retained for compatibility but no longer used in v2 flow.
-  return
 }
 
 seconds_to_next_period() {
@@ -4064,16 +4045,16 @@ cases_select_stage() {
       fi
       ;;
     down_to_floor)
-      if (( CASES_RUN_DEADBAND_OK == 1 )); then
+      if (( CASES_RUN_NO_CHANGE_OK == 1 )); then
         cases_set_stage "floor_probe"
       fi
       ;;
     floor_probe)
       if (( CASES_RUN_NO_SWAPS_OK == 1 )); then
-        cases_set_stage "deadband_probe"
+        cases_set_stage "emergency_probe"
       fi
       ;;
-    deadband_probe)
+    emergency_probe)
       if (( CASES_RUN_EMERGENCY_OK == 1 )); then
         cases_set_stage "lull_prepare"
       fi
@@ -4116,12 +4097,12 @@ cases_stage_case_label() {
       echo "V2-6 down cash->floor"
       ;;
     down_to_floor)
-      echo "V2-7 deadband no-change"
+      echo "V2-7 no-change close"
       ;;
     floor_probe)
       echo "V2-8 no-swaps close"
       ;;
-    deadband_probe)
+    emergency_probe)
       echo "V2-9 emergency floor"
       ;;
     lull_prepare|lull_wait|post_lull_trigger|await_lull_validation)
@@ -4156,7 +4137,7 @@ cases_reset_cycle_context() {
   CASES_RUN_CAP_OK=0
   CASES_RUN_FLOOR_OK=0
   CASES_RUN_REV_OK=0
-  CASES_RUN_DEADBAND_OK=0
+  CASES_RUN_NO_CHANGE_OK=0
   CASES_RUN_LULL_OK=0
   CASES_RUN_BOOTSTRAP_OK=0
   CASES_RUN_JUMP_CASH_OK=0
@@ -4175,7 +4156,7 @@ cases_reset_cycle_context() {
   CASES_BASE_CAP_PASS="${TC_CAP_CLAMP_PASS}"
   CASES_BASE_FLOOR_PASS="${TC_FLOOR_CLAMP_PASS}"
   CASES_BASE_REV_PASS="${TC_REVERSAL_LOCK_PASS}"
-  CASES_BASE_DEADBAND_PASS="${TC_DEADBAND_PASS}"
+  CASES_BASE_NO_CHANGE_PASS="${TC_NO_CHANGE_PASS}"
   CASES_BASE_LULL_PASS="${TC_LULL_RESET_PASS}"
   cases_set_stage "up_to_cap"
 }
@@ -4190,11 +4171,11 @@ cases_target_up_volume() {
   if ! [[ "${step}" =~ ^[0-9]+$ ]]; then
     step=0
   fi
-  rbps="${HOOK_UP_R_TO_CASH_BPS}"
-  min_close="${HOOK_MIN_CLOSEVOL_TO_CASH_USD6}"
+  rbps="${HOOK_CASH_ENTER_TRIGGER_BPS}"
+  min_close="${HOOK_MIN_VOLUME_TO_ENTER_CASH_USD6}"
   if [[ "${CASES_STAGE}" == "cap_probe" ]]; then
-    rbps="${HOOK_UP_R_TO_EXTREME_BPS}"
-    min_close="${HOOK_MIN_CLOSEVOL_TO_EXTREME_USD6}"
+    rbps="${HOOK_EXTREME_ENTER_TRIGGER_BPS}"
+    min_close="${HOOK_MIN_VOLUME_TO_ENTER_EXTREME_USD6}"
   fi
   if ! [[ "${rbps}" =~ ^[0-9]+$ ]]; then rbps=11000; fi
   if ! [[ "${min_close}" =~ ^[0-9]+$ ]]; then min_close=2000000; fi
@@ -4223,9 +4204,9 @@ cases_target_down_volume() {
   if ! [[ "${step}" =~ ^[0-9]+$ ]]; then
     step=0
   fi
-  rbps="${HOOK_DOWN_R_FROM_CASH_BPS}"
+  rbps="${HOOK_CASH_EXIT_TRIGGER_BPS}"
   if [[ "${CASES_STAGE}" == "reversal_seed" || "${CASES_STAGE}" == "reversal_mid" ]]; then
-    rbps="${HOOK_DOWN_R_FROM_EXTREME_BPS}"
+    rbps="${HOOK_EXTREME_EXIT_TRIGGER_BPS}"
   fi
   if ! [[ "${rbps}" =~ ^[0-9]+$ ]]; then rbps=13000; fi
   if (( ema <= 0 )); then
@@ -4240,22 +4221,43 @@ cases_target_down_volume() {
   echo "${target}"
 }
 
-cases_target_deadband_volume() {
+cases_target_no_change_volume() {
   local ema="$1"
-  local lower upper band target
+  local idx="${2:-${HOOK_REGIME_FLOOR}}"
+  local target lower upper
   if ! [[ "${ema}" =~ ^[0-9]+$ ]]; then
     ema=0
+  fi
+  if ! [[ "${idx}" =~ ^[0-9]+$ ]]; then
+    idx="${HOOK_REGIME_FLOOR}"
   fi
   if (( ema <= 0 )); then
     echo "2000000"
     return
   fi
-  lower=$(( ema * (10000 - HOOK_DEADBAND_BPS) / 10000 ))
-  upper=$(( ema * (10000 + HOOK_DEADBAND_BPS) / 10000 ))
-  band=$((upper - lower))
-  target=$(( lower + band / 2 ))
-  if (( target < lower )); then target="${lower}"; fi
-  if (( target > upper )); then target="${upper}"; fi
+  if (( idx <= HOOK_REGIME_FLOOR )); then
+    upper="${HOOK_CASH_ENTER_TRIGGER_BPS}"
+    if ! [[ "${upper}" =~ ^[0-9]+$ ]] || (( upper <= 1200 )); then
+      upper=18500
+    fi
+    target=$(( ema * (upper - 900) / 10000 ))
+  elif (( idx >= HOOK_REGIME_EXTREME )); then
+    lower="${HOOK_EXTREME_EXIT_TRIGGER_BPS}"
+    if ! [[ "${lower}" =~ ^[0-9]+$ ]]; then lower=12500; fi
+    target=$(( ema * (lower + 1200) / 10000 ))
+  else
+    lower="${HOOK_CASH_EXIT_TRIGGER_BPS}"
+    upper="${HOOK_EXTREME_ENTER_TRIGGER_BPS}"
+    if ! [[ "${lower}" =~ ^[0-9]+$ ]]; then lower=12500; fi
+    if ! [[ "${upper}" =~ ^[0-9]+$ ]]; then upper=40500; fi
+    lower=$(( ema * (lower + 500) / 10000 ))
+    upper=$(( ema * (upper - 500) / 10000 ))
+    if (( upper <= lower )); then
+      target=$(( ema * 15000 / 10000 ))
+    else
+      target=$(((lower + upper) / 2))
+    fi
+  fi
   if (( target < 2000000 )); then target=2000000; fi
   echo "${target}"
 }
@@ -4285,47 +4287,6 @@ cases_refresh_stage_reference() {
     CASES_STAGE_REF_STAGE="${CASES_STAGE}"
     CASES_STAGE_REF_EMA="${ref_ema}"
   fi
-}
-
-cases_anchor_tick_from_range() {
-  python3 -S - "${LIQ_RANGE_MIN_USD:-}" "${LIQ_RANGE_MAX_USD:-}" "${STABLE_SIDE}" "${TOKEN0_DECIMALS}" "${TOKEN1_DECIMALS}" <<'PY'
-import math
-import re
-import sys
-from decimal import Decimal, getcontext
-
-getcontext().prec = 80
-min_raw = (sys.argv[1] or "").strip()
-max_raw = (sys.argv[2] or "").strip()
-stable_side = (sys.argv[3] or "").strip()
-dec0 = int(sys.argv[4])
-dec1 = int(sys.argv[5])
-num_re = re.compile(r'^[0-9]+(?:[.][0-9]+)?$')
-
-if not num_re.match(min_raw) or not num_re.match(max_raw):
-    raise SystemExit(1)
-
-lo = Decimal(min_raw)
-hi = Decimal(max_raw)
-if lo <= 0 or hi <= 0 or hi <= lo:
-    raise SystemExit(1)
-
-# Center price in stable per volatile.
-center_stable_per_volatile = (lo * hi).sqrt()
-if stable_side == "token1":
-    price_t1_per_t0 = center_stable_per_volatile
-elif stable_side == "token0":
-    price_t1_per_t0 = Decimal(1) / center_stable_per_volatile
-else:
-    raise SystemExit(1)
-
-raw_price = price_t1_per_t0 * (Decimal(10) ** (dec0 - dec1))
-if raw_price <= 0:
-    raise SystemExit(1)
-
-tick = math.floor(math.log(float(raw_price), 1.0001))
-print(tick)
-PY
 }
 
 cases_pick_centering_side() {
@@ -4475,8 +4436,8 @@ cases_plan_next_action() {
       ;;
     reversal_mid)
       target_vol="$(cases_target_down_volume "${ref_ema}" "${CASES_STAGE_STEP}")"
-      if (( target_vol <= HOOK_EMERGENCY_FLOOR_CLOSEVOL_USD6 )); then
-        target_vol=$((HOOK_EMERGENCY_FLOOR_CLOSEVOL_USD6 + 1500000))
+      if (( target_vol <= HOOK_EMERGENCY_FLOOR_TRIGGER_USD6 )); then
+        target_vol=$((HOOK_EMERGENCY_FLOOR_TRIGGER_USD6 + 1500000))
       fi
       reason="case-hold-probe"
       ;;
@@ -4489,14 +4450,14 @@ cases_plan_next_action() {
       reason="case-down-to-floor"
       ;;
     down_to_floor)
-      target_vol="$(cases_target_deadband_volume "${ref_ema}")"
-      reason="case-deadband"
+      target_vol="$(cases_target_no_change_volume "${ref_ema}" "${idx}")"
+      reason="case-no-change"
       ;;
     floor_probe)
       target_vol="${HOOK_DUST_CLOSE_VOL_USD6}"
       reason="case-no-swaps"
       ;;
-    deadband_probe)
+    emergency_probe)
       if (( idx <= HOOK_REGIME_FLOOR )); then
         target_vol="$(cases_target_up_volume "${ref_ema}" "$((CASES_STAGE_STEP + 2))")"
         reason="case-emergency-seed"
@@ -4529,11 +4490,11 @@ cases_plan_next_action() {
       reason="case-lull-post-retry"
       ;;
     post_checks)
-      target_vol="$(cases_target_deadband_volume "${ref_ema}")"
+      target_vol="$(cases_target_no_change_volume "${ref_ema}" "${idx}")"
       reason="case-post-checks"
       ;;
     cycle_done)
-      target_vol="$(cases_target_deadband_volume "${ref_ema}")"
+      target_vol="$(cases_target_no_change_volume "${ref_ema}" "${idx}")"
       reason="case-cycle-done-hold"
       ;;
     *)
@@ -4543,7 +4504,7 @@ cases_plan_next_action() {
       ;;
   esac
 
-  if [[ "${CASES_STAGE}" == "floor_probe" || "${CASES_STAGE}" == "deadband_probe" || "${CASES_STAGE}" == "lull_wait" || "${CASES_STAGE}" == "post_lull_trigger" || "${CASES_STAGE}" == "await_lull_validation" ]]; then
+  if [[ "${CASES_STAGE}" == "floor_probe" || "${CASES_STAGE}" == "emergency_probe" || "${CASES_STAGE}" == "lull_wait" || "${CASES_STAGE}" == "post_lull_trigger" || "${CASES_STAGE}" == "await_lull_validation" ]]; then
     amount="$(amount_for_target_vol "${target_vol}")"
   else
     amount="$(amount_for_period_target_vol "${target_vol}" "${pv}")"
@@ -4624,7 +4585,7 @@ pick_wait_with_case_bias() {
           && RND_ATTEMPTS >= 160 \
           && TC_MODEL_CLOSE_PASS > 0 \
           && TC_REVERSAL_LOCK_PASS > 0 \
-          && TC_DEADBAND_PASS > 0 \
+          && TC_NO_CHANGE_PASS > 0 \
           && TC_CAP_CLAMP_PASS > 0 \
           && TC_FLOOR_CLAMP_PASS > 0 \
           && (RND_LULL_LAST_PROBE_ATTEMPT == 0 || (RND_ATTEMPTS - RND_LULL_LAST_PROBE_ATTEMPT) >= 320) )); then
@@ -4697,7 +4658,7 @@ random_write_stats_snapshot() {
     echo "cases_run_cap_ok=${CASES_RUN_CAP_OK}"
     echo "cases_run_floor_ok=${CASES_RUN_FLOOR_OK}"
     echo "cases_run_reversal_ok=${CASES_RUN_REV_OK}"
-    echo "cases_run_deadband_ok=${CASES_RUN_DEADBAND_OK}"
+    echo "cases_run_no_change_ok=${CASES_RUN_NO_CHANGE_OK}"
     echo "cases_run_lull_ok=${CASES_RUN_LULL_OK}"
     echo "cases_run_bootstrap_ok=${CASES_RUN_BOOTSTRAP_OK}"
     echo "cases_run_jump_cash_ok=${CASES_RUN_JUMP_CASH_OK}"
@@ -4771,10 +4732,10 @@ random_write_stats_snapshot() {
     echo "tc_fuzz_reversal_lock_obs=${TC_REVERSAL_LOCK_OBS}"
     echo "tc_fuzz_reversal_lock_pass=${TC_REVERSAL_LOCK_PASS}"
     echo "tc_fuzz_reversal_lock_fail=${TC_REVERSAL_LOCK_FAIL}"
-    echo "tc_fuzz_deadband_status=$(tc_status "${TC_DEADBAND_PASS}" "${TC_DEADBAND_FAIL}")"
-    echo "tc_fuzz_deadband_obs=${TC_DEADBAND_OBS}"
-    echo "tc_fuzz_deadband_pass=${TC_DEADBAND_PASS}"
-    echo "tc_fuzz_deadband_fail=${TC_DEADBAND_FAIL}"
+    echo "tc_fuzz_no_change_status=$(tc_status "${TC_NO_CHANGE_PASS}" "${TC_NO_CHANGE_FAIL}")"
+    echo "tc_fuzz_no_change_obs=${TC_NO_CHANGE_OBS}"
+    echo "tc_fuzz_no_change_pass=${TC_NO_CHANGE_PASS}"
+    echo "tc_fuzz_no_change_fail=${TC_NO_CHANGE_FAIL}"
     echo "tc_fuzz_lull_reset_status=$(tc_status "${TC_LULL_RESET_PASS}" "${TC_LULL_RESET_FAIL}")"
     echo "tc_fuzz_lull_reset_obs=${TC_LULL_RESET_OBS}"
     echo "tc_fuzz_lull_reset_pass=${TC_LULL_RESET_PASS}"
@@ -4926,8 +4887,7 @@ random_render_dashboard() {
   local now elapsed
   local current_tier floor_tier cap_tier
   local current_pct floor_pct cap_pct
-  local mode_label pool_id_display live_lp_fee price_usd_display deadband_pct ema_human
-  local range_min_usd range_max_usd range_display
+  local mode_label pool_id_display live_lp_fee price_usd_display ema_human
   local econ_vol_usd econ_fee_usd econ_fee0_fmt econ_fee1_fmt
   local econ_avg_fee_bips econ_avg_fee_pct
   local econ_avg_fee_bips_fmt tick_fmt active_liq_usd6 active_liq_display
@@ -4951,7 +4911,6 @@ random_render_dashboard() {
     live_lp_fee="${RND_CURRENT_FEE}"
   fi
   price_usd_display="$(pool_price_usd_display "${RND_POOL_PRICE_T1_PER_T0}")"
-  deadband_pct="$(bps_to_percent "${HOOK_DEADBAND_BPS}")"
   ema_human="$(ema_periods_human "${PERIOD_SECONDS}" "${HOOK_EMA_PERIODS}")"
   econ_vol_usd="$(usd6_to_dollar "${RND_ECON_VOL_USD6}")"
   econ_fee_usd="$(usd6_to_dollar "${RND_ECON_FEE_USD6}")"
@@ -4998,12 +4957,6 @@ random_render_dashboard() {
   hook_bal1_usd="$(token_raw_to_usd "${hook_bal1_raw}" "${CURRENCY1}" "${TOKEN1_DECIMALS}" 2>/dev/null || true)"
   if [[ -z "${hook_bal0_usd}" ]]; then hook_bal0_usd="n/a"; fi
   if [[ -z "${hook_bal1_usd}" ]]; then hook_bal1_usd="n/a"; fi
-  range_display="n/a"
-  if [[ "${LIQ_RANGE_MIN_USD:-}" =~ ^[0-9]+$ && "${LIQ_RANGE_MAX_USD:-}" =~ ^[0-9]+$ ]]; then
-    range_min_usd="$(format_usd_int "${LIQ_RANGE_MIN_USD}")"
-    range_max_usd="$(format_usd_int "${LIQ_RANGE_MAX_USD}")"
-    range_display="${range_min_usd} - ${range_max_usd}"
-  fi
   mode_label="random"
   if (( CASES_MODE == 1 )); then
     mode_label="cases"
@@ -5022,12 +4975,12 @@ random_render_dashboard() {
   echo "Hook:"
   echo "  Address: ${HOOK_ADDRESS}"
   echo "  Deploy: floor=${floor_pct} | cap=${cap_pct}"
-  echo "  Algo: period=${PERIOD_SECONDS}s | emaPeriods=${HOOK_EMA_PERIODS} (~${ema_human}) | deadband=${deadband_pct} | lullReset=${HOOK_LULL_RESET_SECONDS}s | tickSpacing=${TICK_SPACING} | stableSide=${STABLE_SIDE}"
+  echo "  Algo: period=${PERIOD_SECONDS}s | emaPeriods=${HOOK_EMA_PERIODS} (~${ema_human}) | lullReset=${HOOK_LULL_RESET_SECONDS}s | tickSpacing=${TICK_SPACING} | stableSide=${STABLE_SIDE}"
   echo "  Live: periodVol=${hook_period_vol_usd} | ema=${hook_ema_usd} | directionFlag=${hook_direction_flag} | balance=${TOKEN0_SYMBOL}=${hook_bal0_fmt} (${hook_bal0_usd}) | ${TOKEN1_SYMBOL}=${hook_bal1_fmt} (${hook_bal1_usd})"
   echo
   echo "Pool:"
   echo "  Id: ${pool_id_display}"
-  echo "  Price USD: ${price_usd_display} | Range: ${range_display} | Active Liquidity: ${active_liq_display}"
+  echo "  Price USD: ${price_usd_display} | Active Liquidity: ${active_liq_display}"
   echo "  Fee Level: ${current_pct} | Avg Fee Level: ${econ_avg_fee_pct}"
   echo "  Volume: ${econ_vol_usd} | Fees: ${econ_fee_usd} (${TOKEN0_SYMBOL}=${econ_fee0_fmt} + ${TOKEN1_SYMBOL}=${econ_fee1_fmt})"
   echo
@@ -5248,12 +5201,6 @@ run_random_mode() {
       RND_ARB_MODE="disabled"
       RND_ARB_ENABLED=0
       anchor_tick="${tick_now}"
-      if (( CASES_MODE == 1 )); then
-        center_tick="$(cases_anchor_tick_from_range 2>/dev/null || true)"
-        if [[ "${center_tick}" =~ ^-?[0-9]+$ ]]; then
-          anchor_tick="${center_tick}"
-        fi
-      fi
       RND_ARB_ANCHOR_TICK="${anchor_tick}"
       RND_ARB_CURRENT_TICK="${tick_now}"
       RND_ARB_TICK_DEV=0

@@ -43,7 +43,6 @@ contract PrepareGasScenarioLive is LiveOpsBase {
             '"periodSeconds":', vm.toString(hook.periodSeconds()), ",",
             '"emaPeriods":', vm.toString(hook.emaPeriods()), ",",
             '"lullResetSeconds":', vm.toString(hook.lullResetSeconds()), ",",
-            '"deadbandBps":', vm.toString(hook.deadbandBps()), ",",
             '"wasPaused":', wasPaused ? "true" : "false",
             "}"
         );
@@ -56,7 +55,7 @@ contract PrepareGasScenarioLive is LiveOpsBase {
         if (!wasPaused) {
             hook.pause();
         }
-        hook.setTimingParams(gasPeriodSeconds, hook.emaPeriods(), gasLullResetSeconds, hook.deadbandBps());
+        hook.setTimingParams(gasPeriodSeconds, hook.emaPeriods(), gasLullResetSeconds);
         hook.emergencyResetToFloor();
         if (cfg.stableToken != address(0)) {
             IERC20Minimal(cfg.stableToken).approve(driver, type(uint256).max);

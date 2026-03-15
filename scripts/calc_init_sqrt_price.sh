@@ -67,7 +67,18 @@ if [[ ! -f "$CONFIG_PATH" ]]; then echo "ERROR: config not found: $CONFIG_PATH" 
 # shellcheck disable=SC1090
 set -a
 source "$CONFIG_PATH"
+CONFIG_DIR="$(cd "$(dirname "$CONFIG_PATH")" && pwd)"
+DEPLOY_ENV_PATH="${CONFIG_DIR}/deploy.env"
+INIT_PRICE_SOURCE="$CONFIG_PATH"
+if [[ -f "${DEPLOY_ENV_PATH}" && "${DEPLOY_ENV_PATH}" != "${CONFIG_PATH}" ]]; then
+  # shellcheck disable=SC1090
+  source "${DEPLOY_ENV_PATH}"
+  INIT_PRICE_SOURCE="${DEPLOY_ENV_PATH}"
+fi
 set +a
+
+if [[ -z "${VOLATILE:-}" && -n "${DEPLOY_VOLATILE:-}" ]]; then VOLATILE="${DEPLOY_VOLATILE}"; fi
+if [[ -z "${STABLE:-}" && -n "${DEPLOY_STABLE:-}" ]]; then STABLE="${DEPLOY_STABLE}"; fi
 
 if [[ -z "${VOLATILE:-}" || -z "${STABLE:-}" ]]; then
   echo "ERROR: VOLATILE and STABLE must be set in $CONFIG_PATH" >&2
@@ -78,7 +89,7 @@ if [[ "$FROM_USD" -ne 1 ]]; then
   exit 1
 fi
 if [[ -z "${INIT_PRICE_USD:-}" ]]; then
-  echo "ERROR: INIT_PRICE_USD must be set in $CONFIG_PATH" >&2
+  echo "ERROR: INIT_PRICE_USD must be set in $INIT_PRICE_SOURCE" >&2
   exit 1
 fi
 

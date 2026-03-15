@@ -137,6 +137,11 @@ fi
 # shellcheck disable=SC1090
 set -a
 source "${HOOK_CONF}"
+DEPLOY_HOOK_CONF="$(dirname "${HOOK_CONF}")/deploy.env"
+if [[ -f "${DEPLOY_HOOK_CONF}" ]]; then
+  # shellcheck disable=SC1090
+  source "${DEPLOY_HOOK_CONF}"
+fi
 if [[ -f "./.env" ]]; then
   # shellcheck disable=SC1091
   source "./.env"
@@ -156,9 +161,9 @@ if [[ -f "${STATE_JSON}" ]]; then
 fi
 
 RPC_URL="${RPC_URL_CLI:-${RPC_URL:-}}"
-POOL_MANAGER="${POOL_MANAGER_CLI:-${POOL_MANAGER:-}}"
-STABLE_ADDR="$(lower "${STABLE_CLI:-${STABLE:-}}")"
-STABLE_DECIMALS="${STABLE_DECIMALS_CLI:-${STABLE_DECIMALS:-6}}"
+POOL_MANAGER="${POOL_MANAGER_CLI:-${POOL_MANAGER:-${DEPLOY_POOL_MANAGER:-}}}"
+STABLE_ADDR="$(lower "${STABLE_CLI:-${STABLE:-${DEPLOY_STABLE:-}}}")"
+STABLE_DECIMALS="${STABLE_DECIMALS_CLI:-${STABLE_DECIMALS:-${DEPLOY_STABLE_DECIMALS:-6}}}"
 VOLATILE_DECIMALS="${VOLATILE_DECIMALS:-18}"
 ETH_USD="${ETH_USD_CLI:-}"
 POOL_ID="${POOL_ID_CLI:-}"

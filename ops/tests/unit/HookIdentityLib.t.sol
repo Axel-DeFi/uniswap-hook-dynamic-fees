@@ -31,7 +31,6 @@ contract HookIdentityLibTest is Test, VolumeDynamicFeeHookV2DeployHelper {
     uint32 internal constant PERIOD_SECONDS = 300;
     uint32 internal constant LULL_RESET_SECONDS = 3600;
     uint8 internal constant EMA_PERIODS = 8;
-    uint16 internal constant DEADBAND_BPS = 500;
 
     MockPoolManager internal manager;
     HookIdentityHarness internal harness;
@@ -63,11 +62,6 @@ contract HookIdentityLibTest is Test, VolumeDynamicFeeHookV2DeployHelper {
         (address stableHookAddress, bytes32 stableSalt,) = harness.expectedHookAddress(cfg);
         assertEq(stableHookAddress, expectedHookAddress);
         assertEq(stableSalt, expectedSalt);
-
-        (address minedAfter, bytes32 minedSaltAfter) = HookMiner.find(
-            CREATE2_DEPLOYER, expectedFlags, type(VolumeDynamicFeeHook).creationCode, constructorArgs
-        );
-        assertTrue(minedAfter != expectedHookAddress || minedSaltAfter != expectedSalt);
     }
 
     function test_expectedHookAddress_changes_when_constructor_identity_changes() public view {
@@ -97,21 +91,20 @@ contract HookIdentityLibTest is Test, VolumeDynamicFeeHookV2DeployHelper {
         cfg.extremeFeePips = V2_DEFAULT_EXTREME_FEE;
         cfg.periodSeconds = PERIOD_SECONDS;
         cfg.emaPeriods = EMA_PERIODS;
-        cfg.deadbandBps = DEADBAND_BPS;
         cfg.lullResetSeconds = LULL_RESET_SECONDS;
         cfg.hookFeePercent = hookFeePercent_;
-        cfg.minCloseVolToCashUsd6 = V2_MIN_CLOSEVOL_TO_CASH_USD6;
-        cfg.upRToCashBps = V2_UP_R_TO_CASH_BPS;
+        cfg.minCloseVolToCashUsd6 = V2_MIN_VOLUME_TO_ENTER_CASH_USD6;
+        cfg.cashEnterTriggerBps = V2_CASH_ENTER_TRIGGER_BPS;
         cfg.cashHoldPeriods = V2_CASH_HOLD_PERIODS;
-        cfg.minCloseVolToExtremeUsd6 = V2_MIN_CLOSEVOL_TO_EXTREME_USD6;
-        cfg.upRToExtremeBps = V2_UP_R_TO_EXTREME_BPS;
+        cfg.minCloseVolToExtremeUsd6 = V2_MIN_VOLUME_TO_ENTER_EXTREME_USD6;
+        cfg.extremeEnterTriggerBps = V2_EXTREME_ENTER_TRIGGER_BPS;
         cfg.upExtremeConfirmPeriods = V2_UP_EXTREME_CONFIRM_PERIODS;
         cfg.extremeHoldPeriods = V2_EXTREME_HOLD_PERIODS;
-        cfg.downRFromExtremeBps = V2_DOWN_R_FROM_EXTREME_BPS;
+        cfg.extremeExitTriggerBps = V2_EXTREME_EXIT_TRIGGER_BPS;
         cfg.downExtremeConfirmPeriods = V2_DOWN_EXTREME_CONFIRM_PERIODS;
-        cfg.downRFromCashBps = V2_DOWN_R_FROM_CASH_BPS;
+        cfg.cashExitTriggerBps = V2_CASH_EXIT_TRIGGER_BPS;
         cfg.downCashConfirmPeriods = V2_DOWN_CASH_CONFIRM_PERIODS;
-        cfg.emergencyFloorCloseVolUsd6 = V2_EMERGENCY_FLOOR_CLOSEVOL_USD6;
+        cfg.emergencyFloorCloseVolUsd6 = V2_EMERGENCY_FLOOR_TRIGGER_USD6;
         cfg.emergencyConfirmPeriods = V2_EMERGENCY_CONFIRM_PERIODS;
     }
 }

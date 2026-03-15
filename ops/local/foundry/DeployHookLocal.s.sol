@@ -74,20 +74,16 @@ contract DeployHookLocal is Script {
         );
 
         address owner = deployCfg.owner;
-        uint16 deadbandBps = deployCfg.deadbandBps;
         uint64 minCloseVolToCashUsd6 = deployCfg.minCloseVolToCashUsd6;
         uint8 cashHoldPeriods = deployCfg.cashHoldPeriods;
         uint64 minCloseVolToExtremeUsd6 = deployCfg.minCloseVolToExtremeUsd6;
         uint8 extremeHoldPeriods = deployCfg.extremeHoldPeriods;
-        uint16 downRFromExtremeBps = deployCfg.downRFromExtremeBps;
-        uint16 downRFromCashBps = deployCfg.downRFromCashBps;
         uint64 emergencyFloorCloseVolUsd6 = deployCfg.emergencyFloorCloseVolUsd6;
         bool allowWeakHoldPeriods = vm.envOr("ALLOW_WEAK_HOLD_PERIODS", false);
         require(
             emergencyFloorCloseVolUsd6 > 0 && emergencyFloorCloseVolUsd6 < minCloseVolToCashUsd6,
             "invalid emergency floor threshold"
         );
-        require(deadbandBps < downRFromExtremeBps && deadbandBps < downRFromCashBps, "invalid deadband thresholds");
         if ((cashHoldPeriods < 2 || extremeHoldPeriods < 2) && !allowWeakHoldPeriods) {
             console2.log(
                 "warning: weak hold periods in local profile (set ALLOW_WEAK_HOLD_PERIODS=true to silence)"

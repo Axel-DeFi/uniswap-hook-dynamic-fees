@@ -29,27 +29,23 @@ library OpsTypes {
         uint24 extremeFeePips;
         uint32 periodSeconds;
         uint8 emaPeriods;
-        uint16 deadbandBps;
         uint32 lullResetSeconds;
         uint16 hookFeePercent;
         uint64 minCountedSwapUsd6;
         uint64 minCloseVolToCashUsd6;
-        uint16 upRToCashBps;
+        uint16 cashEnterTriggerBps;
         uint8 cashHoldPeriods;
         uint64 minCloseVolToExtremeUsd6;
-        uint16 upRToExtremeBps;
+        uint16 extremeEnterTriggerBps;
         uint8 upExtremeConfirmPeriods;
         uint8 extremeHoldPeriods;
-        uint16 downRFromExtremeBps;
+        uint16 extremeExitTriggerBps;
         uint8 downExtremeConfirmPeriods;
-        uint16 downRFromCashBps;
+        uint16 cashExitTriggerBps;
         uint8 downCashConfirmPeriods;
         uint64 emergencyFloorCloseVolUsd6;
         uint8 emergencyConfirmPeriods;
         uint256 initPriceUsdE18;
-        uint256 liqRangeMinUsdE18;
-        uint256 liqRangeMaxUsdE18;
-        uint256 maxSwapFractionBps;
         uint256 minEthBalanceWei;
         uint256 minStableBalanceRaw;
         uint256 minVolatileBalanceRaw;
@@ -73,19 +69,18 @@ library OpsTypes {
         uint24 extremeFeePips;
         uint32 periodSeconds;
         uint8 emaPeriods;
-        uint16 deadbandBps;
         uint32 lullResetSeconds;
         uint16 hookFeePercent;
         uint64 minCloseVolToCashUsd6;
-        uint16 upRToCashBps;
+        uint16 cashEnterTriggerBps;
         uint8 cashHoldPeriods;
         uint64 minCloseVolToExtremeUsd6;
-        uint16 upRToExtremeBps;
+        uint16 extremeEnterTriggerBps;
         uint8 upExtremeConfirmPeriods;
         uint8 extremeHoldPeriods;
-        uint16 downRFromExtremeBps;
+        uint16 extremeExitTriggerBps;
         uint8 downExtremeConfirmPeriods;
-        uint16 downRFromCashBps;
+        uint16 cashExitTriggerBps;
         uint8 downCashConfirmPeriods;
         uint64 emergencyFloorCloseVolUsd6;
         uint8 emergencyConfirmPeriods;
@@ -109,11 +104,7 @@ library OpsTypes {
     struct RangeCheck {
         bool ok;
         string reason;
-        uint256 minPriceUsdE18;
-        uint256 maxPriceUsdE18;
         uint256 initPriceUsdE18;
-        uint256 centeredPriceUsdE18;
-        uint256 marginBps;
         uint256 maxSwapStableRaw;
     }
 

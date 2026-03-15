@@ -11,9 +11,9 @@ import {CanonicalHookResolverLib} from "../lib/CanonicalHookResolverLib.sol";
 import {ConfigLoader} from "../lib/ConfigLoader.sol";
 import {BudgetLib} from "../lib/BudgetLib.sol";
 import {PoolStateLib} from "../lib/PoolStateLib.sol";
+import {InitPriceLib} from "../lib/InitPriceLib.sol";
 import {LoggingLib} from "../lib/LoggingLib.sol";
 import {OpsTypes} from "../types/OpsTypes.sol";
-import {EnvLib} from "../lib/EnvLib.sol";
 import {LiveOpsBase} from "./LiveOpsBase.s.sol";
 
 contract EnsurePoolLive is LiveOpsBase {
@@ -37,9 +37,7 @@ contract EnsurePoolLive is LiveOpsBase {
         uint256 pk = cfg.privateKey;
         require(pk != 0, "PRIVATE_KEY missing");
 
-        uint256 sqrtPriceRaw = EnvLib.requireUint("INIT_SQRT_PRICE_X96");
-        require(sqrtPriceRaw <= type(uint160).max, "INIT_SQRT_PRICE_X96 out of uint160 range");
-        uint160 sqrtPriceX96 = uint160(sqrtPriceRaw);
+        uint160 sqrtPriceX96 = InitPriceLib.requireInitSqrtPriceX96(cfg);
 
         PoolKey memory key = PoolKey({
             currency0: Currency.wrap(cfg.token0),

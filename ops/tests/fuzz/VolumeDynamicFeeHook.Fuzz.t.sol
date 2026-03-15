@@ -31,7 +31,6 @@ contract VolumeDynamicFeeHookFuzzTest is Test, VolumeDynamicFeeHookV2DeployHelpe
 
     uint32 internal constant PERIOD_SECONDS = 300;
     uint8 internal constant EMA_PERIODS = 8;
-    uint16 internal constant DEADBAND_BPS = 500;
     uint32 internal constant LULL_RESET_SECONDS = 3600;
 
     uint8 internal constant STABLE_DECIMALS = 6;
@@ -70,7 +69,6 @@ contract VolumeDynamicFeeHookFuzzTest is Test, VolumeDynamicFeeHookV2DeployHelpe
             V2_DEFAULT_EXTREME_FEE,
             PERIOD_SECONDS,
             EMA_PERIODS,
-            DEADBAND_BPS,
             LULL_RESET_SECONDS,
             address(this),
             V2_INITIAL_HOOK_FEE_PERCENT
@@ -92,7 +90,6 @@ contract VolumeDynamicFeeHookFuzzTest is Test, VolumeDynamicFeeHookV2DeployHelpe
             V2_DEFAULT_EXTREME_FEE,
             PERIOD_SECONDS,
             EMA_PERIODS,
-            DEADBAND_BPS,
             LULL_RESET_SECONDS,
             address(this),
             V2_INITIAL_HOOK_FEE_PERCENT

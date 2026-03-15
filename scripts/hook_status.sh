@@ -1327,8 +1327,8 @@ def reason_code_to_label(code):
         6: "ZERO_EMA_DECAY",
         7: "NO_SWAPS",
         8: "LULL_RESET",
-        9: "DEADBAND",
         10: "EMA_BOOTSTRAP",
+        17: "NO_CHANGE",
     }
     return mapping.get(code, "UNKNOWN")
 
@@ -1533,11 +1533,22 @@ fi
 # shellcheck disable=SC1090
 set -a
 source "${CFG}"
+DEPLOY_CFG="$(dirname "${CFG}")/deploy.env"
+if [[ -f "${DEPLOY_CFG}" ]]; then
+  # shellcheck disable=SC1090
+  source "${DEPLOY_CFG}"
+fi
 if [[ -f "./.env" ]]; then
   # shellcheck disable=SC1091
   source "./.env"
 fi
 set +a
+
+if [[ -z "${POOL_MANAGER:-}" && -n "${DEPLOY_POOL_MANAGER:-}" ]]; then POOL_MANAGER="${DEPLOY_POOL_MANAGER}"; fi
+if [[ -z "${VOLATILE:-}" && -n "${DEPLOY_VOLATILE:-}" ]]; then VOLATILE="${DEPLOY_VOLATILE}"; fi
+if [[ -z "${STABLE:-}" && -n "${DEPLOY_STABLE:-}" ]]; then STABLE="${DEPLOY_STABLE}"; fi
+if [[ -z "${TICK_SPACING:-}" && -n "${DEPLOY_TICK_SPACING:-}" ]]; then TICK_SPACING="${DEPLOY_TICK_SPACING}"; fi
+if [[ -z "${STABLE_DECIMALS:-}" && -n "${DEPLOY_STABLE_DECIMALS:-}" ]]; then STABLE_DECIMALS="${DEPLOY_STABLE_DECIMALS}"; fi
 
 STATE_JSON="$(ops_state_path "${CHAIN}")"
 if [[ -f "${STATE_JSON}" ]]; then
@@ -1662,7 +1673,7 @@ render_raw_once() {
   local pool_currency0 pool_currency1 stable_currency pool_tick_spacing
   local initial_idx floor_idx extreme_idx pause_idx fee_tier_count
   local floor_fee_bips cash_fee_bips extreme_fee_bips
-  local period_seconds ema_periods deadband_bps lull_reset_seconds
+  local period_seconds ema_periods lull_reset_seconds
   local owner payout_recipient
 
   pool_currency0="$(first_token "$(try_cast_call "${HOOK_ADDRESS}" "poolCurrency0()(address)" || true)")"
@@ -1692,7 +1703,6 @@ render_raw_once() {
   fee_tier_count=3
   period_seconds="$(first_token "$(try_cast_call "${HOOK_ADDRESS}" "periodSeconds()(uint32)" || true)")"
   ema_periods="$(first_token "$(try_cast_call "${HOOK_ADDRESS}" "emaPeriods()(uint8)" || true)")"
-  deadband_bps="$(first_token "$(try_cast_call "${HOOK_ADDRESS}" "deadbandBps()(uint16)" || true)")"
   lull_reset_seconds="$(first_token "$(try_cast_call "${HOOK_ADDRESS}" "lullResetSeconds()(uint32)" || true)")"
   owner="$(first_token "$(try_cast_call "${HOOK_ADDRESS}" "owner()(address)" || true)")"
   payout_recipient="${owner}"
@@ -1841,7 +1851,7 @@ render_raw_once() {
   echo "state_view_address=${STATE_VIEW_ADDRESS:-not-set}"
   echo "hook_pool: currency0=${pool_currency0} currency1=${pool_currency1} stable=${stable_currency} tick_spacing=${pool_tick_spacing}"
   echo "hook_balances: native_wei=${native_wei} token0_raw=${token0_balance_raw} token1_raw=${token1_balance_raw} token0_decimals=${balance_token0_decimals} token1_decimals=${balance_token1_decimals} token0=${pool_currency0} token1=${pool_currency1}"
-  echo "hook_params: initial_idx=${initial_idx} floor_idx=${floor_idx} extreme_idx=${extreme_idx} pause_idx=${pause_idx} period_seconds=${period_seconds} ema_periods=${ema_periods} deadband_bps=${deadband_bps} lull_reset_seconds=${lull_reset_seconds} owner=${owner} payout_recipient=${payout_recipient}"
+  echo "hook_params: initial_idx=${initial_idx} floor_idx=${floor_idx} extreme_idx=${extreme_idx} pause_idx=${pause_idx} period_seconds=${period_seconds} ema_periods=${ema_periods} lull_reset_seconds=${lull_reset_seconds} owner=${owner} payout_recipient=${payout_recipient}"
   echo "fee_tiers_bips=$(IFS=,; echo "${tiers[*]}")"
   echo "hook_state: paused=${paused} current_fee_bips=${current_fee} period_volume_usd6=${pv} ema_volume_usd6_scaled=${ema_vol} period_start=${period_start} fee_idx=${fee_idx}"
   if [[ -n "${STATE_VIEW_ADDRESS}" ]]; then
@@ -1968,24 +1978,6 @@ import sys
 bips = Decimal(sys.argv[1])
 pct = (bips / Decimal(10000)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 print(f"{pct}%")
-PY
-}
-
-deadband_bps_to_percent() {
-  local bps="$1"
-  if ! [[ "${bps}" =~ ^[0-9]+$ ]]; then
-    echo "-"
-    return
-  fi
-  python3 - "${bps}" <<'PY'
-from decimal import Decimal
-import sys
-b = Decimal(sys.argv[1])
-v = b / Decimal(100)
-s = format(v, "f")
-if "." in s:
-    s = s.rstrip("0").rstrip(".")
-print(f"{s}%")
 PY
 }
 
@@ -2213,7 +2205,7 @@ render_dashboard_once() {
   local last_hour_status_line last_hour_period_lines last_hour_change_lines
   local window_24h_line window_7d_line window_30d_line window_90d_line window_180d_line window_365d_line
   local ts chain chain_id hook_addr pool_manager pool_id state_view
-  local tick_spacing initial_idx floor_idx extreme_idx pause_idx period_seconds ema_periods deadband_bps lull_reset_seconds
+  local tick_spacing initial_idx floor_idx extreme_idx pause_idx period_seconds ema_periods lull_reset_seconds
   local fee_tiers paused current_fee pv ema_vol fee_idx direction_flag
   local tick protocol_fee lp_fee liquidity price pool_tvl_usd6
   local activity_swaps activity_volume activity_fees activity_lp activity_status
@@ -2228,7 +2220,7 @@ render_dashboard_once() {
   local tier_items tier_item tier_i tier_bips tier_pct tier_swaps tier_volume tier_fees tier_swaps_fmt tier_volume_usd tier_fees_usd tier_fee_per_swap_usd
   local fee_line fee_printed_count fee_fallback_bips can_filter_levels
   local tier_fee_label
-  local run_badge deploy_floor deploy_initial deploy_pause deploy_cap deploy_deadband_pct
+  local run_badge deploy_floor deploy_initial deploy_pause deploy_cap
   local params_period params_ema params_lull_reset params_tick_spacing params_ema_window params_ema_full
   local levels_summary level_idx level_bips level_pct
   local hook_balances_line hook_native_wei hook_token0_raw hook_token1_raw hook_token0_decimals hook_token1_decimals
@@ -2261,7 +2253,6 @@ render_dashboard_once() {
   pause_idx="$(inline_value "${raw}" "pause_idx")"
   period_seconds="$(inline_value "${raw}" "period_seconds")"
   ema_periods="$(inline_value "${raw}" "ema_periods")"
-  deadband_bps="$(inline_value "${raw}" "deadband_bps")"
   lull_reset_seconds="$(inline_value "${raw}" "lull_reset_seconds")"
 
   fee_tiers="$(line_value "${raw}" "fee_tiers_bips")"
@@ -2431,7 +2422,6 @@ render_dashboard_once() {
   deploy_initial="$(format_deploy_level "${fee_tiers}" "${initial_idx}")"
   deploy_pause="$(format_deploy_level "${fee_tiers}" "${pause_idx}")"
   deploy_cap="$(format_deploy_level "${fee_tiers}" "${extreme_idx}")"
-  deploy_deadband_pct="$(deadband_bps_to_percent "${deadband_bps}")"
   levels_summary="-"
   if [[ "${floor_idx}" =~ ^[0-9]+$ && "${extreme_idx}" =~ ^[0-9]+$ ]] && (( extreme_idx >= floor_idx )); then
     levels_summary=""
@@ -2469,7 +2459,7 @@ render_dashboard_once() {
   echo "Deploy:"
   echo "  Limits: initial=${deploy_initial} | floor=${deploy_floor} | cap=${deploy_cap} | pause=${deploy_pause}"
   echo "  Levels: ${levels_summary}"
-  echo "  Params: period=${params_period} | emaPeriods=${params_ema_full} | deadband=${deploy_deadband_pct} | lullReset=${params_lull_reset} | tickSpacing=${params_tick_spacing}"
+  echo "  Params: period=${params_period} | emaPeriods=${params_ema_full} | lullReset=${params_lull_reset} | tickSpacing=${params_tick_spacing}"
   echo
   live_period_vol="$(usd6_to_dollar "${pv}")"
   live_direction_flag="$(dir_label "${direction_flag}")"

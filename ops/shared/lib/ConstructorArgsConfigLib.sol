@@ -21,20 +21,19 @@ library ConstructorArgsConfigLib {
             uint24 extremeFeePips,
             uint32 periodSeconds,
             uint8 emaPeriods,
-            uint16 deadbandBps,
             uint32 lullResetSeconds,
             address owner,
             uint16 hookFeePercent,
             uint64 minCloseVolToCashUsd6,
-            uint16 upRToCashBps,
+            uint16 cashEnterTriggerBps,
             uint8 cashHoldPeriods,
             uint64 minCloseVolToExtremeUsd6,
-            uint16 upRToExtremeBps,
+            uint16 extremeEnterTriggerBps,
             uint8 upExtremeConfirmPeriods,
             uint8 extremeHoldPeriods,
-            uint16 downRFromExtremeBps,
+            uint16 extremeExitTriggerBps,
             uint8 downExtremeConfirmPeriods,
-            uint16 downRFromCashBps,
+            uint16 cashExitTriggerBps,
             uint8 downCashConfirmPeriods,
             uint64 emergencyFloorCloseVolUsd6,
             uint8 emergencyConfirmPeriods
@@ -52,7 +51,6 @@ library ConstructorArgsConfigLib {
                 uint24,
                 uint32,
                 uint8,
-                uint16,
                 uint32,
                 address,
                 uint16,
@@ -84,19 +82,18 @@ library ConstructorArgsConfigLib {
         cfg.extremeFeePips = extremeFeePips;
         cfg.periodSeconds = periodSeconds;
         cfg.emaPeriods = emaPeriods;
-        cfg.deadbandBps = deadbandBps;
         cfg.lullResetSeconds = lullResetSeconds;
         cfg.hookFeePercent = hookFeePercent;
         cfg.minCloseVolToCashUsd6 = minCloseVolToCashUsd6;
-        cfg.upRToCashBps = upRToCashBps;
+        cfg.cashEnterTriggerBps = cashEnterTriggerBps;
         cfg.cashHoldPeriods = cashHoldPeriods;
         cfg.minCloseVolToExtremeUsd6 = minCloseVolToExtremeUsd6;
-        cfg.upRToExtremeBps = upRToExtremeBps;
+        cfg.extremeEnterTriggerBps = extremeEnterTriggerBps;
         cfg.upExtremeConfirmPeriods = upExtremeConfirmPeriods;
         cfg.extremeHoldPeriods = extremeHoldPeriods;
-        cfg.downRFromExtremeBps = downRFromExtremeBps;
+        cfg.extremeExitTriggerBps = extremeExitTriggerBps;
         cfg.downExtremeConfirmPeriods = downExtremeConfirmPeriods;
-        cfg.downRFromCashBps = downRFromCashBps;
+        cfg.cashExitTriggerBps = cashExitTriggerBps;
         cfg.downCashConfirmPeriods = downCashConfirmPeriods;
         cfg.emergencyFloorCloseVolUsd6 = emergencyFloorCloseVolUsd6;
         cfg.emergencyConfirmPeriods = emergencyConfirmPeriods;
