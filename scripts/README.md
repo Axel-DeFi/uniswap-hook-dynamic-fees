@@ -53,6 +53,29 @@ scripts/release/check.sh
 scripts/release/cut.sh --bump patch --push
 ```
 
+### Audit bundle
+
+Build the curated audit archive for the current `VERSION` and `HEAD`:
+
+```bash
+scripts/build_audit_bundle.sh
+```
+
+Refresh local gas artifacts before packaging:
+
+```bash
+scripts/build_audit_bundle.sh --refresh-gas --overwrite
+```
+
+Archive naming format:
+- `audit_bundle/dynamic-fees_v<VERSION>_<short-sha>_nolib.zip`
+
+Bundle policy:
+- excludes `lib/`,
+- includes `ops/optimism/RUNBOOK.md`,
+- copies available gas evidence into `validation/gas/` inside the bundle workspace,
+- omits monitoring-only helpers such as `scripts/hook_status.sh`, `scripts/show_deposits.sh`, and `scripts/pool_stats_op.sh`.
+
 ## Gas artifacts (local)
 
 Use this reproducible flow for audit gas evidence:
