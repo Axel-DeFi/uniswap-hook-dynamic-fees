@@ -12,6 +12,7 @@ Sepolia validation scripts mirror local phase names, with explicit read-only and
 - `ops/sepolia/scripts/ensure-hook.sh`
 - `ops/sepolia/scripts/ensure-pool.sh`
 - `ops/sepolia/scripts/ensure-liquidity.sh`
+- `ops/sepolia/scripts/gas.sh`
 - `ops/sepolia/scripts/smoke.sh`
 - `ops/sepolia/scripts/full.sh`
 - `ops/sepolia/scripts/rerun-safe.sh`
@@ -32,6 +33,7 @@ Sepolia validation scripts mirror local phase names, with explicit read-only and
   `EnsureDriversLive` path and persist them in `ops/sepolia/out/state/sepolia.drivers.json`.
 - `preflight` validates chain id, budget, token decimals, hook/pool consistency before broadcast-capable phases.
 - `smoke/full/rerun-safe/emergency` enforce preflight gate by default and stop on preflight failure.
+- `gas.sh` also enforces preflight, auto-prepares a short-period timing scenario, and restores original timing params on exit.
 - `ensure-pool` and `ensure-liquidity` now also enforce the same preflight gate by default.
 - Broadcast-capable hook/pool/liquidity scripts resolve `HOOK_ADDRESS` to the canonical hook for the current
   release + deployment snapshot before sending transactions.

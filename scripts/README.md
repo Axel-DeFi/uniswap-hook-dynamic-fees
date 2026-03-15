@@ -58,21 +58,15 @@ scripts/release/cut.sh --bump patch --push
 Use this reproducible flow for audit gas evidence:
 
 ```bash
-export NO_PROXY='127.0.0.1,localhost'
-export no_proxy='127.0.0.1,localhost'
-export HTTP_PROXY='http://127.0.0.1:9'
-export HTTPS_PROXY='http://127.0.0.1:9'
-export ALL_PROXY='http://127.0.0.1:9'
-
-ops/local/scripts/anvil-up.sh
 forge test --offline --gas-report --match-contract VolumeDynamicFeeHookAdminTest > ops/local/out/reports/gas.admin.report.txt
-forge script scripts/foundry/MeasureGasLocal.s.sol:MeasureGasLocal --rpc-url http://127.0.0.1:8545 --broadcast
-ops/local/scripts/anvil-down.sh
+ops/local/scripts/gas.sh
 ```
 
 Primary artifacts:
 - `ops/local/out/reports/gas.admin.report.txt`
-- `scripts/out/broadcast/MeasureGasLocal.s.sol/31337/run-latest.json`
+- `ops/local/out/reports/gas.samples.local.json`
+- `ops/local/out/reports/gas.local.json`
+- `ops/local/out/reports/gas.local.md`
 
 ## Operational notes
 

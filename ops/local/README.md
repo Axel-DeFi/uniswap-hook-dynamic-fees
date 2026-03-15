@@ -13,6 +13,7 @@ Local operational validation lives under `ops/local` and is split into thin shel
 - `ops/local/scripts/ensure-hook.sh`
 - `ops/local/scripts/ensure-pool.sh`
 - `ops/local/scripts/ensure-liquidity.sh`
+- `ops/local/scripts/gas.sh`
 - `ops/local/scripts/smoke.sh`
 - `ops/local/scripts/full.sh`
 - `ops/local/scripts/rerun-safe.sh`
@@ -36,3 +37,5 @@ Local operational validation lives under `ops/local` and is split into thin shel
 - State hydration: `ops/local/out/state/local.addresses.json` is reused by wrappers.
 - `bootstrap` preflight tolerates stale hook addresses and treats them as bootstrap replacements.
 - `OPS_FORCE_SIMULATION=1` runs scripts without RPC/broadcast for deterministic dry operational checks.
+- `ops/local/scripts/gas.sh` is intentionally test-driven and writes aggregated `min/max/avg` gas reports under
+  `ops/local/out/reports/`.

@@ -35,12 +35,14 @@ ops/local/scripts/emergency.sh
 
 ```bash
 forge test --offline --gas-report --match-contract VolumeDynamicFeeHookAdminTest > ops/local/out/reports/gas.admin.report.txt
-forge script scripts/foundry/MeasureGasLocal.s.sol:MeasureGasLocal --rpc-url http://127.0.0.1:8545 --broadcast
+ops/local/scripts/gas.sh
 ```
 
 Artifacts:
 - `ops/local/out/reports/gas.admin.report.txt`
-- `scripts/out/broadcast/MeasureGasLocal.s.sol/31337/run-latest.json`
+- `ops/local/out/reports/gas.samples.local.json`
+- `ops/local/out/reports/gas.local.json`
+- `ops/local/out/reports/gas.local.md`
 
 ## Admin operation model
 

@@ -45,11 +45,23 @@ configured `POOL_MANAGER`; otherwise wrappers reprovision them before liquidity/
 ## Validation suite
 
 ```bash
+ops/sepolia/scripts/gas.sh
 ops/sepolia/scripts/smoke.sh
 ops/sepolia/scripts/full.sh
 ops/sepolia/scripts/rerun-safe.sh
 ops/sepolia/scripts/emergency.sh
 ```
+
+## Gas measurement
+
+`ops/sepolia/scripts/gas.sh` runs repeated gas measurements against the live rehearsal hook and writes:
+- `ops/sepolia/out/reports/gas.samples.sepolia.json`
+- `ops/sepolia/out/reports/gas.sepolia.json`
+- `ops/sepolia/out/reports/gas.sepolia.md`
+
+The wrapper temporarily shortens timing parameters for fast period-boundary measurement, resets the hook to `FLOOR`,
+and restores original timing parameters on exit. Runtime EMA/regime state is not preserved exactly; use this path only
+against the Sepolia rehearsal deployment.
 
 ## Owner flows
 
