@@ -2,6 +2,7 @@
 pragma solidity ^0.8.26;
 
 import {Test} from "forge-std/Test.sol";
+import {Vm} from "forge-std/Vm.sol";
 
 import {BaseHook} from "@uniswap/v4-hooks-public/src/base/BaseHook.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
@@ -98,6 +99,79 @@ contract VolumeDynamicFeeHookAdminTest is Test, VolumeDynamicFeeHookV2DeployHelp
     uint8 internal constant EMA_PERIODS = 8;
     uint16 internal constant DEADBAND_BPS = 500;
     uint32 internal constant LULL_RESET_SECONDS = 3600;
+    uint64 internal constant USD6 = 1e6;
+    uint64 internal constant SEED_CLOSEVOL_USD6 = 10_000 * USD6;
+    uint64 internal constant CASH_JUMP_CLOSEVOL_USD6 = 25_000 * USD6;
+    uint64 internal constant DEADBAND_CLOSEVOL_USD6 = 20_500 * USD6;
+    uint64 internal constant EXTREME_STREAK1_CLOSEVOL_USD6 = 100_000 * USD6;
+    uint64 internal constant EXTREME_STREAK2_CLOSEVOL_USD6 = 200_000 * USD6;
+    uint256 internal constant EMA_SCALE = 1e6;
+
+    uint8 internal constant TRACE_COUNTER_HOLD_SHIFT = 1;
+    uint8 internal constant TRACE_COUNTER_UP_EXTREME_SHIFT = 6;
+    uint8 internal constant TRACE_COUNTER_DOWN_SHIFT = 8;
+    uint8 internal constant TRACE_COUNTER_EMERGENCY_SHIFT = 11;
+
+    uint16 internal constant TRACE_FLAG_BOOTSTRAP_V2 = 0x0001;
+    uint16 internal constant TRACE_FLAG_DEADBAND_BLOCKED = 0x0002;
+    uint16 internal constant TRACE_FLAG_HOLD_WAS_ACTIVE = 0x0004;
+    uint16 internal constant TRACE_FLAG_EMERGENCY_TRIGGERED = 0x0008;
+    uint16 internal constant TRACE_FLAG_UP_CASH_RAW = 0x0010;
+    uint16 internal constant TRACE_FLAG_UP_EXTREME_RAW = 0x0020;
+    uint16 internal constant TRACE_FLAG_DOWN_EXTREME_RAW = 0x0040;
+    uint16 internal constant TRACE_FLAG_DOWN_CASH_RAW = 0x0080;
+
+    bytes32 internal constant CONTROLLER_TRANSITION_TRACE_TOPIC = keccak256(
+        "ControllerTransitionTrace(uint64,uint24,uint8,uint24,uint8,uint64,uint96,uint96,uint64,uint16,uint16,uint16,uint8)"
+    );
+    bytes32 internal constant PERIOD_CLOSED_TOPIC =
+        keccak256("PeriodClosed(uint24,uint8,uint24,uint8,uint64,uint96,uint64,uint8)");
+    bytes32 internal constant FEE_UPDATED_TOPIC = keccak256("FeeUpdated(uint24,uint8,uint64,uint96)");
+    bytes32 internal constant LULL_RESET_TOPIC = keccak256("LullReset(uint24,uint8)");
+
+    struct ControllerTransitionTraceLog {
+        uint64 periodStart;
+        uint24 fromFee;
+        uint8 fromFeeIdx;
+        uint24 toFee;
+        uint8 toFeeIdx;
+        uint64 closeVolumeUsd6;
+        uint96 emaBeforeUsd6Scaled;
+        uint96 emaAfterUsd6Scaled;
+        uint64 approxLpFeesUsd6;
+        uint16 decisionFlags;
+        uint16 countersBefore;
+        uint16 countersAfter;
+        uint8 reasonCode;
+    }
+
+    struct PeriodClosedLog {
+        uint24 fromFee;
+        uint8 fromFeeIdx;
+        uint24 toFee;
+        uint8 toFeeIdx;
+        uint64 closedVolumeUsd6;
+        uint96 emaVolumeUsd6Scaled;
+        uint64 approxLpFeesUsd6;
+        uint8 reasonCode;
+    }
+
+    struct FeeUpdatedLog {
+        uint24 newFee;
+        uint8 newFeeIdx;
+        uint64 closedVolumeUsd6;
+        uint96 emaVolumeUsd6Scaled;
+    }
+
+    struct SwapEventCapture {
+        uint256 traceCount;
+        uint256 periodClosedCount;
+        uint256 feeUpdatedCount;
+        uint256 lullResetCount;
+        ControllerTransitionTraceLog lastTrace;
+        PeriodClosedLog lastPeriodClosed;
+        FeeUpdatedLog lastFeeUpdated;
+    }
 
     function setUp() public {
         manager = new MockPoolManager();
@@ -180,8 +254,9 @@ contract VolumeDynamicFeeHookAdminTest is Test, VolumeDynamicFeeHookV2DeployHelp
         int128 amount0,
         int128 amount1
     ) internal {
-        SwapParams memory params =
-            SwapParams({zeroForOne: zeroForOne, amountSpecified: amountSpecified, sqrtPriceLimitX96: 0});
+        SwapParams memory params = SwapParams({
+            zeroForOne: zeroForOne, amountSpecified: amountSpecified, sqrtPriceLimitX96: 0
+        });
         BalanceDelta delta = toBalanceDelta(amount0, amount1);
         manager.callAfterSwapWithParams(targetHook, targetKey, params, delta);
     }
@@ -232,6 +307,517 @@ contract VolumeDynamicFeeHookAdminTest is Test, VolumeDynamicFeeHookV2DeployHelp
             emergencyFloorCloseVolUsd6: V2_EMERGENCY_FLOOR_CLOSEVOL_USD6,
             emergencyConfirmPeriods: V2_EMERGENCY_CONFIRM_PERIODS
         });
+    }
+
+    function _asInt128(uint64 value) internal pure returns (int128) {
+        return int128(int256(uint256(value)));
+    }
+
+    function _countedSwap(uint64 closeVolUsd6) internal {
+        _swap(true, -1, -_asInt128(closeVolUsd6), 0);
+    }
+
+    function _closeCurrentPeriod() internal {
+        _swap(true, -1, 0, 0);
+    }
+
+    function _advanceOnePeriod() internal {
+        vm.warp(block.timestamp + PERIOD_SECONDS);
+    }
+
+    function _currentPeriodStart() internal view returns (uint64 periodStart_) {
+        (,, periodStart_,) = hook.unpackedState();
+    }
+
+    function _captureCountedSwap(uint64 closeVolUsd6) internal returns (SwapEventCapture memory capture) {
+        vm.recordLogs();
+        _countedSwap(closeVolUsd6);
+        capture = _decodeSwapEventCapture(vm.getRecordedLogs());
+    }
+
+    function _captureZeroSwap() internal returns (SwapEventCapture memory capture) {
+        vm.recordLogs();
+        _closeCurrentPeriod();
+        capture = _decodeSwapEventCapture(vm.getRecordedLogs());
+    }
+
+    function _decodeSwapEventCapture(Vm.Log[] memory entries)
+        internal
+        pure
+        returns (SwapEventCapture memory capture)
+    {
+        for (uint256 i = 0; i < entries.length; ++i) {
+            if (entries[i].topics.length == 0) continue;
+
+            bytes32 topic0 = entries[i].topics[0];
+            if (topic0 == CONTROLLER_TRANSITION_TRACE_TOPIC) {
+                capture.traceCount += 1;
+                (
+                    uint64 periodStart_,
+                    uint24 fromFee_,
+                    uint8 fromFeeIdx_,
+                    uint24 toFee_,
+                    uint8 toFeeIdx_,
+                    uint64 closeVolumeUsd6_,
+                    uint96 emaBeforeUsd6Scaled_,
+                    uint96 emaAfterUsd6Scaled_,
+                    uint64 approxLpFeesUsd6_,
+                    uint16 decisionFlags_,
+                    uint16 countersBefore_,
+                    uint16 countersAfter_,
+                    uint8 reasonCode_
+                ) = abi.decode(
+                    entries[i].data,
+                    (
+                        uint64,
+                        uint24,
+                        uint8,
+                        uint24,
+                        uint8,
+                        uint64,
+                        uint96,
+                        uint96,
+                        uint64,
+                        uint16,
+                        uint16,
+                        uint16,
+                        uint8
+                    )
+                );
+                capture.lastTrace = ControllerTransitionTraceLog({
+                    periodStart: periodStart_,
+                    fromFee: fromFee_,
+                    fromFeeIdx: fromFeeIdx_,
+                    toFee: toFee_,
+                    toFeeIdx: toFeeIdx_,
+                    closeVolumeUsd6: closeVolumeUsd6_,
+                    emaBeforeUsd6Scaled: emaBeforeUsd6Scaled_,
+                    emaAfterUsd6Scaled: emaAfterUsd6Scaled_,
+                    approxLpFeesUsd6: approxLpFeesUsd6_,
+                    decisionFlags: decisionFlags_,
+                    countersBefore: countersBefore_,
+                    countersAfter: countersAfter_,
+                    reasonCode: reasonCode_
+                });
+                continue;
+            }
+
+            if (topic0 == PERIOD_CLOSED_TOPIC) {
+                capture.periodClosedCount += 1;
+                (
+                    uint24 fromFee_,
+                    uint8 fromFeeIdx_,
+                    uint24 toFee_,
+                    uint8 toFeeIdx_,
+                    uint64 closedVolumeUsd6_,
+                    uint96 emaVolumeUsd6Scaled_,
+                    uint64 approxLpFeesUsd6_,
+                    uint8 reasonCode_
+                ) = abi.decode(entries[i].data, (uint24, uint8, uint24, uint8, uint64, uint96, uint64, uint8));
+                capture.lastPeriodClosed = PeriodClosedLog({
+                    fromFee: fromFee_,
+                    fromFeeIdx: fromFeeIdx_,
+                    toFee: toFee_,
+                    toFeeIdx: toFeeIdx_,
+                    closedVolumeUsd6: closedVolumeUsd6_,
+                    emaVolumeUsd6Scaled: emaVolumeUsd6Scaled_,
+                    approxLpFeesUsd6: approxLpFeesUsd6_,
+                    reasonCode: reasonCode_
+                });
+                continue;
+            }
+
+            if (topic0 == FEE_UPDATED_TOPIC) {
+                capture.feeUpdatedCount += 1;
+                (uint24 newFee_, uint8 newFeeIdx_, uint64 closedVolumeUsd6_, uint96 emaVolumeUsd6Scaled_) =
+                    abi.decode(entries[i].data, (uint24, uint8, uint64, uint96));
+                capture.lastFeeUpdated = FeeUpdatedLog({
+                    newFee: newFee_,
+                    newFeeIdx: newFeeIdx_,
+                    closedVolumeUsd6: closedVolumeUsd6_,
+                    emaVolumeUsd6Scaled: emaVolumeUsd6Scaled_
+                });
+                continue;
+            }
+
+            if (topic0 == LULL_RESET_TOPIC) {
+                capture.lullResetCount += 1;
+            }
+        }
+    }
+
+    function _expectedUpdatedEma(uint96 emaBefore, uint64 closeVolUsd6) internal pure returns (uint96) {
+        if (emaBefore == 0) {
+            if (closeVolUsd6 == 0) return 0;
+            return uint96(uint256(closeVolUsd6) * EMA_SCALE);
+        }
+
+        return
+            uint96((uint256(emaBefore) * (EMA_PERIODS - 1) + uint256(closeVolUsd6) * EMA_SCALE) / EMA_PERIODS);
+    }
+
+    function _expectedApproxLpFees(uint64 closeVolUsd6, uint24 feeBips) internal pure returns (uint64) {
+        return uint64((uint256(closeVolUsd6) * uint256(feeBips)) / EMA_SCALE);
+    }
+
+    function _packTraceCounters(
+        bool paused,
+        uint8 holdRemaining,
+        uint8 upExtremeStreak,
+        uint8 downStreak,
+        uint8 emergencyStreak
+    ) internal pure returns (uint16 counters) {
+        if (paused) counters |= 1;
+        counters |= uint16(holdRemaining) << TRACE_COUNTER_HOLD_SHIFT;
+        counters |= uint16(upExtremeStreak) << TRACE_COUNTER_UP_EXTREME_SHIFT;
+        counters |= uint16(downStreak) << TRACE_COUNTER_DOWN_SHIFT;
+        counters |= uint16(emergencyStreak) << TRACE_COUNTER_EMERGENCY_SHIFT;
+    }
+
+    function _seedFloorEma() internal returns (uint96 emaSeed) {
+        _countedSwap(SEED_CLOSEVOL_USD6);
+        _advanceOnePeriod();
+        _closeCurrentPeriod();
+        emaSeed = _expectedUpdatedEma(0, SEED_CLOSEVOL_USD6);
+    }
+
+    function _enterCashRegime() internal returns (uint96 emaCash) {
+        uint96 emaSeed = _seedFloorEma();
+        _countedSwap(CASH_JUMP_CLOSEVOL_USD6);
+        _advanceOnePeriod();
+        _closeCurrentPeriod();
+
+        emaCash = _expectedUpdatedEma(emaSeed, CASH_JUMP_CLOSEVOL_USD6);
+
+        (uint8 feeIdx, uint8 holdRemaining,,,,,,,) = hook.getStateDebug();
+        assertEq(feeIdx, hook.REGIME_CASH(), "precondition: active tier must be cash");
+        assertEq(holdRemaining, hook.cashHoldPeriods(), "precondition: cash hold must be freshly set");
+    }
+
+    function test_controllerTransitionTrace_normal_close_without_transition() public {
+        SwapEventCapture memory openCapture = _captureCountedSwap(SEED_CLOSEVOL_USD6);
+        assertEq(openCapture.traceCount, 0, "trace must not emit on open-period swaps");
+        assertEq(openCapture.periodClosedCount, 0, "PeriodClosed must not emit on open-period swaps");
+        assertEq(openCapture.feeUpdatedCount, 0, "FeeUpdated must not emit on open-period swaps");
+        assertEq(openCapture.lullResetCount, 0, "LullReset must not emit on open-period swaps");
+
+        _advanceOnePeriod();
+        _closeCurrentPeriod();
+
+        uint96 emaBefore = _expectedUpdatedEma(0, SEED_CLOSEVOL_USD6);
+        _countedSwap(SEED_CLOSEVOL_USD6);
+        uint64 closedPeriodStart = _currentPeriodStart();
+
+        _advanceOnePeriod();
+        SwapEventCapture memory capture = _captureZeroSwap();
+
+        uint96 emaAfter = _expectedUpdatedEma(emaBefore, SEED_CLOSEVOL_USD6);
+        uint64 approxLpFees = _expectedApproxLpFees(SEED_CLOSEVOL_USD6, hook.floorFee());
+
+        assertEq(capture.traceCount, 1, "trace must emit once on period close");
+        assertEq(capture.periodClosedCount, 1, "PeriodClosed must still emit");
+        assertEq(capture.feeUpdatedCount, 0, "FeeUpdated must not emit without transition");
+        assertEq(capture.lullResetCount, 0, "LullReset must not emit on normal close");
+
+        assertEq(capture.lastTrace.periodStart, closedPeriodStart);
+        assertEq(capture.lastTrace.fromFee, hook.floorFee());
+        assertEq(capture.lastTrace.fromFeeIdx, hook.REGIME_FLOOR());
+        assertEq(capture.lastTrace.toFee, hook.floorFee());
+        assertEq(capture.lastTrace.toFeeIdx, hook.REGIME_FLOOR());
+        assertEq(capture.lastTrace.closeVolumeUsd6, SEED_CLOSEVOL_USD6);
+        assertEq(capture.lastTrace.emaBeforeUsd6Scaled, emaBefore);
+        assertEq(capture.lastTrace.emaAfterUsd6Scaled, emaAfter);
+        assertEq(capture.lastTrace.approxLpFeesUsd6, approxLpFees);
+        assertEq(capture.lastTrace.decisionFlags, 0);
+        assertEq(capture.lastTrace.countersBefore, _packTraceCounters(false, 0, 0, 0, 0));
+        assertEq(capture.lastTrace.countersAfter, _packTraceCounters(false, 0, 0, 0, 0));
+        assertEq(capture.lastTrace.reasonCode, hook.REASON_NO_CHANGE());
+
+        assertEq(capture.lastPeriodClosed.fromFee, hook.floorFee());
+        assertEq(capture.lastPeriodClosed.fromFeeIdx, hook.REGIME_FLOOR());
+        assertEq(capture.lastPeriodClosed.toFee, hook.floorFee());
+        assertEq(capture.lastPeriodClosed.toFeeIdx, hook.REGIME_FLOOR());
+        assertEq(capture.lastPeriodClosed.closedVolumeUsd6, SEED_CLOSEVOL_USD6);
+        assertEq(capture.lastPeriodClosed.emaVolumeUsd6Scaled, emaAfter);
+        assertEq(capture.lastPeriodClosed.approxLpFeesUsd6, approxLpFees);
+        assertEq(capture.lastPeriodClosed.reasonCode, hook.REASON_NO_CHANGE());
+
+        assertEq(hook.currentRegime(), hook.REGIME_FLOOR(), "fee regime must stay floor");
+        assertEq(manager.lastFee(), hook.floorFee(), "active fee must stay floor");
+    }
+
+    function test_controllerTransitionTrace_floor_to_cash() public {
+        uint96 emaBefore = _seedFloorEma();
+        _countedSwap(CASH_JUMP_CLOSEVOL_USD6);
+        uint64 closedPeriodStart = _currentPeriodStart();
+
+        _advanceOnePeriod();
+        SwapEventCapture memory capture = _captureZeroSwap();
+
+        uint96 emaAfter = _expectedUpdatedEma(emaBefore, CASH_JUMP_CLOSEVOL_USD6);
+        uint64 approxLpFees = _expectedApproxLpFees(CASH_JUMP_CLOSEVOL_USD6, hook.floorFee());
+
+        assertEq(capture.traceCount, 1, "trace must emit once on jump to cash");
+        assertEq(capture.periodClosedCount, 1, "PeriodClosed must still emit");
+        assertEq(capture.feeUpdatedCount, 1, "FeeUpdated must still emit on transition");
+        assertEq(capture.lullResetCount, 0, "LullReset must not emit on normal close");
+
+        assertEq(capture.lastTrace.periodStart, closedPeriodStart);
+        assertEq(capture.lastTrace.fromFee, hook.floorFee());
+        assertEq(capture.lastTrace.fromFeeIdx, hook.REGIME_FLOOR());
+        assertEq(capture.lastTrace.toFee, hook.cashFee());
+        assertEq(capture.lastTrace.toFeeIdx, hook.REGIME_CASH());
+        assertEq(capture.lastTrace.closeVolumeUsd6, CASH_JUMP_CLOSEVOL_USD6);
+        assertEq(capture.lastTrace.emaBeforeUsd6Scaled, emaBefore);
+        assertEq(capture.lastTrace.emaAfterUsd6Scaled, emaAfter);
+        assertEq(capture.lastTrace.approxLpFeesUsd6, approxLpFees);
+        assertEq(capture.lastTrace.decisionFlags, TRACE_FLAG_UP_CASH_RAW);
+        assertEq(capture.lastTrace.countersBefore, _packTraceCounters(false, 0, 0, 0, 0));
+        assertEq(capture.lastTrace.countersAfter, _packTraceCounters(false, hook.cashHoldPeriods(), 0, 0, 0));
+        assertEq(capture.lastTrace.reasonCode, hook.REASON_JUMP_CASH());
+
+        assertEq(capture.lastPeriodClosed.fromFee, hook.floorFee());
+        assertEq(capture.lastPeriodClosed.toFee, hook.cashFee());
+        assertEq(capture.lastPeriodClosed.closedVolumeUsd6, CASH_JUMP_CLOSEVOL_USD6);
+        assertEq(capture.lastPeriodClosed.emaVolumeUsd6Scaled, emaAfter);
+        assertEq(capture.lastPeriodClosed.approxLpFeesUsd6, approxLpFees);
+        assertEq(capture.lastPeriodClosed.reasonCode, hook.REASON_JUMP_CASH());
+
+        assertEq(capture.lastFeeUpdated.newFee, hook.cashFee());
+        assertEq(capture.lastFeeUpdated.newFeeIdx, hook.REGIME_CASH());
+        assertEq(capture.lastFeeUpdated.closedVolumeUsd6, CASH_JUMP_CLOSEVOL_USD6);
+        assertEq(capture.lastFeeUpdated.emaVolumeUsd6Scaled, emaAfter);
+
+        assertEq(hook.currentRegime(), hook.REGIME_CASH(), "fee regime must jump to cash");
+        assertEq(manager.lastFee(), hook.cashFee(), "active fee must update to cash");
+    }
+
+    function test_controllerTransitionTrace_cash_to_extreme() public {
+        uint96 emaCash = _enterCashRegime();
+
+        _countedSwap(EXTREME_STREAK1_CLOSEVOL_USD6);
+        _advanceOnePeriod();
+        _closeCurrentPeriod();
+
+        uint96 emaBefore = _expectedUpdatedEma(emaCash, EXTREME_STREAK1_CLOSEVOL_USD6);
+        _countedSwap(EXTREME_STREAK2_CLOSEVOL_USD6);
+        uint64 closedPeriodStart = _currentPeriodStart();
+
+        _advanceOnePeriod();
+        SwapEventCapture memory capture = _captureZeroSwap();
+
+        uint96 emaAfter = _expectedUpdatedEma(emaBefore, EXTREME_STREAK2_CLOSEVOL_USD6);
+        uint64 approxLpFees = _expectedApproxLpFees(EXTREME_STREAK2_CLOSEVOL_USD6, hook.cashFee());
+
+        assertEq(capture.traceCount, 1, "trace must emit once on jump to extreme");
+        assertEq(capture.periodClosedCount, 1, "PeriodClosed must still emit");
+        assertEq(capture.feeUpdatedCount, 1, "FeeUpdated must still emit on transition");
+        assertEq(capture.lullResetCount, 0, "LullReset must not emit on normal close");
+
+        assertEq(capture.lastTrace.periodStart, closedPeriodStart);
+        assertEq(capture.lastTrace.fromFee, hook.cashFee());
+        assertEq(capture.lastTrace.fromFeeIdx, hook.REGIME_CASH());
+        assertEq(capture.lastTrace.toFee, hook.extremeFee());
+        assertEq(capture.lastTrace.toFeeIdx, hook.REGIME_EXTREME());
+        assertEq(capture.lastTrace.closeVolumeUsd6, EXTREME_STREAK2_CLOSEVOL_USD6);
+        assertEq(capture.lastTrace.emaBeforeUsd6Scaled, emaBefore);
+        assertEq(capture.lastTrace.emaAfterUsd6Scaled, emaAfter);
+        assertEq(capture.lastTrace.approxLpFeesUsd6, approxLpFees);
+        assertEq(capture.lastTrace.decisionFlags, TRACE_FLAG_HOLD_WAS_ACTIVE | TRACE_FLAG_UP_EXTREME_RAW);
+        assertEq(capture.lastTrace.countersBefore, _packTraceCounters(false, 3, 1, 0, 0));
+        assertEq(
+            capture.lastTrace.countersAfter, _packTraceCounters(false, hook.extremeHoldPeriods(), 0, 0, 0)
+        );
+        assertEq(capture.lastTrace.reasonCode, hook.REASON_JUMP_EXTREME());
+
+        assertEq(capture.lastPeriodClosed.fromFee, hook.cashFee());
+        assertEq(capture.lastPeriodClosed.toFee, hook.extremeFee());
+        assertEq(capture.lastPeriodClosed.closedVolumeUsd6, EXTREME_STREAK2_CLOSEVOL_USD6);
+        assertEq(capture.lastPeriodClosed.emaVolumeUsd6Scaled, emaAfter);
+        assertEq(capture.lastPeriodClosed.approxLpFeesUsd6, approxLpFees);
+        assertEq(capture.lastPeriodClosed.reasonCode, hook.REASON_JUMP_EXTREME());
+
+        assertEq(capture.lastFeeUpdated.newFee, hook.extremeFee());
+        assertEq(capture.lastFeeUpdated.newFeeIdx, hook.REGIME_EXTREME());
+        assertEq(capture.lastFeeUpdated.closedVolumeUsd6, EXTREME_STREAK2_CLOSEVOL_USD6);
+        assertEq(capture.lastFeeUpdated.emaVolumeUsd6Scaled, emaAfter);
+
+        assertEq(hook.currentRegime(), hook.REGIME_EXTREME(), "fee regime must jump to extreme");
+        assertEq(manager.lastFee(), hook.extremeFee(), "active fee must update to extreme");
+    }
+
+    function test_controllerTransitionTrace_hold_blocked_close() public {
+        uint96 emaBefore = _enterCashRegime();
+        uint64 closedPeriodStart = _currentPeriodStart();
+
+        _advanceOnePeriod();
+        SwapEventCapture memory capture = _captureZeroSwap();
+
+        uint96 emaAfter = _expectedUpdatedEma(emaBefore, 0);
+
+        assertEq(capture.traceCount, 1, "trace must emit once on hold-blocked close");
+        assertEq(capture.periodClosedCount, 1, "PeriodClosed must still emit");
+        assertEq(capture.feeUpdatedCount, 0, "FeeUpdated must not emit when hold keeps cash");
+        assertEq(capture.lullResetCount, 0, "LullReset must not emit on normal close");
+
+        assertEq(capture.lastTrace.periodStart, closedPeriodStart);
+        assertEq(capture.lastTrace.fromFee, hook.cashFee());
+        assertEq(capture.lastTrace.fromFeeIdx, hook.REGIME_CASH());
+        assertEq(capture.lastTrace.toFee, hook.cashFee());
+        assertEq(capture.lastTrace.toFeeIdx, hook.REGIME_CASH());
+        assertEq(capture.lastTrace.closeVolumeUsd6, 0);
+        assertEq(capture.lastTrace.emaBeforeUsd6Scaled, emaBefore);
+        assertEq(capture.lastTrace.emaAfterUsd6Scaled, emaAfter);
+        assertEq(capture.lastTrace.approxLpFeesUsd6, 0);
+        assertEq(capture.lastTrace.decisionFlags, TRACE_FLAG_HOLD_WAS_ACTIVE | TRACE_FLAG_DOWN_CASH_RAW);
+        assertEq(capture.lastTrace.countersBefore, _packTraceCounters(false, hook.cashHoldPeriods(), 0, 0, 0));
+        assertEq(capture.lastTrace.countersAfter, _packTraceCounters(false, 3, 0, 0, 1));
+        assertEq(capture.lastTrace.reasonCode, hook.REASON_HOLD());
+
+        assertEq(capture.lastPeriodClosed.fromFee, hook.cashFee());
+        assertEq(capture.lastPeriodClosed.toFee, hook.cashFee());
+        assertEq(capture.lastPeriodClosed.closedVolumeUsd6, 0);
+        assertEq(capture.lastPeriodClosed.emaVolumeUsd6Scaled, emaAfter);
+        assertEq(capture.lastPeriodClosed.approxLpFeesUsd6, 0);
+        assertEq(capture.lastPeriodClosed.reasonCode, hook.REASON_HOLD());
+
+        assertEq(hook.currentRegime(), hook.REGIME_CASH(), "fee regime must stay cash under hold");
+        assertEq(manager.lastFee(), hook.cashFee(), "active fee must stay cash");
+    }
+
+    function test_controllerTransitionTrace_deadband_blocked_close() public {
+        uint96 emaBefore = _seedFloorEma();
+        _countedSwap(DEADBAND_CLOSEVOL_USD6);
+        uint64 closedPeriodStart = _currentPeriodStart();
+
+        _advanceOnePeriod();
+        SwapEventCapture memory capture = _captureZeroSwap();
+
+        uint96 emaAfter = _expectedUpdatedEma(emaBefore, DEADBAND_CLOSEVOL_USD6);
+        uint64 approxLpFees = _expectedApproxLpFees(DEADBAND_CLOSEVOL_USD6, hook.floorFee());
+
+        assertEq(capture.traceCount, 1, "trace must emit once on deadband-blocked close");
+        assertEq(capture.periodClosedCount, 1, "PeriodClosed must still emit");
+        assertEq(capture.feeUpdatedCount, 0, "FeeUpdated must not emit when deadband blocks transition");
+        assertEq(capture.lullResetCount, 0, "LullReset must not emit on normal close");
+
+        assertEq(capture.lastTrace.periodStart, closedPeriodStart);
+        assertEq(capture.lastTrace.fromFee, hook.floorFee());
+        assertEq(capture.lastTrace.fromFeeIdx, hook.REGIME_FLOOR());
+        assertEq(capture.lastTrace.toFee, hook.floorFee());
+        assertEq(capture.lastTrace.toFeeIdx, hook.REGIME_FLOOR());
+        assertEq(capture.lastTrace.closeVolumeUsd6, DEADBAND_CLOSEVOL_USD6);
+        assertEq(capture.lastTrace.emaBeforeUsd6Scaled, emaBefore);
+        assertEq(capture.lastTrace.emaAfterUsd6Scaled, emaAfter);
+        assertEq(capture.lastTrace.approxLpFeesUsd6, approxLpFees);
+        assertEq(capture.lastTrace.decisionFlags, TRACE_FLAG_DEADBAND_BLOCKED | TRACE_FLAG_UP_CASH_RAW);
+        assertEq(capture.lastTrace.countersBefore, _packTraceCounters(false, 0, 0, 0, 0));
+        assertEq(capture.lastTrace.countersAfter, _packTraceCounters(false, 0, 0, 0, 0));
+        assertEq(capture.lastTrace.reasonCode, hook.REASON_DEADBAND());
+
+        assertEq(capture.lastPeriodClosed.fromFee, hook.floorFee());
+        assertEq(capture.lastPeriodClosed.toFee, hook.floorFee());
+        assertEq(capture.lastPeriodClosed.closedVolumeUsd6, DEADBAND_CLOSEVOL_USD6);
+        assertEq(capture.lastPeriodClosed.emaVolumeUsd6Scaled, emaAfter);
+        assertEq(capture.lastPeriodClosed.approxLpFeesUsd6, approxLpFees);
+        assertEq(capture.lastPeriodClosed.reasonCode, hook.REASON_DEADBAND());
+
+        assertEq(hook.currentRegime(), hook.REGIME_FLOOR(), "fee regime must stay floor");
+        assertEq(manager.lastFee(), hook.floorFee(), "active fee must stay floor");
+    }
+
+    function test_controllerTransitionTrace_emergency_floor_transition() public {
+        uint96 emaLow1 = _enterCashRegime();
+
+        _advanceOnePeriod();
+        _closeCurrentPeriod();
+        emaLow1 = _expectedUpdatedEma(emaLow1, 0);
+
+        _advanceOnePeriod();
+        _closeCurrentPeriod();
+        uint96 emaBefore = _expectedUpdatedEma(emaLow1, 0);
+        uint64 closedPeriodStart = _currentPeriodStart();
+
+        _advanceOnePeriod();
+        SwapEventCapture memory capture = _captureZeroSwap();
+
+        uint96 emaAfter = _expectedUpdatedEma(emaBefore, 0);
+
+        assertEq(capture.traceCount, 1, "trace must emit once on emergency floor transition");
+        assertEq(capture.periodClosedCount, 1, "PeriodClosed must still emit");
+        assertEq(capture.feeUpdatedCount, 1, "FeeUpdated must still emit on emergency floor");
+        assertEq(capture.lullResetCount, 0, "LullReset must not emit on normal close");
+
+        assertEq(capture.lastTrace.periodStart, closedPeriodStart);
+        assertEq(capture.lastTrace.fromFee, hook.cashFee());
+        assertEq(capture.lastTrace.fromFeeIdx, hook.REGIME_CASH());
+        assertEq(capture.lastTrace.toFee, hook.floorFee());
+        assertEq(capture.lastTrace.toFeeIdx, hook.REGIME_FLOOR());
+        assertEq(capture.lastTrace.closeVolumeUsd6, 0);
+        assertEq(capture.lastTrace.emaBeforeUsd6Scaled, emaBefore);
+        assertEq(capture.lastTrace.emaAfterUsd6Scaled, emaAfter);
+        assertEq(capture.lastTrace.approxLpFeesUsd6, 0);
+        assertEq(capture.lastTrace.decisionFlags, TRACE_FLAG_HOLD_WAS_ACTIVE | TRACE_FLAG_EMERGENCY_TRIGGERED);
+        assertEq(capture.lastTrace.countersBefore, _packTraceCounters(false, 2, 0, 0, 2));
+        assertEq(capture.lastTrace.countersAfter, _packTraceCounters(false, 0, 0, 0, 0));
+        assertEq(capture.lastTrace.reasonCode, hook.REASON_EMERGENCY_FLOOR());
+
+        assertEq(capture.lastPeriodClosed.fromFee, hook.cashFee());
+        assertEq(capture.lastPeriodClosed.toFee, hook.floorFee());
+        assertEq(capture.lastPeriodClosed.closedVolumeUsd6, 0);
+        assertEq(capture.lastPeriodClosed.emaVolumeUsd6Scaled, emaAfter);
+        assertEq(capture.lastPeriodClosed.approxLpFeesUsd6, 0);
+        assertEq(capture.lastPeriodClosed.reasonCode, hook.REASON_EMERGENCY_FLOOR());
+
+        assertEq(capture.lastFeeUpdated.newFee, hook.floorFee());
+        assertEq(capture.lastFeeUpdated.newFeeIdx, hook.REGIME_FLOOR());
+        assertEq(capture.lastFeeUpdated.closedVolumeUsd6, 0);
+        assertEq(capture.lastFeeUpdated.emaVolumeUsd6Scaled, emaAfter);
+
+        assertEq(hook.currentRegime(), hook.REGIME_FLOOR(), "fee regime must reset to floor");
+        assertEq(manager.lastFee(), hook.floorFee(), "active fee must update to floor");
+    }
+
+    function test_controllerTransitionTrace_lull_reset() public {
+        uint96 emaBefore = _enterCashRegime();
+        uint64 closedPeriodStart = _currentPeriodStart();
+
+        vm.warp(block.timestamp + LULL_RESET_SECONDS);
+        SwapEventCapture memory capture = _captureZeroSwap();
+
+        assertEq(capture.traceCount, 1, "trace must emit once on lull reset");
+        assertEq(capture.periodClosedCount, 1, "PeriodClosed must still emit");
+        assertEq(capture.feeUpdatedCount, 1, "FeeUpdated must still emit on lull fee reset");
+        assertEq(capture.lullResetCount, 1, "LullReset must still emit");
+
+        assertEq(capture.lastTrace.periodStart, closedPeriodStart);
+        assertEq(capture.lastTrace.fromFee, hook.cashFee());
+        assertEq(capture.lastTrace.fromFeeIdx, hook.REGIME_CASH());
+        assertEq(capture.lastTrace.toFee, hook.floorFee());
+        assertEq(capture.lastTrace.toFeeIdx, hook.REGIME_FLOOR());
+        assertEq(capture.lastTrace.closeVolumeUsd6, 0);
+        assertEq(capture.lastTrace.emaBeforeUsd6Scaled, emaBefore);
+        assertEq(capture.lastTrace.emaAfterUsd6Scaled, 0);
+        assertEq(capture.lastTrace.approxLpFeesUsd6, 0);
+        assertEq(capture.lastTrace.decisionFlags, 0);
+        assertEq(capture.lastTrace.countersBefore, _packTraceCounters(false, hook.cashHoldPeriods(), 0, 0, 0));
+        assertEq(capture.lastTrace.countersAfter, _packTraceCounters(false, 0, 0, 0, 0));
+        assertEq(capture.lastTrace.reasonCode, hook.REASON_LULL_RESET());
+
+        assertEq(capture.lastPeriodClosed.fromFee, hook.cashFee());
+        assertEq(capture.lastPeriodClosed.toFee, hook.floorFee());
+        assertEq(capture.lastPeriodClosed.closedVolumeUsd6, 0);
+        assertEq(capture.lastPeriodClosed.emaVolumeUsd6Scaled, 0);
+        assertEq(capture.lastPeriodClosed.approxLpFeesUsd6, 0);
+        assertEq(capture.lastPeriodClosed.reasonCode, hook.REASON_LULL_RESET());
+
+        assertEq(capture.lastFeeUpdated.newFee, hook.floorFee());
+        assertEq(capture.lastFeeUpdated.newFeeIdx, hook.REGIME_FLOOR());
+        assertEq(capture.lastFeeUpdated.closedVolumeUsd6, 0);
+        assertEq(capture.lastFeeUpdated.emaVolumeUsd6Scaled, 0);
+
+        assertEq(hook.currentRegime(), hook.REGIME_FLOOR(), "fee regime must reset to floor on lull");
+        assertEq(manager.lastFee(), hook.floorFee(), "active fee must update to floor");
     }
 
     function test_hookFee_is_returned_via_afterSwap_delta_path() public {

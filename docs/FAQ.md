@@ -116,6 +116,23 @@ If ownership changes later, this compatibility requirement must still be preserv
 
 No. It is approximate telemetry for regime analytics.
 
+## What is `ControllerTransitionTrace`?
+
+It is a compact diagnostics event emitted alongside `PeriodClosed` on:
+- normal period close,
+- multi-close catch-up periods,
+- lull reset.
+
+It does not replace `PeriodClosed` or `FeeUpdated`.
+Use it when you need to understand why a close stayed in place, was blocked by deadband, was protected by hold, or was forced to floor by the emergency rule.
+
+Key points:
+- `periodStart` identifies the specific closed period.
+- `emaBeforeUsd6Scaled` / `emaAfterUsd6Scaled` show EMA before and after the close update.
+- `countersBefore` / `countersAfter` compact-pack paused/hold/up/down/emergency counters around the decision.
+- `decisionFlags` compact-pack bootstrap, deadband-blocked, hold-active, emergency-triggered, and raw directional signals.
+- lull reset uses `closeVolumeUsd6 = 0`, `approxLpFeesUsd6 = 0`, and hard-resets `emaAfterUsd6Scaled` to `0`.
+
 ## When do ops flows reuse an existing hook?
 
 Only when the existing hook is the canonical CREATE2 deployment derived from the current release and the frozen

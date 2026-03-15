@@ -237,6 +237,60 @@ Bit-packing note:
 
 This metric is approximate telemetry only, not accounting-grade LP revenue.
 
+## Period-close diagnostics
+
+`ControllerTransitionTrace` is emitted as a compact telemetry companion to `PeriodClosed`.
+It is an additive event only and does not replace `PeriodClosed` or `FeeUpdated`.
+
+Emission rules:
+- emits only on period-close path inside `_afterSwap()` and on the explicit lull-reset path,
+- does not emit for ordinary in-period swaps,
+- keeps existing event behavior unchanged:
+  `PeriodClosed` still emits for every close, `FeeUpdated` still emits only when active fee actually changes.
+
+Field semantics:
+- `periodStart`: start timestamp of the period being closed. In multi-close catch-up, this advances by `periodSeconds` per closed period.
+- `fromFee` / `fromFeeIdx`: regime before controller evaluation for this closed period.
+- `toFee` / `toFeeIdx`: regime after controller evaluation for this closed period.
+- `closeVolumeUsd6`: counted volume of the closed period (`0` for zero-volume catch-up closes and lull reset).
+- `emaBeforeUsd6Scaled`: EMA before `_updateEmaScaled(...)`.
+- `emaAfterUsd6Scaled`: EMA immediately after `_updateEmaScaled(...)`. This is still non-zero for ordinary zero-volume closes; only lull reset forces it to `0`.
+- `approxLpFeesUsd6`: same approximate telemetry metric as `PeriodClosed`, based on `fromFee`.
+- `reasonCode`: unchanged controller reason code already used by `PeriodClosed`.
+
+Compact counter packing:
+- `countersBefore` and `countersAfter` use:
+  bit `0` paused,
+  bits `1..5` holdRemaining,
+  bits `6..7` upExtremeStreak,
+  bits `8..10` downStreak,
+  bits `11..12` emergencyStreak.
+- These counters describe the controller state immediately before and immediately after the close evaluation, not the long-lived packed `_state` bit positions.
+
+Compact decision flag packing:
+- bit `0`: `bootstrapV2`
+- bit `1`: `deadbandBlocked`
+- bit `2`: `holdWasActive`
+- bit `3`: `emergencyTriggered`
+- bit `4`: `upCashRaw`
+- bit `5`: `upExtremeRaw`
+- bit `6`: `downExtremeRaw`
+- bit `7`: `downCashRaw`
+
+Interpretation notes:
+- `holdWasActive` refers to the pre-decrement hold state at close start; `countersAfter` reflects post-decrement/post-transition counters.
+- `deadbandBlocked` means a raw threshold was reached but the deadband still prevented the transition on that close.
+- `emergencyTriggered` means the automatic emergency-floor rule fired before ordinary regime logic.
+- raw-direction flags are diagnostic hints for what the controller observed on that close; they do not imply a transition actually happened.
+
+Lull reset trace semantics:
+- `closeVolumeUsd6 = 0`
+- `emaBeforeUsd6Scaled =` previous EMA
+- `emaAfterUsd6Scaled = 0`
+- `approxLpFeesUsd6 = 0`
+- `decisionFlags = 0`
+- `countersBefore` captures the pre-reset controller counters and `countersAfter` is the zeroed post-reset state.
+
 ## ETH handling
 
 - `receive()` always reverts.
@@ -301,6 +355,8 @@ Monitoring interpretation note:
   owner transfer, stable decimals mode, current `minCountedSwapUsd6`, regime fees, HookFee percent, timing params,
   controller params, and no pending HookFee / min-counted-swap changes.
 - monitor `PeriodClosed` and alert on repeated abnormal regime escalations.
+- consume `ControllerTransitionTrace` together with `PeriodClosed` when debugging controller decisions, especially
+  deadband-blocked closes, hold-protected closes, emergency-floor triggers, and lull resets.
 - monitor admin/security events as a minimum set:
   `RegimeFeesUpdated`, `ControllerParamsUpdated`, `TimingParamsUpdated`, `Paused`, `Unpaused`,
   `EmergencyResetToFloorApplied`, `EmergencyResetToCashApplied`.

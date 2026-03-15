@@ -81,6 +81,22 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
     uint256 private constant DOWN_STREAK_SHIFT = 240;
     uint256 private constant EMERGENCY_STREAK_SHIFT = 243;
 
+    // Compact trace counter packing layout.
+    uint8 private constant TRACE_COUNTER_HOLD_SHIFT = 1;
+    uint8 private constant TRACE_COUNTER_UP_EXTREME_SHIFT = 6;
+    uint8 private constant TRACE_COUNTER_DOWN_SHIFT = 8;
+    uint8 private constant TRACE_COUNTER_EMERGENCY_SHIFT = 11;
+
+    // Compact trace decision flags.
+    uint16 private constant TRACE_FLAG_BOOTSTRAP_V2 = 0x0001;
+    uint16 private constant TRACE_FLAG_DEADBAND_BLOCKED = 0x0002;
+    uint16 private constant TRACE_FLAG_HOLD_WAS_ACTIVE = 0x0004;
+    uint16 private constant TRACE_FLAG_EMERGENCY_TRIGGERED = 0x0008;
+    uint16 private constant TRACE_FLAG_UP_CASH_RAW = 0x0010;
+    uint16 private constant TRACE_FLAG_UP_EXTREME_RAW = 0x0020;
+    uint16 private constant TRACE_FLAG_DOWN_EXTREME_RAW = 0x0040;
+    uint16 private constant TRACE_FLAG_DOWN_CASH_RAW = 0x0080;
+
     // -----------------------------------------------------------------------
     // Types
     // -----------------------------------------------------------------------
@@ -136,6 +152,32 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
         uint8 emergencyConfirmPeriods;
     }
 
+    struct ControllerTransitionResult {
+        uint8 feeIdx;
+        uint8 holdRemaining;
+        uint8 upExtremeStreak;
+        uint8 downStreak;
+        uint8 emergencyStreak;
+        uint8 reasonCode;
+        uint16 decisionFlags;
+    }
+
+    struct ControllerTransitionTraceData {
+        uint64 periodStart;
+        uint24 fromFee;
+        uint8 fromFeeIdx;
+        uint24 toFee;
+        uint8 toFeeIdx;
+        uint64 closeVolumeUsd6;
+        uint96 emaBeforeUsd6Scaled;
+        uint96 emaAfterUsd6Scaled;
+        uint64 approxLpFeesUsd6;
+        uint16 decisionFlags;
+        uint16 countersBefore;
+        uint16 countersAfter;
+        uint8 reasonCode;
+    }
+
     // -----------------------------------------------------------------------
     // Events
     // -----------------------------------------------------------------------
@@ -152,6 +194,29 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
         uint64 closedVolumeUsd6,
         uint96 emaVolumeUsd6Scaled,
         uint64 approxLpFeesUsd6,
+        uint8 reasonCode
+    );
+
+    /// @notice Emitted alongside `PeriodClosed` with compact controller diagnostics for the closed period.
+    /// @dev `countersBefore` / `countersAfter` pack:
+    /// bit 0 paused, bits 1..5 holdRemaining, bits 6..7 upExtremeStreak, bits 8..10 downStreak,
+    /// bits 11..12 emergencyStreak.
+    /// @dev `decisionFlags` packs:
+    /// bit 0 bootstrapV2, bit 1 deadbandBlocked, bit 2 holdWasActive, bit 3 emergencyTriggered,
+    /// bit 4 upCashRaw, bit 5 upExtremeRaw, bit 6 downExtremeRaw, bit 7 downCashRaw.
+    event ControllerTransitionTrace(
+        uint64 periodStart,
+        uint24 fromFee,
+        uint8 fromFeeIdx,
+        uint24 toFee,
+        uint8 toFeeIdx,
+        uint64 closeVolumeUsd6,
+        uint96 emaBeforeUsd6Scaled,
+        uint96 emaAfterUsd6Scaled,
+        uint64 approxLpFeesUsd6,
+        uint16 decisionFlags,
+        uint16 countersBefore,
+        uint16 countersAfter,
         uint8 reasonCode
     );
 
@@ -538,6 +603,11 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
 
         if (elapsed >= _config.lullResetSeconds) {
             uint8 oldFeeIdx = feeIdx;
+            uint64 closedPeriodStart = periodStart;
+            uint96 emaBefore = emaVolScaled;
+            uint16 countersBefore = _packControllerTransitionCounters(
+                paused_, holdRemaining, upExtremeStreak, downStreak, emergencyStreak
+            );
 
             emaVolScaled = 0;
             feeIdx = REGIME_FLOOR;
@@ -570,6 +640,23 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
             }
 
             emit PeriodClosed(oldFee, oldFeeIdx, newFee, feeIdx, 0, 0, 0, REASON_LULL_RESET);
+            _emitControllerTransitionTrace(
+                ControllerTransitionTraceData({
+                    periodStart: closedPeriodStart,
+                    fromFee: oldFee,
+                    fromFeeIdx: oldFeeIdx,
+                    toFee: newFee,
+                    toFeeIdx: feeIdx,
+                    closeVolumeUsd6: 0,
+                    emaBeforeUsd6Scaled: emaBefore,
+                    emaAfterUsd6Scaled: 0,
+                    approxLpFeesUsd6: 0,
+                    decisionFlags: 0,
+                    countersBefore: countersBefore,
+                    countersAfter: _packControllerTransitionCounters(paused_, holdRemaining, 0, 0, 0),
+                    reasonCode: REASON_LULL_RESET
+                })
+            );
             emit LullReset(newFee, feeIdx);
             return (IHooks.afterSwap.selector, hookFeeDelta);
         }
@@ -578,6 +665,7 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
             uint64 periods = elapsed / uint64(_config.periodSeconds);
             uint64 closeVol0 = periodVol;
             closeVolForEvent = closeVol0;
+            uint64 periodStart0 = periodStart;
 
             uint8 oldFeeIdx = feeIdx;
 
@@ -590,6 +678,9 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
 
             for (uint64 i = 0; i < periods; ++i) {
                 uint64 closeVol = i == 0 ? closeVol0 : uint64(0);
+                uint64 closedPeriodStart = periodStart0 + i * uint64(_config.periodSeconds);
+                uint16 countersBefore =
+                    _packControllerTransitionCounters(paused_, hold, upStreak, down, emergency);
 
                 uint96 emaBefore = ema;
                 ema = _updateEmaScaled(ema, closeVol);
@@ -597,23 +688,37 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
 
                 uint8 fromFeeIdx = f;
                 uint24 fromFee = _regimeFee(fromFeeIdx);
-                (uint8 nf, uint8 nh, uint8 nu, uint8 nd, uint8 ne, uint8 reasonCode) =
+                ControllerTransitionResult memory transition =
                     _computeNextRegimeV2(f, closeVol, ema, bootstrapV2, hold, upStreak, down, emergency);
-                f = nf;
-                hold = nh;
-                upStreak = nu;
-                down = nd;
-                emergency = ne;
+                f = transition.feeIdx;
+                hold = transition.holdRemaining;
+                upStreak = transition.upExtremeStreak;
+                down = transition.downStreak;
+                emergency = transition.emergencyStreak;
+                uint24 toFee = _regimeFee(f);
+                uint64 approxLpFeesUsd6 = _estimateApproxLpFeesUsd6(closeVol, fromFee);
 
                 emit PeriodClosed(
-                    fromFee,
-                    fromFeeIdx,
-                    _regimeFee(f),
-                    f,
-                    closeVol,
-                    ema,
-                    _estimateApproxLpFeesUsd6(closeVol, fromFee),
-                    reasonCode
+                    fromFee, fromFeeIdx, toFee, f, closeVol, ema, approxLpFeesUsd6, transition.reasonCode
+                );
+                _emitControllerTransitionTrace(
+                    ControllerTransitionTraceData({
+                        periodStart: closedPeriodStart,
+                        fromFee: fromFee,
+                        fromFeeIdx: fromFeeIdx,
+                        toFee: toFee,
+                        toFeeIdx: f,
+                        closeVolumeUsd6: closeVol,
+                        emaBeforeUsd6Scaled: emaBefore,
+                        emaAfterUsd6Scaled: ema,
+                        approxLpFeesUsd6: approxLpFeesUsd6,
+                        decisionFlags: transition.decisionFlags,
+                        countersBefore: countersBefore,
+                        countersAfter: _packControllerTransitionCounters(
+                            paused_, hold, upStreak, down, emergency
+                        ),
+                        reasonCode: transition.reasonCode
+                    })
                 );
             }
 
@@ -1420,7 +1525,8 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
 
     function _withdrawCurrencyClaim(Currency currency, address to, uint256 amount) internal {
         while (amount > 0) {
-            uint256 chunk = amount > MAX_POOLMANAGER_SETTLEMENT_AMOUNT ? MAX_POOLMANAGER_SETTLEMENT_AMOUNT : amount;
+            uint256 chunk =
+                amount > MAX_POOLMANAGER_SETTLEMENT_AMOUNT ? MAX_POOLMANAGER_SETTLEMENT_AMOUNT : amount;
             poolManager.burn(address(this), currency.toId(), chunk);
             poolManager.take(currency, to, chunk);
             unchecked {
@@ -1548,6 +1654,38 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
         return uint64(fees);
     }
 
+    function _emitControllerTransitionTrace(ControllerTransitionTraceData memory trace) internal {
+        emit ControllerTransitionTrace(
+            trace.periodStart,
+            trace.fromFee,
+            trace.fromFeeIdx,
+            trace.toFee,
+            trace.toFeeIdx,
+            trace.closeVolumeUsd6,
+            trace.emaBeforeUsd6Scaled,
+            trace.emaAfterUsd6Scaled,
+            trace.approxLpFeesUsd6,
+            trace.decisionFlags,
+            trace.countersBefore,
+            trace.countersAfter,
+            trace.reasonCode
+        );
+    }
+
+    function _packControllerTransitionCounters(
+        bool paused,
+        uint8 holdRemaining,
+        uint8 upExtremeStreak,
+        uint8 downStreak,
+        uint8 emergencyStreak
+    ) internal pure returns (uint16 counters) {
+        if (paused) counters |= 1;
+        counters |= uint16(holdRemaining) << TRACE_COUNTER_HOLD_SHIFT;
+        counters |= uint16(upExtremeStreak) << TRACE_COUNTER_UP_EXTREME_SHIFT;
+        counters |= uint16(downStreak) << TRACE_COUNTER_DOWN_SHIFT;
+        counters |= uint16(emergencyStreak) << TRACE_COUNTER_EMERGENCY_SHIFT;
+    }
+
     function _incrementStreak(uint8 current, uint8 maxValue) internal pure returns (uint8) {
         return current < maxValue ? current + 1 : maxValue;
     }
@@ -1566,61 +1704,56 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
         uint8 upExtremeStreak,
         uint8 downStreak,
         uint8 emergencyStreak
-    )
-        internal
-        view
-        returns (
-            uint8 newFeeIdx,
-            uint8 newHoldRemaining,
-            uint8 newUpExtremeStreak,
-            uint8 newDownStreak,
-            uint8 newEmergencyStreak,
-            uint8 reasonCode
-        )
-    {
-        newFeeIdx = feeIdx;
-        newHoldRemaining = holdRemaining;
-        newUpExtremeStreak = upExtremeStreak;
-        newDownStreak = downStreak;
-        newEmergencyStreak = emergencyStreak;
-        reasonCode = closeVol == 0 ? REASON_NO_SWAPS : REASON_NO_CHANGE;
+    ) internal view returns (ControllerTransitionResult memory result) {
+        result.feeIdx = feeIdx;
+        result.holdRemaining = holdRemaining;
+        result.upExtremeStreak = upExtremeStreak;
+        result.downStreak = downStreak;
+        result.emergencyStreak = emergencyStreak;
+        result.reasonCode = closeVol == 0 ? REASON_NO_SWAPS : REASON_NO_CHANGE;
+        if (bootstrapV2) {
+            result.decisionFlags |= TRACE_FLAG_BOOTSTRAP_V2;
+        }
+        if (holdRemaining > 0) {
+            result.decisionFlags |= TRACE_FLAG_HOLD_WAS_ACTIVE;
+        }
 
         // Hold counter is decremented before protection check; configured hold N gives N - 1 fully protected periods.
-        if (newHoldRemaining > 0) {
+        if (result.holdRemaining > 0) {
             unchecked {
-                newHoldRemaining -= 1;
+                result.holdRemaining -= 1;
             }
         }
 
         if (closeVol < _config.emergencyFloorCloseVolUsd6) {
-            newEmergencyStreak = _incrementStreak(newEmergencyStreak, MAX_EMERGENCY_STREAK);
+            result.emergencyStreak = _incrementStreak(result.emergencyStreak, MAX_EMERGENCY_STREAK);
         } else {
-            newEmergencyStreak = 0;
+            result.emergencyStreak = 0;
         }
-        if (newEmergencyStreak >= _config.emergencyConfirmPeriods && newFeeIdx != REGIME_FLOOR) {
-            newFeeIdx = REGIME_FLOOR;
-            newHoldRemaining = 0;
-            newUpExtremeStreak = 0;
-            newDownStreak = 0;
-            newEmergencyStreak = 0;
-            return (
-                newFeeIdx,
-                newHoldRemaining,
-                newUpExtremeStreak,
-                newDownStreak,
-                newEmergencyStreak,
-                REASON_EMERGENCY_FLOOR
-            );
+        if (result.emergencyStreak >= _config.emergencyConfirmPeriods && result.feeIdx != REGIME_FLOOR) {
+            result.feeIdx = REGIME_FLOOR;
+            result.holdRemaining = 0;
+            result.upExtremeStreak = 0;
+            result.downStreak = 0;
+            result.emergencyStreak = 0;
+            result.reasonCode = REASON_EMERGENCY_FLOOR;
+            result.decisionFlags |= TRACE_FLAG_EMERGENCY_TRIGGERED;
+            return result;
         }
 
         uint256 rBps =
             emaVolScaled == 0 ? 0 : (uint256(closeVol) * EMA_SCALE * BPS_SCALE) / uint256(emaVolScaled);
         uint256 deadband = uint256(_config.deadbandBps);
         bool deadbandBlocked;
+        bool downExtremeRaw;
+        bool downCashRaw;
 
-        if (newFeeIdx == REGIME_FLOOR) {
+        if (result.feeIdx == REGIME_FLOOR) {
             uint256 cashThreshold = uint256(_config.upRToCashBps);
             bool upCashRaw = rBps >= cashThreshold;
+            if (upCashRaw) {
+                result.decisionFlags |= TRACE_FLAG_UP_CASH_RAW;
+            }
             bool upCashPass = rBps >= cashThreshold + deadband;
             bool canJumpCash =
                 !bootstrapV2 && emaVolScaled != 0 && closeVol >= _config.minCloseVolToCashUsd6 && upCashPass;
@@ -1630,147 +1763,130 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
             ) {
                 deadbandBlocked = true;
             }
-            if (canJumpCash && newFeeIdx != REGIME_CASH) {
-                newFeeIdx = REGIME_CASH;
-                newHoldRemaining = _config.cashHoldPeriods;
-                newUpExtremeStreak = 0;
-                newDownStreak = 0;
-                newEmergencyStreak = 0;
-                return (
-                    newFeeIdx,
-                    newHoldRemaining,
-                    newUpExtremeStreak,
-                    newDownStreak,
-                    newEmergencyStreak,
-                    REASON_JUMP_CASH
-                );
+            if (canJumpCash && result.feeIdx != REGIME_CASH) {
+                result.feeIdx = REGIME_CASH;
+                result.holdRemaining = _config.cashHoldPeriods;
+                result.upExtremeStreak = 0;
+                result.downStreak = 0;
+                result.emergencyStreak = 0;
+                result.reasonCode = REASON_JUMP_CASH;
+                return result;
             }
         }
 
-        if (newFeeIdx == REGIME_CASH) {
+        if (result.feeIdx == REGIME_CASH) {
             uint256 extremeThreshold = uint256(_config.upRToExtremeBps);
-            bool upExtremeRaw =
-                closeVol >= _config.minCloseVolToExtremeUsd6 && rBps >= extremeThreshold;
-            bool upExtremePass = closeVol >= _config.minCloseVolToExtremeUsd6
-                && rBps >= extremeThreshold + deadband;
+            bool upExtremeRaw = closeVol >= _config.minCloseVolToExtremeUsd6 && rBps >= extremeThreshold;
+            if (upExtremeRaw) {
+                result.decisionFlags |= TRACE_FLAG_UP_EXTREME_RAW;
+            }
+            bool upExtremePass =
+                closeVol >= _config.minCloseVolToExtremeUsd6 && rBps >= extremeThreshold + deadband;
             if (upExtremePass) {
-                newUpExtremeStreak = _incrementStreak(newUpExtremeStreak, MAX_UP_EXTREME_STREAK);
+                result.upExtremeStreak = _incrementStreak(result.upExtremeStreak, MAX_UP_EXTREME_STREAK);
             } else {
                 if (
                     upExtremeRaw
-                        && _incrementStreak(newUpExtremeStreak, MAX_UP_EXTREME_STREAK)
-                            >= _config.upExtremeConfirmPeriods && !bootstrapV2 && newFeeIdx != REGIME_EXTREME
+                        && _incrementStreak(result.upExtremeStreak, MAX_UP_EXTREME_STREAK)
+                            >= _config.upExtremeConfirmPeriods && !bootstrapV2
+                        && result.feeIdx != REGIME_EXTREME
                 ) {
                     deadbandBlocked = true;
                 }
-                newUpExtremeStreak = 0;
+                result.upExtremeStreak = 0;
             }
             if (
-                !bootstrapV2 && newUpExtremeStreak >= _config.upExtremeConfirmPeriods
-                    && newFeeIdx != REGIME_EXTREME
+                !bootstrapV2 && result.upExtremeStreak >= _config.upExtremeConfirmPeriods
+                    && result.feeIdx != REGIME_EXTREME
             ) {
-                newFeeIdx = REGIME_EXTREME;
-                newHoldRemaining = _config.extremeHoldPeriods;
-                newUpExtremeStreak = 0;
-                newDownStreak = 0;
-                newEmergencyStreak = 0;
-                return (
-                    newFeeIdx,
-                    newHoldRemaining,
-                    newUpExtremeStreak,
-                    newDownStreak,
-                    newEmergencyStreak,
-                    REASON_JUMP_EXTREME
-                );
+                result.feeIdx = REGIME_EXTREME;
+                result.holdRemaining = _config.extremeHoldPeriods;
+                result.upExtremeStreak = 0;
+                result.downStreak = 0;
+                result.emergencyStreak = 0;
+                result.reasonCode = REASON_JUMP_EXTREME;
+                return result;
             }
         } else {
-            newUpExtremeStreak = 0;
+            result.upExtremeStreak = 0;
         }
 
-        if (newHoldRemaining > 0) {
-            newDownStreak = 0;
-            return
-                (
-                    newFeeIdx,
-                    newHoldRemaining,
-                    newUpExtremeStreak,
-                    newDownStreak,
-                    newEmergencyStreak,
-                    REASON_HOLD
-                );
+        if (result.feeIdx == REGIME_EXTREME) {
+            downExtremeRaw = rBps <= uint256(_config.downRFromExtremeBps);
+            if (downExtremeRaw) {
+                result.decisionFlags |= TRACE_FLAG_DOWN_EXTREME_RAW;
+            }
+        } else if (result.feeIdx == REGIME_CASH) {
+            downCashRaw = rBps <= uint256(_config.downRFromCashBps);
+            if (downCashRaw) {
+                result.decisionFlags |= TRACE_FLAG_DOWN_CASH_RAW;
+            }
         }
 
-        if (newFeeIdx == REGIME_EXTREME) {
+        if (result.holdRemaining > 0) {
+            result.downStreak = 0;
+            result.reasonCode = REASON_HOLD;
+            return result;
+        }
+
+        if (result.feeIdx == REGIME_EXTREME) {
             uint256 downExtremeThreshold = uint256(_config.downRFromExtremeBps);
             uint256 downExtremePassThreshold = downExtremeThreshold - deadband;
-            bool downExtremeRaw = rBps <= downExtremeThreshold;
             bool downExtremePass = rBps <= downExtremePassThreshold;
             if (downExtremePass) {
-                newDownStreak = _incrementStreak(newDownStreak, MAX_DOWN_STREAK);
+                result.downStreak = _incrementStreak(result.downStreak, MAX_DOWN_STREAK);
             } else {
                 if (
                     downExtremeRaw
-                        && _incrementStreak(newDownStreak, MAX_DOWN_STREAK)
-                            >= _config.downExtremeConfirmPeriods && newFeeIdx != REGIME_CASH
+                        && _incrementStreak(result.downStreak, MAX_DOWN_STREAK)
+                            >= _config.downExtremeConfirmPeriods && result.feeIdx != REGIME_CASH
                 ) {
                     deadbandBlocked = true;
                 }
-                newDownStreak = 0;
+                result.downStreak = 0;
             }
-            if (newDownStreak >= _config.downExtremeConfirmPeriods) {
-                newDownStreak = 0;
-                if (newFeeIdx != REGIME_CASH) {
-                    newFeeIdx = REGIME_CASH;
-                    return (
-                        newFeeIdx,
-                        newHoldRemaining,
-                        newUpExtremeStreak,
-                        newDownStreak,
-                        newEmergencyStreak,
-                        REASON_DOWN_TO_CASH
-                    );
+            if (result.downStreak >= _config.downExtremeConfirmPeriods) {
+                result.downStreak = 0;
+                if (result.feeIdx != REGIME_CASH) {
+                    result.feeIdx = REGIME_CASH;
+                    result.reasonCode = REASON_DOWN_TO_CASH;
+                    return result;
                 }
             }
-        } else if (newFeeIdx == REGIME_CASH) {
+        } else if (result.feeIdx == REGIME_CASH) {
             uint256 downCashThreshold = uint256(_config.downRFromCashBps);
             uint256 downCashPassThreshold = downCashThreshold - deadband;
-            bool downCashRaw = rBps <= downCashThreshold;
             bool downCashPass = rBps <= downCashPassThreshold;
             if (downCashPass) {
-                newDownStreak = _incrementStreak(newDownStreak, MAX_DOWN_STREAK);
+                result.downStreak = _incrementStreak(result.downStreak, MAX_DOWN_STREAK);
             } else {
                 if (
                     downCashRaw
-                        && _incrementStreak(newDownStreak, MAX_DOWN_STREAK) >= _config.downCashConfirmPeriods
-                        && newFeeIdx != REGIME_FLOOR
+                        && _incrementStreak(result.downStreak, MAX_DOWN_STREAK)
+                            >= _config.downCashConfirmPeriods && result.feeIdx != REGIME_FLOOR
                 ) {
                     deadbandBlocked = true;
                 }
-                newDownStreak = 0;
+                result.downStreak = 0;
             }
-            if (newDownStreak >= _config.downCashConfirmPeriods) {
-                newDownStreak = 0;
-                if (newFeeIdx != REGIME_FLOOR) {
-                    newFeeIdx = REGIME_FLOOR;
-                    return (
-                        newFeeIdx,
-                        newHoldRemaining,
-                        newUpExtremeStreak,
-                        newDownStreak,
-                        newEmergencyStreak,
-                        REASON_DOWN_TO_FLOOR
-                    );
+            if (result.downStreak >= _config.downCashConfirmPeriods) {
+                result.downStreak = 0;
+                if (result.feeIdx != REGIME_FLOOR) {
+                    result.feeIdx = REGIME_FLOOR;
+                    result.reasonCode = REASON_DOWN_TO_FLOOR;
+                    return result;
                 }
             }
         } else {
-            newDownStreak = 0;
+            result.downStreak = 0;
         }
 
         if (deadbandBlocked) {
-            reasonCode = REASON_DEADBAND;
+            result.reasonCode = REASON_DEADBAND;
+            result.decisionFlags |= TRACE_FLAG_DEADBAND_BLOCKED;
         }
         if (bootstrapV2) {
-            reasonCode = REASON_EMA_BOOTSTRAP;
+            result.reasonCode = REASON_EMA_BOOTSTRAP;
         }
     }
 
