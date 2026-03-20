@@ -363,11 +363,18 @@ fi
 
 if [[ -z "${VOLATILE:-}" && -n "${DEPLOY_VOLATILE:-}" ]]; then VOLATILE="${DEPLOY_VOLATILE}"; fi
 if [[ -z "${STABLE:-}" && -n "${DEPLOY_STABLE:-}" ]]; then STABLE="${DEPLOY_STABLE}"; fi
-if [[ -z "${STABLE_DECIMALS:-}" && -n "${DEPLOY_STABLE_DECIMALS:-}" ]]; then STABLE_DECIMALS="${DEPLOY_STABLE_DECIMALS}"; fi
 if [[ -z "${TICK_SPACING:-}" && -n "${DEPLOY_TICK_SPACING:-}" ]]; then TICK_SPACING="${DEPLOY_TICK_SPACING}"; fi
 
-if [[ -z "${VOLATILE:-}" || -z "${STABLE:-}" || -z "${STABLE_DECIMALS:-}" || -z "${TICK_SPACING:-}" ]]; then
-  echo "ERROR: VOLATILE, STABLE, STABLE_DECIMALS and TICK_SPACING must be set in ${HOOK_CONF}."
+if [[ -z "${STABLE_DECIMALS:-}" && -n "${STABLE:-}" ]]; then
+  STABLE_DECIMALS="$(cast_rpc call --rpc-url "${RPC_URL}" "${STABLE}" "decimals()(uint8)" 2>/dev/null | awk '{print $1}' || true)"
+fi
+
+if [[ -z "${VOLATILE:-}" || -z "${STABLE:-}" || -z "${TICK_SPACING:-}" ]]; then
+  echo "ERROR: VOLATILE, STABLE and TICK_SPACING must be set in ${HOOK_CONF}."
+  exit 1
+fi
+if [[ -z "${STABLE_DECIMALS:-}" ]]; then
+  echo "ERROR: STABLE_DECIMALS missing and onchain decimals() query failed for ${STABLE}."
   exit 1
 fi
 

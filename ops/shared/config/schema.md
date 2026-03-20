@@ -27,15 +27,18 @@ Binding keys may come from either the runtime key or the frozen deployment snaps
 - `POOL_MANAGER` or `DEPLOY_POOL_MANAGER`
 - `VOLATILE` or `DEPLOY_VOLATILE`
 - `STABLE` or `DEPLOY_STABLE`
-- `STABLE_DECIMALS` or `DEPLOY_STABLE_DECIMALS`
 - `TICK_SPACING` or `DEPLOY_TICK_SPACING`
+
+Stable-token decimals resolution:
+- `STABLE_DECIMALS` remains available as an explicit runtime override when a local token is not deployed yet.
+- Otherwise the loader resolves stable decimals onchain from `STABLE` / `DEPLOY_STABLE` via `decimals()`.
 
 ## Hook / pool binding
 
 - `HOOK_ADDRESS` (optional for bootstrap, required for ensure/smoke/full/emergency)
   - when provided for deploy/ensure/preflight validation, it must be the canonical CREATE2 hook address for the
     current release and the frozen deployment snapshot loaded from `ops/<network>/config/deploy.env`
-- `POOL_ADDRESS` (optional, validated when provided)
+- `POOL_ID` (optional, validated against the canonical hook pool key when provided)
 
 ## Pool initialization
 
@@ -85,7 +88,6 @@ the snapshot cannot drift with outer environment changes.
 - `DEPLOY_POOL_MANAGER`
 - `DEPLOY_VOLATILE`
 - `DEPLOY_STABLE`
-- `DEPLOY_STABLE_DECIMALS`
 - `DEPLOY_TICK_SPACING`
 - `DEPLOY_OWNER`
 - `DEPLOY_FLOOR_FEE_PERCENT` — same meaning as `FLOOR_FEE_PERCENT`. Example: `0.04`.

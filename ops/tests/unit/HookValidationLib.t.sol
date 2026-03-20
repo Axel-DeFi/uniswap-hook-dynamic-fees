@@ -230,7 +230,8 @@ contract HookValidationLibTest is Test, VolumeDynamicFeeHookV2DeployHelper {
 
     function test_validateHook_accepts_matching_runtime_config() public {
         HookValidationHarness hook = _deploy(address(this), 6, V2_INITIAL_HOOK_FEE_PERCENT);
-        OpsTypes.CoreConfig memory cfg = _matchingCfg(address(hook), address(this), 6, V2_INITIAL_HOOK_FEE_PERCENT);
+        OpsTypes.CoreConfig memory cfg =
+            _matchingCfg(address(hook), address(this), 6, V2_INITIAL_HOOK_FEE_PERCENT);
 
         OpsTypes.HookValidation memory validation = HookValidationLib.validateHook(cfg);
         assertTrue(validation.ok);
@@ -239,7 +240,8 @@ contract HookValidationLibTest is Test, VolumeDynamicFeeHookV2DeployHelper {
 
     function test_validateHook_rejects_owner_mismatch() public {
         HookValidationHarness hook = _deploy(address(this), 6, V2_INITIAL_HOOK_FEE_PERCENT);
-        OpsTypes.CoreConfig memory cfg = _matchingCfg(address(hook), address(0xBEEF), 6, V2_INITIAL_HOOK_FEE_PERCENT);
+        OpsTypes.CoreConfig memory cfg =
+            _matchingCfg(address(hook), address(0xBEEF), 6, V2_INITIAL_HOOK_FEE_PERCENT);
 
         OpsTypes.HookValidation memory validation = HookValidationLib.validateHook(cfg);
         assertFalse(validation.ok);
@@ -248,7 +250,8 @@ contract HookValidationLibTest is Test, VolumeDynamicFeeHookV2DeployHelper {
 
     function test_validateHook_rejects_poolManager_mismatch() public {
         HookValidationHarness hook = _deploy(address(this), 6, V2_INITIAL_HOOK_FEE_PERCENT);
-        OpsTypes.CoreConfig memory cfg = _matchingCfg(address(hook), address(this), 6, V2_INITIAL_HOOK_FEE_PERCENT);
+        OpsTypes.CoreConfig memory cfg =
+            _matchingCfg(address(hook), address(this), 6, V2_INITIAL_HOOK_FEE_PERCENT);
         cfg.poolManager = address(new MockPoolManager());
 
         OpsTypes.HookValidation memory validation = HookValidationLib.validateHook(cfg);
@@ -260,7 +263,8 @@ contract HookValidationLibTest is Test, VolumeDynamicFeeHookV2DeployHelper {
         HookValidationHarness hook = _deploy(address(this), 6, V2_INITIAL_HOOK_FEE_PERCENT);
         hook.proposeNewOwner(address(0xBEEF));
 
-        OpsTypes.CoreConfig memory cfg = _matchingCfg(address(hook), address(this), 6, V2_INITIAL_HOOK_FEE_PERCENT);
+        OpsTypes.CoreConfig memory cfg =
+            _matchingCfg(address(hook), address(this), 6, V2_INITIAL_HOOK_FEE_PERCENT);
         OpsTypes.HookValidation memory validation = HookValidationLib.validateHook(cfg);
         assertFalse(validation.ok);
         assertEq(validation.reason, "hook pending owner exists");
@@ -268,7 +272,8 @@ contract HookValidationLibTest is Test, VolumeDynamicFeeHookV2DeployHelper {
 
     function test_validateHook_rejects_timing_config_mismatch() public {
         HookValidationHarness hook = _deploy(address(this), 6, V2_INITIAL_HOOK_FEE_PERCENT);
-        OpsTypes.CoreConfig memory cfg = _matchingCfg(address(hook), address(this), 6, V2_INITIAL_HOOK_FEE_PERCENT);
+        OpsTypes.CoreConfig memory cfg =
+            _matchingCfg(address(hook), address(this), 6, V2_INITIAL_HOOK_FEE_PERCENT);
         cfg.periodSeconds = PERIOD_SECONDS + 1;
 
         OpsTypes.HookValidation memory validation = HookValidationLib.validateHook(cfg);
@@ -278,7 +283,8 @@ contract HookValidationLibTest is Test, VolumeDynamicFeeHookV2DeployHelper {
 
     function test_validateHook_rejects_stable_decimals_mode_mismatch() public {
         HookValidationHarness hook = _deploy(address(this), 18, V2_INITIAL_HOOK_FEE_PERCENT);
-        OpsTypes.CoreConfig memory cfg = _matchingCfg(address(hook), address(this), 6, V2_INITIAL_HOOK_FEE_PERCENT);
+        OpsTypes.CoreConfig memory cfg =
+            _matchingCfg(address(hook), address(this), 6, V2_INITIAL_HOOK_FEE_PERCENT);
 
         OpsTypes.HookValidation memory validation = HookValidationLib.validateHook(cfg);
         assertFalse(validation.ok);
@@ -287,7 +293,8 @@ contract HookValidationLibTest is Test, VolumeDynamicFeeHookV2DeployHelper {
 
     function test_validateHook_rejects_minCountedSwap_mismatch() public {
         HookValidationHarness hook = _deploy(address(this), 6, V2_INITIAL_HOOK_FEE_PERCENT);
-        OpsTypes.CoreConfig memory cfg = _matchingCfg(address(hook), address(this), 6, V2_INITIAL_HOOK_FEE_PERCENT);
+        OpsTypes.CoreConfig memory cfg =
+            _matchingCfg(address(hook), address(this), 6, V2_INITIAL_HOOK_FEE_PERCENT);
         cfg.minCountedSwapUsd6 = 1_500_000;
 
         OpsTypes.HookValidation memory validation = HookValidationLib.validateHook(cfg);
@@ -299,7 +306,8 @@ contract HookValidationLibTest is Test, VolumeDynamicFeeHookV2DeployHelper {
         HookValidationHarness hook = _deploy(address(this), 6, V2_INITIAL_HOOK_FEE_PERCENT);
         hook.scheduleHookFeePercentChange(0);
 
-        OpsTypes.CoreConfig memory cfg = _matchingCfg(address(hook), address(this), 6, V2_INITIAL_HOOK_FEE_PERCENT);
+        OpsTypes.CoreConfig memory cfg =
+            _matchingCfg(address(hook), address(this), 6, V2_INITIAL_HOOK_FEE_PERCENT);
         OpsTypes.HookValidation memory validation = HookValidationLib.validateHook(cfg);
         assertFalse(validation.ok);
         assertEq(validation.reason, "hook pending HookFee percent change exists");
@@ -309,7 +317,8 @@ contract HookValidationLibTest is Test, VolumeDynamicFeeHookV2DeployHelper {
         HookValidationHarness hook = _deploy(address(this), 6, V2_INITIAL_HOOK_FEE_PERCENT);
         hook.scheduleMinCountedSwapUsd6Change(1_500_000);
 
-        OpsTypes.CoreConfig memory cfg = _matchingCfg(address(hook), address(this), 6, V2_INITIAL_HOOK_FEE_PERCENT);
+        OpsTypes.CoreConfig memory cfg =
+            _matchingCfg(address(hook), address(this), 6, V2_INITIAL_HOOK_FEE_PERCENT);
         OpsTypes.HookValidation memory validation = HookValidationLib.validateHook(cfg);
         assertFalse(validation.ok);
         assertEq(validation.reason, "hook pending min counted swap change exists");
@@ -333,8 +342,9 @@ contract HookValidationLibTest is Test, VolumeDynamicFeeHookV2DeployHelper {
             true
         );
 
-        (address expected, bytes32 salt) =
-            HookMiner.find(address(this), flags, type(PermissionSurfaceHookMock).creationCode, constructorArgs);
+        (address expected, bytes32 salt) = HookMiner.find(
+            address(this), flags, type(PermissionSurfaceHookMock).creationCode, constructorArgs
+        );
 
         PermissionSurfaceHookMock hook = new PermissionSurfaceHookMock{salt: salt}(
             IPoolManager(address(manager)),
@@ -350,13 +360,17 @@ contract HookValidationLibTest is Test, VolumeDynamicFeeHookV2DeployHelper {
 
         assertEq(address(hook), expected);
 
-        OpsTypes.CoreConfig memory cfg = _matchingCfg(address(hook), address(this), 6, V2_INITIAL_HOOK_FEE_PERCENT);
+        OpsTypes.CoreConfig memory cfg =
+            _matchingCfg(address(hook), address(this), 6, V2_INITIAL_HOOK_FEE_PERCENT);
         OpsTypes.HookValidation memory validation = HookValidationLib.validateHook(cfg);
         assertFalse(validation.ok);
         assertEq(validation.reason, "hook permissions mismatch");
     }
 
-    function _deploy(address owner_, uint8 stableDecimals_, uint16 hookFeePercent_) internal returns (HookValidationHarness h) {
+    function _deploy(address owner_, uint8 stableDecimals_, uint16 hookFeePercent_)
+        internal
+        returns (HookValidationHarness h)
+    {
         bytes memory constructorArgs = _constructorArgsV2(
             IPoolManager(address(manager)),
             Currency.wrap(TOKEN0),
@@ -425,7 +439,7 @@ contract HookValidationLibTest is Test, VolumeDynamicFeeHookV2DeployHelper {
         cfg.deployer = address(this);
         cfg.poolManager = address(manager);
         cfg.hookAddress = hookAddr;
-        cfg.poolAddress = address(0);
+        cfg.poolId = bytes32(0);
         cfg.owner = owner_;
         cfg.volatileToken = TOKEN1;
         cfg.stableToken = TOKEN0;

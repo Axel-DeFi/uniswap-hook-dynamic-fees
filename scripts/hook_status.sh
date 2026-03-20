@@ -1548,7 +1548,6 @@ if [[ -z "${POOL_MANAGER:-}" && -n "${DEPLOY_POOL_MANAGER:-}" ]]; then POOL_MANA
 if [[ -z "${VOLATILE:-}" && -n "${DEPLOY_VOLATILE:-}" ]]; then VOLATILE="${DEPLOY_VOLATILE}"; fi
 if [[ -z "${STABLE:-}" && -n "${DEPLOY_STABLE:-}" ]]; then STABLE="${DEPLOY_STABLE}"; fi
 if [[ -z "${TICK_SPACING:-}" && -n "${DEPLOY_TICK_SPACING:-}" ]]; then TICK_SPACING="${DEPLOY_TICK_SPACING}"; fi
-if [[ -z "${STABLE_DECIMALS:-}" && -n "${DEPLOY_STABLE_DECIMALS:-}" ]]; then STABLE_DECIMALS="${DEPLOY_STABLE_DECIMALS}"; fi
 
 STATE_JSON="$(ops_state_path "${CHAIN}")"
 if [[ -f "${STATE_JSON}" ]]; then
@@ -1583,13 +1582,21 @@ if [[ -z "${HOOK_ADDRESS}" ]]; then
   exit 1
 fi
 
-required=(POOL_MANAGER VOLATILE STABLE TICK_SPACING STABLE_DECIMALS)
+if [[ -z "${STABLE_DECIMALS:-}" && -n "${STABLE:-}" ]]; then
+  STABLE_DECIMALS="$(first_token "$(try_cast_call "${STABLE}" "decimals()(uint8)" || true)")"
+fi
+
+required=(POOL_MANAGER VOLATILE STABLE TICK_SPACING)
 for k in "${required[@]}"; do
   if [[ -z "${!k:-}" ]]; then
     echo "ERROR: missing ${k} in ${CFG}" >&2
     exit 1
   fi
 done
+if [[ -z "${STABLE_DECIMALS:-}" ]]; then
+  echo "ERROR: STABLE_DECIMALS missing and onchain decimals() query failed for ${STABLE}" >&2
+  exit 1
+fi
 
 POOL_ACTIVITY_CHUNK_BLOCKS="${HOOK_STATUS_CHUNK_BLOCKS:-50000}"
 if ! [[ "${POOL_ACTIVITY_CHUNK_BLOCKS}" =~ ^[0-9]+$ ]] || (( POOL_ACTIVITY_CHUNK_BLOCKS <= 0 )); then

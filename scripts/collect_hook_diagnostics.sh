@@ -227,8 +227,8 @@ RPC_URL="${RPC_URL:-}"
   exit 1
 }
 
-[[ -n "${POOL_ADDRESS:-}" ]] || {
-  echo "Error: POOL_ADDRESS is empty in $DEFAULTS_ENV" >&2
+[[ -n "${POOL_ID:-}" ]] || {
+  echo "Error: POOL_ID is empty in $DEFAULTS_ENV" >&2
   exit 1
 }
 
@@ -271,7 +271,7 @@ find "$CONFIG_DIR" -maxdepth 1 -type f -name '*.env' ! -name 'defaults.env' ! -n
   echo "CONFIG_DIR=${CONFIG_DIR}"
   echo
   echo "# Exported variables after sourcing defaults.env + deploy.env"
-  env | LC_ALL=C sort | grep -E '^(HOOK|POOL|POOL_ADDRESS|OWNER|RPC|DEPLOY|CHAIN|NETWORK|FEE|MIN|MAX|EMA|LULL|PERIOD|CASH|EXTREME|EMERGENCY|UP|DOWN|PAUSE|UNPAUSE|CONTROLLER|MANAGER|POOL_MANAGER|HOOK_ADDRESS|POOL_ID|HOOK_DEPLOY_TX|POOL_INIT_TX)=' || true
+  env | LC_ALL=C sort | grep -E '^(HOOK|POOL|OWNER|RPC|DEPLOY|CHAIN|NETWORK|FEE|MIN|MAX|EMA|LULL|PERIOD|CASH|EXTREME|EMERGENCY|UP|DOWN|PAUSE|UNPAUSE|CONTROLLER|MANAGER|POOL_MANAGER|HOOK_ADDRESS|POOL_ID|HOOK_DEPLOY_TX|POOL_INIT_TX)=' || true
 } > "$WORK_DIR/config/public_config_snapshot.txt"
 
 if git -C "$PROJECT_ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
@@ -292,7 +292,7 @@ ONCHAIN_IS_PAUSED="$(try_cast_scalar 'isPaused()(bool)')"
 ONCHAIN_POOL_ID="$(try_cast_scalar 'poolId()(bytes32)')"
 [[ -z "$ONCHAIN_POOL_ID" ]] && ONCHAIN_POOL_ID="$(try_cast_scalar 'POOL_ID()(bytes32)')"
 
-CONFIG_POOL_ID="${POOL_ADDRESS}"
+CONFIG_POOL_ID="${POOL_ID}"
 CONFIG_POOL_MANAGER="$(first_nonempty "${POOL_MANAGER:-}" "${POOL_MANAGER_ADDRESS:-}" "${MANAGER:-}" "$ONCHAIN_POOL_MANAGER")"
 CONFIG_OWNER="$(first_nonempty "${OWNER:-}" "${OWNER_ADDRESS:-}" "$ONCHAIN_OWNER")"
 CONFIG_HOOK_DEPLOY_TX="$(first_nonempty "${HOOK_DEPLOY_TX:-}" "${DEPLOY_TX:-}" "${HOOK_DEPLOY_TX_HASH:-}")"

@@ -26,7 +26,7 @@ library ConfigLoader {
 
         cfg.poolManager = _requireAddressEither("POOL_MANAGER", "DEPLOY_POOL_MANAGER", false);
         cfg.hookAddress = EnvLib.envOrAddress("HOOK_ADDRESS", address(0));
-        cfg.poolAddress = EnvLib.envOrAddress("POOL_ADDRESS", address(0));
+        cfg.poolId = EnvLib.envOrBytes32("POOL_ID", bytes32(0));
 
         cfg.volatileToken = _requireAddressEither("VOLATILE", "DEPLOY_VOLATILE", true);
         cfg.stableToken = _requireAddressEither("STABLE", "DEPLOY_STABLE", false);
@@ -36,10 +36,7 @@ library ConfigLoader {
 
         (cfg.token0, cfg.token1) = sortPair(cfg.volatileToken, cfg.stableToken);
 
-        cfg.stableDecimals = _requireUint8Either("STABLE_DECIMALS", "DEPLOY_STABLE_DECIMALS");
-        if (cfg.stableDecimals != 6 && cfg.stableDecimals != 18) {
-            revert ErrorLib.InvalidEnv("STABLE_DECIMALS", "must be 6 or 18");
-        }
+        cfg.stableDecimals = _resolveRuntimeStableDecimals(cfg.runtime, cfg.stableToken);
 
         cfg.tickSpacing = _requirePositiveInt24Either("TICK_SPACING", "DEPLOY_TICK_SPACING");
         if (cfg.tickSpacing <= 0) {
@@ -134,12 +131,8 @@ library ConfigLoader {
         }
         (cfg.token0, cfg.token1) = sortPair(deployVolatile, cfg.stableToken);
 
-        cfg.stableDecimals = strict
-            ? EnvLib.requireUint8("DEPLOY_STABLE_DECIMALS")
-            : EnvLib.envOrUint8("DEPLOY_STABLE_DECIMALS", runtimeCfg.stableDecimals);
-        if (cfg.stableDecimals != 6 && cfg.stableDecimals != 18) {
-            revert ErrorLib.InvalidEnv("DEPLOY_STABLE_DECIMALS", "must be 6 or 18");
-        }
+        cfg.stableDecimals =
+            _resolveDeploymentStableDecimals(runtimeCfg.runtime, cfg.stableToken, runtimeCfg.stableDecimals);
 
         cfg.tickSpacing = strict
             ? EnvLib.requirePositiveInt24("DEPLOY_TICK_SPACING")
@@ -237,7 +230,7 @@ library ConfigLoader {
             revert ErrorLib.InvalidEnv("STABLE", "must match DEPLOY_STABLE");
         }
         if (runtimeCfg.stableDecimals != deployCfg.stableDecimals) {
-            revert ErrorLib.InvalidEnv("STABLE_DECIMALS", "must match DEPLOY_STABLE_DECIMALS");
+            revert ErrorLib.InvalidEnv("STABLE_DECIMALS", "must match stable token decimals");
         }
         if (runtimeCfg.tickSpacing != deployCfg.tickSpacing) {
             revert ErrorLib.InvalidEnv("TICK_SPACING", "must match DEPLOY_TICK_SPACING");
@@ -284,6 +277,37 @@ library ConfigLoader {
         if (EnvLib.hasKey(key)) return EnvLib.requireUint8(key);
         if (EnvLib.hasKey(fallbackKey)) return EnvLib.requireUint8(fallbackKey);
         revert ErrorLib.MissingEnv(key);
+    }
+
+    function _resolveRuntimeStableDecimals(OpsTypes.Runtime runtime, address stableToken)
+        private
+        view
+        returns (uint8)
+    {
+        if (EnvLib.hasKey("STABLE_DECIMALS")) {
+            return _requireSupportedStableDecimals(EnvLib.requireUint8("STABLE_DECIMALS"), "STABLE_DECIMALS");
+        }
+        if (stableToken.code.length > 0) {
+            return _readSupportedStableDecimals(stableToken, "STABLE");
+        }
+        if (runtime == OpsTypes.Runtime.Local) {
+            return 6;
+        }
+        revert ErrorLib.InvalidEnv("STABLE", "token has no code and STABLE_DECIMALS missing");
+    }
+
+    function _resolveDeploymentStableDecimals(
+        OpsTypes.Runtime runtime,
+        address stableToken,
+        uint8 fallbackStableDecimals
+    ) private view returns (uint8) {
+        if (stableToken.code.length > 0) {
+            return _readSupportedStableDecimals(stableToken, "DEPLOY_STABLE");
+        }
+        if (runtime == OpsTypes.Runtime.Local) {
+            return fallbackStableDecimals;
+        }
+        revert ErrorLib.InvalidEnv("DEPLOY_STABLE", "token has no code");
     }
 
     function _requireUint16Either(string memory key, string memory fallbackKey)
@@ -345,4 +369,31 @@ library ConfigLoader {
         if (EnvLib.hasKey(fallbackKey)) return EnvLib.requireBpsFromMultiplierX(fallbackKey);
         revert ErrorLib.MissingEnv(key);
     }
+
+    function _readSupportedStableDecimals(address token, string memory key)
+        private
+        view
+        returns (uint8 stableDecimals)
+    {
+        try IERC20MetadataLike(token).decimals() returns (uint8 decimals_) {
+            stableDecimals = _requireSupportedStableDecimals(decimals_, key);
+        } catch {
+            revert ErrorLib.InvalidEnv(key, "decimals() query failed");
+        }
+    }
+
+    function _requireSupportedStableDecimals(uint8 stableDecimals, string memory key)
+        private
+        pure
+        returns (uint8)
+    {
+        if (stableDecimals != 6 && stableDecimals != 18) {
+            revert ErrorLib.InvalidEnv(key, "must be 6 or 18");
+        }
+        return stableDecimals;
+    }
+}
+
+interface IERC20MetadataLike {
+    function decimals() external view returns (uint8);
 }

@@ -29,6 +29,29 @@ library EnvLib {
         value = _parseAddress(vm.envString(key), key);
     }
 
+    function requireBytes32(string memory key, bool allowZero) internal view returns (bytes32 value) {
+        try vm.envBytes32(key) returns (bytes32 parsed) {
+            value = parsed;
+        } catch {
+            string memory raw = vm.envOr(key, string(""));
+            if (bytes(raw).length == 0) revert ErrorLib.MissingEnv(key);
+            revert ErrorLib.InvalidEnv(key, "must be 0x-prefixed 64-hex bytes32");
+        }
+        if (!allowZero && value == bytes32(0)) {
+            revert ErrorLib.InvalidEnv(key, "zero bytes32");
+        }
+    }
+
+    function envOrBytes32(string memory key, bytes32 fallbackValue) internal view returns (bytes32 value) {
+        try vm.envBytes32(key) returns (bytes32 parsed) {
+            return parsed;
+        } catch {
+            string memory raw = vm.envOr(key, string(""));
+            if (bytes(raw).length == 0) return fallbackValue;
+            revert ErrorLib.InvalidEnv(key, "must be 0x-prefixed 64-hex bytes32");
+        }
+    }
+
     function requireUint(string memory key) internal view returns (uint256 value) {
         if (!hasKey(key)) revert ErrorLib.MissingEnv(key);
         value = vm.envUint(key);
@@ -268,16 +291,20 @@ library EnvLib {
 
         uint160 parsed = 0;
         for (uint256 i = 2; i < 42; i++) {
-            parsed = (parsed << 4) | uint160(_hexCharToNibble(b[i], key));
+            parsed = (parsed << 4) | uint160(_hexCharToNibble(b[i], key, "non-hex address char"));
         }
         value = address(parsed);
     }
 
-    function _hexCharToNibble(bytes1 ch, string memory key) private pure returns (uint8 value) {
+    function _hexCharToNibble(bytes1 ch, string memory key, string memory reason)
+        private
+        pure
+        returns (uint8 value)
+    {
         if (ch >= "0" && ch <= "9") return uint8(ch) - 48;
         if (ch >= "a" && ch <= "f") return uint8(ch) - 87;
         if (ch >= "A" && ch <= "F") return uint8(ch) - 55;
-        revert ErrorLib.InvalidEnv(key, "non-hex address char");
+        revert ErrorLib.InvalidEnv(key, reason);
     }
 
     function toUint8Checked(uint256 raw, string memory key) internal pure returns (uint8 value) {

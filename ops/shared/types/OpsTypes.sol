@@ -16,7 +16,7 @@ library OpsTypes {
         address deployer;
         address poolManager;
         address hookAddress;
-        address poolAddress;
+        bytes32 poolId;
         address owner;
         address volatileToken;
         address stableToken;
