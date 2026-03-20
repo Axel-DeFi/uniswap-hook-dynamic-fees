@@ -24,7 +24,8 @@ fs_permissions = [
   { access = "read", path = "./" },
   { access = "read-write", path = "scripts/out" },
   { access = "read-write", path = "ops/local/out" },
-  { access = "read-write", path = "ops/sepolia/out" }
+  { access = "read-write", path = "ops/sepolia/out" },
+  { access = "read-write", path = "ops/optimism/out" }
 ]
 
 [profile.ops]
@@ -47,7 +48,8 @@ fs_permissions = [
   { access = "read", path = "./" },
   { access = "read-write", path = "scripts/out" },
   { access = "read-write", path = "ops/local/out" },
-  { access = "read-write", path = "ops/sepolia/out" }
+  { access = "read-write", path = "ops/sepolia/out" },
+  { access = "read-write", path = "ops/optimism/out" }
 ]
 
 [fuzz]

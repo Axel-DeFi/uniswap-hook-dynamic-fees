@@ -9,6 +9,7 @@ tmp/
 .DS_Store
 __MACOSX/
 .vscode/
+.claude/
 
 # Secrets
 .env
