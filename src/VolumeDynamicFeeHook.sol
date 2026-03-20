@@ -226,11 +226,6 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
     /// @notice Emitted when lull reset triggers due to inactivity.
     event LullReset(uint24 newFee, uint8 newFeeIdx);
 
-    /// @notice Emitted when HookFee is accrued from a swap.
-    event HookFeeAccrued(
-        address indexed currency, uint256 amount, uint24 appliedLpFeeBips, uint16 hookFeePercent
-    );
-
     /// @notice Emitted when accrued HookFees are claimed.
     event HookFeesClaimed(address indexed to, uint256 amount0, uint256 amount1);
 
@@ -1577,8 +1572,6 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
 
         // Persist claimable balance in PoolManager ERC6909 accounting during the same unlocked swap context.
         poolManager.mint(address(this), unspecifiedCurrency.toId(), hookFeeAmount);
-
-        emit HookFeeAccrued(Currency.unwrap(unspecifiedCurrency), hookFeeAmount, appliedFeeBips, hookFeePct);
 
         return int128(uint128(hookFeeAmount));
     }
