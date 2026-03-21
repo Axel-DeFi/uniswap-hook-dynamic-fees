@@ -578,11 +578,13 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
         if (periodStart == 0) revert NotInitialized();
 
         uint24 appliedFeeBips = _regimeFee(feeIdx);
-        int128 hookFeeDelta = _accrueHookFeeAfterSwap(key, params, delta, appliedFeeBips);
+        int128 hookFeeDelta;
 
         if (paused_) {
             return (IHooks.afterSwap.selector, hookFeeDelta);
         }
+
+        hookFeeDelta = _accrueHookFeeAfterSwap(key, params, delta, appliedFeeBips);
 
         uint64 nowTs = _now64();
         uint64 elapsed = nowTs - periodStart;
@@ -752,7 +754,7 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
     // -----------------------------------------------------------------------
 
     /// @notice Returns whether controller is paused.
-    /// @dev Paused mode freezes regulator transitions only; swaps and HookFee accrual remain active.
+    /// @dev Paused mode freezes regulator transitions and suspends HookFee accrual; swaps remain active.
     function isPaused() public view returns (bool) {
         return ((_state >> PAUSED_BIT) & 1) == 1;
     }
@@ -1200,7 +1202,7 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
     /// @notice Enters paused freeze mode.
     /// @dev Keeps feeIdx, EMA and streak counters unchanged. Clears only open-period volume and restarts period clock.
     /// @dev Freezes regulator transitions at the last active LP fee tier.
-    /// @dev Does not disable swaps and does not disable HookFee accrual/claim accounting.
+    /// @dev Does not disable swaps; only new HookFee accrual is suspended while paused.
     function pause() external onlyOwner {
         if (isPaused()) return;
 
@@ -1234,7 +1236,7 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
     /// @notice Exits paused freeze mode.
     /// @dev Continues from the same fee regime and counters, with a fresh open period.
     /// @dev LP fee tier stays at the frozen value until normal transitions run after unpause.
-    /// @dev Resuming does not retroactively alter HookFee accrual that happened while paused.
+    /// @dev Resuming does not retroactively accrue HookFee for swaps that executed while paused.
     function unpause() external onlyOwner {
         if (!isPaused()) return;
 

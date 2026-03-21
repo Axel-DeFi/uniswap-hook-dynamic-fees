@@ -49,7 +49,7 @@ Timelock transparency is intentional; the main exposed effect is HookFee timing.
 
 `pause()` freezes controller evolution but does not reset to floor by default.
 It preserves fee regime and EMA, clears only open period volume, and restarts period clock.
-It does not stop swaps and does not stop HookFee accrual.
+It does not stop swaps, but it does suspend HookFee accrual until `unpause()`.
 The active LP fee regime stays frozen until `unpause()` or explicit paused-mode emergency reset.
 
 ## How do hold periods work?

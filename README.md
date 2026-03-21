@@ -46,7 +46,7 @@ See `LICENSE` for full terms.
 - Live liquidity/swap helper drivers are reused only if their runtime codehash and bound `manager()` match the expected
   canonical helper for the configured `POOL_MANAGER`; otherwise wrappers reprovision them before broadcast-capable
   phases.
-- `pause()/unpause()` freeze/resume regulator transitions at the current LP fee regime (no automatic floor reset, no swap stop, no HookFee stop).
+- `pause()/unpause()` freeze/resume regulator transitions at the current LP fee regime (no automatic floor reset, no swap stop; HookFee accrual is suspended while paused).
 - `setRegimeFees(...)` (paused-only) preserves EMA, resets hold/streak counters, starts a fresh open period, and updates current LP fee immediately if active regime fee changed.
 - `setControllerParams(...)` (paused-only) preserves active regime + EMA, clears hold/streak counters, and starts a fresh open period.
 - `setTimingParams(...)` (paused-only) has explicit split semantics:

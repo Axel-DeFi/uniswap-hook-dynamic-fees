@@ -1398,8 +1398,15 @@ contract VolumeDynamicFeeHookAdminTest is Test, VolumeDynamicFeeHookV2DeployHelp
         assertEq(periodVolPaused, 0);
         assertGe(periodStartPaused, periodStartBefore);
 
+        (uint256 fees0BeforePausedSwap, uint256 fees1BeforePausedSwap) = hook.hookFeesAccrued();
+        uint256 mintCountBeforePausedSwap = manager.mintCount();
         _swap(true, -1, -6_000_000, 5_700_000);
-        assertEq(manager.lastAfterSwapDelta() > 0, true, "HookFee should still be charged while paused");
+        assertEq(manager.lastAfterSwapDelta(), 0, "HookFee must not be charged while paused");
+        assertEq(manager.mintCount(), mintCountBeforePausedSwap, "paused swaps must not mint claim balances");
+
+        (uint256 fees0AfterPausedSwap, uint256 fees1AfterPausedSwap) = hook.hookFeesAccrued();
+        assertEq(fees0AfterPausedSwap, fees0BeforePausedSwap);
+        assertEq(fees1AfterPausedSwap, fees1BeforePausedSwap);
 
         (
             uint8 feeIdxAfterSwapWhilePaused,,,,,

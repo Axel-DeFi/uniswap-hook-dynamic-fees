@@ -135,8 +135,8 @@ Freeze semantics only:
 - restarts period boundary (`periodStart`) for clean resume.
 - freezes regulator transitions at the last active LP fee regime until `unpause()` or explicit paused-mode emergency reset.
 - does not disable swaps,
-- does not disable HookFee accrual,
-- does not zero HookFee.
+- suspends HookFee accrual while paused,
+- does not zero previously accrued HookFee.
 
 ### unpause()
 

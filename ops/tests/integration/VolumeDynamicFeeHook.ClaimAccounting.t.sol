@@ -189,6 +189,27 @@ contract VolumeDynamicFeeHookClaimAccountingIntegrationTest is Test, VolumeDynam
         assertEq(manager.balanceOf(address(hook), key.currency1.toId()), 0);
     }
 
+    function test_pause_suspends_hookFee_accrual_and_claim_balance_growth() public {
+        _swapExactInput(true, 9_000_000);
+
+        (uint256 fees0Before, uint256 fees1Before) = hook.hookFeesAccrued();
+        assertEq(fees0Before, 0);
+        assertGt(fees1Before, 0);
+
+        uint256 claimBalanceBefore = manager.balanceOf(address(hook), key.currency1.toId());
+        assertEq(claimBalanceBefore, fees1Before);
+
+        hook.pause();
+        assertTrue(hook.isPaused());
+
+        _swapExactInput(true, 9_000_000);
+
+        (uint256 fees0After, uint256 fees1After) = hook.hookFeesAccrued();
+        assertEq(fees0After, fees0Before);
+        assertEq(fees1After, fees1Before);
+        assertEq(manager.balanceOf(address(hook), key.currency1.toId()), claimBalanceBefore);
+    }
+
     function test_owner_transfer_moves_claim_destination_for_previously_accrued_fees() public {
         _swapExactInput(true, 9_000_000);
         _swapExactInput(false, 9_000_000);
