@@ -51,11 +51,11 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
     uint64 public constant MAX_MIN_COUNTED_SWAP_USD6 = 10_000_000;
 
     uint16 private constant MAX_LULL_PERIODS = 24;
-    uint8 private constant MAX_EMA_PERIODS = 64;
-    uint8 private constant MAX_HOLD_PERIODS = 31;
-    uint8 private constant MAX_UP_EXTREME_STREAK = 3;
-    uint8 private constant MAX_DOWN_STREAK = 7;
-    uint8 private constant MAX_EMERGENCY_STREAK = 3;
+    uint8 private constant MAX_EMA_PERIODS = 128;
+    uint8 private constant MAX_HOLD_PERIODS = 15;
+    uint8 private constant MAX_UP_EXTREME_STREAK = 7;
+    uint8 private constant MAX_DOWN_STREAK = 15;
+    uint8 private constant MAX_EMERGENCY_STREAK = 15;
 
     uint8 public constant MODE_FLOOR = 0;
     uint8 public constant MODE_CASH = 1;
@@ -75,16 +75,16 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
 
     // Packed-state layout.
     uint256 private constant PAUSED_BIT = 232;
-    uint256 private constant HOLD_REMAINING_SHIFT = 233;
-    uint256 private constant UP_EXTREME_STREAK_SHIFT = 238;
-    uint256 private constant DOWN_STREAK_SHIFT = 240;
-    uint256 private constant EMERGENCY_STREAK_SHIFT = 243;
+    uint256 private constant HOLD_REMAINING_SHIFT = 233; // bits 233..236
+    uint256 private constant UP_EXTREME_STREAK_SHIFT = 237; // bits 237..239
+    uint256 private constant DOWN_STREAK_SHIFT = 240; // bits 240..243
+    uint256 private constant EMERGENCY_STREAK_SHIFT = 244; // bits 244..247
 
     // Compact trace counter packing layout.
     uint8 private constant TRACE_COUNTER_HOLD_SHIFT = 1;
-    uint8 private constant TRACE_COUNTER_UP_EXTREME_SHIFT = 6;
+    uint8 private constant TRACE_COUNTER_UP_EXTREME_SHIFT = 5;
     uint8 private constant TRACE_COUNTER_DOWN_SHIFT = 8;
-    uint8 private constant TRACE_COUNTER_EMERGENCY_SHIFT = 11;
+    uint8 private constant TRACE_COUNTER_EMERGENCY_SHIFT = 12;
 
     // Compact trace decision flags.
     uint16 private constant TRACE_FLAG_BOOTSTRAP_V2 = 0x0001;
@@ -196,8 +196,8 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
 
     /// @notice Emitted alongside `PeriodClosed` with compact controller diagnostics for the closed period.
     /// @dev `countersBefore` / `countersAfter` pack:
-    /// bit 0 paused, bits 1..5 holdRemaining, bits 6..7 upExtremeStreak, bits 8..10 downStreak,
-    /// bits 11..12 emergencyStreak.
+    /// bit 0 paused, bits 1..4 holdRemaining, bits 5..7 upExtremeStreak, bits 8..11 downStreak,
+    /// bits 12..15 emergencyStreak.
     /// @dev `decisionFlags` packs:
     /// bit 0 bootstrapV2, bit 2 holdWasActive, bit 3 emergencyTriggered,
     /// bit 4 cashEnterTrigger, bit 5 extremeEnterTrigger, bit 6 extremeExitTrigger, bit 7 cashExitTrigger.
@@ -1827,10 +1827,10 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
         packed |= uint256(emaVolScaled) << 64;
         packed |= uint256(periodStart) << 160;
         packed |= uint256(feeIdx) << 224;
-        packed |= (uint256(holdRemaining) & 0x1F) << HOLD_REMAINING_SHIFT;
-        packed |= (uint256(upExtremeStreak) & 0x3) << UP_EXTREME_STREAK_SHIFT;
-        packed |= (uint256(downStreak) & 0x7) << DOWN_STREAK_SHIFT;
-        packed |= (uint256(emergencyStreak) & 0x3) << EMERGENCY_STREAK_SHIFT;
+        packed |= (uint256(holdRemaining) & 0x0F) << HOLD_REMAINING_SHIFT;
+        packed |= (uint256(upExtremeStreak) & 0x07) << UP_EXTREME_STREAK_SHIFT;
+        packed |= (uint256(downStreak) & 0x0F) << DOWN_STREAK_SHIFT;
+        packed |= (uint256(emergencyStreak) & 0x0F) << EMERGENCY_STREAK_SHIFT;
 
         if (paused) packed |= uint256(1) << PAUSED_BIT;
     }
@@ -1856,9 +1856,9 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
         feeIdx = uint8(packed >> 224);
 
         paused = ((packed >> PAUSED_BIT) & 1) == 1;
-        holdRemaining = uint8((packed >> HOLD_REMAINING_SHIFT) & 0x1F);
-        upExtremeStreak = uint8((packed >> UP_EXTREME_STREAK_SHIFT) & 0x3);
-        downStreak = uint8((packed >> DOWN_STREAK_SHIFT) & 0x7);
-        emergencyStreak = uint8((packed >> EMERGENCY_STREAK_SHIFT) & 0x3);
+        holdRemaining = uint8((packed >> HOLD_REMAINING_SHIFT) & 0x0F);
+        upExtremeStreak = uint8((packed >> UP_EXTREME_STREAK_SHIFT) & 0x07);
+        downStreak = uint8((packed >> DOWN_STREAK_SHIFT) & 0x0F);
+        emergencyStreak = uint8((packed >> EMERGENCY_STREAK_SHIFT) & 0x0F);
     }
 }

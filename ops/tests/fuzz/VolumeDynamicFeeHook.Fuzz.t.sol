@@ -162,10 +162,10 @@ contract VolumeDynamicFeeHookFuzzTest is Test, VolumeDynamicFeeHookV2DeployHelpe
             uint8 emergencyStreak,,,,
         ) = s.hook.getStateDebug();
         assertEq(dFeeIdx, feeIdx, "debug fee idx mismatch");
-        assertTrue(holdRemaining <= 31, "hold overflow");
-        assertTrue(upExtremeStreak <= 3, "up streak overflow");
-        assertTrue(downStreak <= 7, "down streak overflow");
-        assertTrue(emergencyStreak <= 3, "emergency streak overflow");
+        assertTrue(holdRemaining <= 15, "hold overflow");
+        assertTrue(upExtremeStreak <= 7, "up streak overflow");
+        assertTrue(downStreak <= 15, "down streak overflow");
+        assertTrue(emergencyStreak <= 15, "emergency streak overflow");
 
         // Telemetry values are saturating unsigned and must be bounded.
         assertTrue(pv <= type(uint64).max, "periodVol overflow");

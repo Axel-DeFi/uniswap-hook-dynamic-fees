@@ -117,6 +117,12 @@ Controller params are validated with cross-invariants:
 - `cashExitTriggerBps >= extremeExitTriggerBps`
 - `0 < emergencyFloorCloseVolUsd6 < minCloseVolToCashUsd6`
 
+Current validated ranges:
+- `emaPeriods`: `2..128`
+- `cashHoldPeriods`, `extremeHoldPeriods`: `1..15`
+- `upExtremeConfirmPeriods`: `1..7`
+- `downExtremeConfirmPeriods`, `downCashConfirmPeriods`, `emergencyConfirmPeriods`: `1..15`
+
 Invalid combinations revert with `InvalidConfig`.
 
 Paused maintenance behavior:
@@ -259,10 +265,10 @@ Field semantics:
 Compact counter packing:
 - `countersBefore` and `countersAfter` use:
   bit `0` paused,
-  bits `1..5` holdRemaining,
-  bits `6..7` upExtremeStreak,
-  bits `8..10` downStreak,
-  bits `11..12` emergencyStreak.
+  bits `1..4` holdRemaining,
+  bits `5..7` upExtremeStreak,
+  bits `8..11` downStreak,
+  bits `12..15` emergencyStreak.
 - These counters describe the controller state immediately before and immediately after the close evaluation, not the long-lived packed `_state` bit positions.
 
 Compact decision flag packing:

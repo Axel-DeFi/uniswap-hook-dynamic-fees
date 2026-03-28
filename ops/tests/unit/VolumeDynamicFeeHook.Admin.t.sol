@@ -79,6 +79,60 @@ contract VolumeDynamicFeeHookAdminHarness is VolumeDynamicFeeHook {
     {}
 
     function validateHookAddress(BaseHook) internal pure override {}
+
+    function packStateHarness(
+        uint64 periodVol,
+        uint96 emaVolScaled,
+        uint64 periodStart,
+        uint8 feeIdx,
+        bool paused,
+        uint8 holdRemaining,
+        uint8 upExtremeStreak,
+        uint8 downStreak,
+        uint8 emergencyStreak
+    ) external pure returns (uint256) {
+        return _packState(
+            periodVol,
+            emaVolScaled,
+            periodStart,
+            feeIdx,
+            paused,
+            holdRemaining,
+            upExtremeStreak,
+            downStreak,
+            emergencyStreak
+        );
+    }
+
+    function unpackStateHarness(uint256 packed)
+        external
+        pure
+        returns (
+            uint64 periodVol,
+            uint96 emaVolScaled,
+            uint64 periodStart,
+            uint8 feeIdx,
+            bool paused,
+            uint8 holdRemaining,
+            uint8 upExtremeStreak,
+            uint8 downStreak,
+            uint8 emergencyStreak
+        )
+    {
+        return _unpackState(packed);
+    }
+
+    function packControllerTransitionCountersHarness(
+        bool paused,
+        uint8 holdRemaining,
+        uint8 upExtremeStreak,
+        uint8 downStreak,
+        uint8 emergencyStreak
+    ) external pure returns (uint16) {
+        return _packControllerTransitionCounters(
+            paused, holdRemaining, upExtremeStreak, downStreak, emergencyStreak
+        );
+    }
 }
 
 contract VolumeDynamicFeeHookAdminTest is Test, VolumeDynamicFeeHookV2DeployHelper {
@@ -97,16 +151,27 @@ contract VolumeDynamicFeeHookAdminTest is Test, VolumeDynamicFeeHookV2DeployHelp
     uint8 internal constant EMA_PERIODS = 8;
     uint32 internal constant LULL_RESET_SECONDS = 3600;
     uint64 internal constant USD6 = 1e6;
+    uint64 internal constant LOW_NON_EMERGENCY_CLOSEVOL_USD6 = 4 * USD6;
     uint64 internal constant SEED_CLOSEVOL_USD6 = 10_000 * USD6;
     uint64 internal constant CASH_JUMP_CLOSEVOL_USD6 = 25_000 * USD6;
     uint64 internal constant EXTREME_STREAK1_CLOSEVOL_USD6 = 100_000 * USD6;
     uint64 internal constant EXTREME_STREAK2_CLOSEVOL_USD6 = 200_000 * USD6;
     uint256 internal constant EMA_SCALE = 1e6;
+    uint8 internal constant MAX_EMA_PERIODS = 128;
+    uint8 internal constant MAX_HOLD_PERIODS = 15;
+    uint8 internal constant MAX_UP_EXTREME_CONFIRM_PERIODS = 7;
+    uint8 internal constant MAX_DOWN_CONFIRM_PERIODS = 15;
+    uint8 internal constant MAX_EMERGENCY_CONFIRM_PERIODS = 15;
 
     uint8 internal constant TRACE_COUNTER_HOLD_SHIFT = 1;
-    uint8 internal constant TRACE_COUNTER_UP_EXTREME_SHIFT = 6;
+    uint8 internal constant TRACE_COUNTER_UP_EXTREME_SHIFT = 5;
     uint8 internal constant TRACE_COUNTER_DOWN_SHIFT = 8;
-    uint8 internal constant TRACE_COUNTER_EMERGENCY_SHIFT = 11;
+    uint8 internal constant TRACE_COUNTER_EMERGENCY_SHIFT = 12;
+    uint256 internal constant PAUSED_BIT = 232;
+    uint256 internal constant HOLD_REMAINING_SHIFT = 233;
+    uint256 internal constant UP_EXTREME_STREAK_SHIFT = 237;
+    uint256 internal constant DOWN_STREAK_SHIFT = 240;
+    uint256 internal constant EMERGENCY_STREAK_SHIFT = 244;
 
     uint16 internal constant TRACE_FLAG_BOOTSTRAP_V2 = 0x0001;
     uint16 internal constant TRACE_FLAG_HOLD_WAS_ACTIVE = 0x0004;
@@ -315,6 +380,12 @@ contract VolumeDynamicFeeHookAdminTest is Test, VolumeDynamicFeeHookV2DeployHelp
         _swap(true, -1, 0, 0);
     }
 
+    function _closePeriodWithCountedVolume(uint64 closeVolUsd6) internal {
+        _countedSwap(closeVolUsd6);
+        _advanceOnePeriod();
+        _closeCurrentPeriod();
+    }
+
     function _advanceOnePeriod() internal {
         vm.warp(block.timestamp + PERIOD_SECONDS);
     }
@@ -466,6 +537,96 @@ contract VolumeDynamicFeeHookAdminTest is Test, VolumeDynamicFeeHookV2DeployHelp
         counters |= uint16(upExtremeStreak) << TRACE_COUNTER_UP_EXTREME_SHIFT;
         counters |= uint16(downStreak) << TRACE_COUNTER_DOWN_SHIFT;
         counters |= uint16(emergencyStreak) << TRACE_COUNTER_EMERGENCY_SHIFT;
+    }
+
+    function test_packState_supports_new_maximum_counter_values_without_truncation() public view {
+        uint256 packed = hook.packStateHarness(
+            11,
+            22,
+            33,
+            hook.MODE_EXTREME(),
+            true,
+            MAX_HOLD_PERIODS,
+            MAX_UP_EXTREME_CONFIRM_PERIODS,
+            MAX_DOWN_CONFIRM_PERIODS,
+            MAX_EMERGENCY_CONFIRM_PERIODS
+        );
+
+        assertEq((packed >> PAUSED_BIT) & 1, 1, "paused bit must stay at bit 232");
+        assertEq((packed >> HOLD_REMAINING_SHIFT) & 0x0F, MAX_HOLD_PERIODS, "hold must use 4 bits");
+        assertEq(
+            (packed >> UP_EXTREME_STREAK_SHIFT) & 0x07,
+            MAX_UP_EXTREME_CONFIRM_PERIODS,
+            "up streak must use 3 bits"
+        );
+        assertEq((packed >> DOWN_STREAK_SHIFT) & 0x0F, MAX_DOWN_CONFIRM_PERIODS, "down streak must use 4 bits");
+        assertEq(
+            (packed >> EMERGENCY_STREAK_SHIFT) & 0x0F,
+            MAX_EMERGENCY_CONFIRM_PERIODS,
+            "emergency streak must use 4 bits"
+        );
+        assertEq(packed >> 248, 0, "packed counters must still fit inside the existing single state slot");
+
+        (
+            uint64 periodVol,
+            uint96 emaVolScaled,
+            uint64 periodStart,
+            uint8 feeIdx,
+            bool paused,
+            uint8 holdRemaining,
+            uint8 upExtremeStreak,
+            uint8 downStreak,
+            uint8 emergencyStreak
+        ) = hook.unpackStateHarness(packed);
+
+        assertEq(periodVol, 11);
+        assertEq(emaVolScaled, 22);
+        assertEq(periodStart, 33);
+        assertEq(feeIdx, hook.MODE_EXTREME());
+        assertTrue(paused);
+        assertEq(holdRemaining, MAX_HOLD_PERIODS);
+        assertEq(upExtremeStreak, MAX_UP_EXTREME_CONFIRM_PERIODS);
+        assertEq(downStreak, MAX_DOWN_CONFIRM_PERIODS);
+        assertEq(emergencyStreak, MAX_EMERGENCY_CONFIRM_PERIODS);
+    }
+
+    function test_packControllerTransitionCounters_supports_new_maximum_values_without_truncation() public view {
+        uint16 counters = hook.packControllerTransitionCountersHarness(
+            true,
+            MAX_HOLD_PERIODS,
+            MAX_UP_EXTREME_CONFIRM_PERIODS,
+            MAX_DOWN_CONFIRM_PERIODS,
+            MAX_EMERGENCY_CONFIRM_PERIODS
+        );
+
+        assertEq(counters & 1, 1, "paused flag must stay at bit 0");
+        assertEq((counters >> TRACE_COUNTER_HOLD_SHIFT) & 0x0F, MAX_HOLD_PERIODS, "hold must use 4 bits");
+        assertEq(
+            (counters >> TRACE_COUNTER_UP_EXTREME_SHIFT) & 0x07,
+            MAX_UP_EXTREME_CONFIRM_PERIODS,
+            "up streak must use 3 bits"
+        );
+        assertEq(
+            (counters >> TRACE_COUNTER_DOWN_SHIFT) & 0x0F,
+            MAX_DOWN_CONFIRM_PERIODS,
+            "down streak must use 4 bits"
+        );
+        assertEq(
+            (counters >> TRACE_COUNTER_EMERGENCY_SHIFT) & 0x0F,
+            MAX_EMERGENCY_CONFIRM_PERIODS,
+            "emergency streak must use 4 bits"
+        );
+        assertEq(
+            counters,
+            uint16(
+                1
+                    | (uint16(MAX_HOLD_PERIODS) << TRACE_COUNTER_HOLD_SHIFT)
+                    | (uint16(MAX_UP_EXTREME_CONFIRM_PERIODS) << TRACE_COUNTER_UP_EXTREME_SHIFT)
+                    | (uint16(MAX_DOWN_CONFIRM_PERIODS) << TRACE_COUNTER_DOWN_SHIFT)
+                    | (uint16(MAX_EMERGENCY_CONFIRM_PERIODS) << TRACE_COUNTER_EMERGENCY_SHIFT)
+            ),
+            "trace counters must still fit inside uint16"
+        );
     }
 
     function _seedFloorEma() internal returns (uint96 emaSeed) {
@@ -1127,6 +1288,26 @@ contract VolumeDynamicFeeHookAdminTest is Test, VolumeDynamicFeeHookV2DeployHelp
         assertFalse(hook.isPaused(), "unpause should still work after timing reset");
     }
 
+    function test_setTimingParams_accepts_emaPeriods_above_previous_limit_and_up_to_128() public {
+        hook.pause();
+
+        hook.setTimingParams(PERIOD_SECONDS, 65, LULL_RESET_SECONDS);
+        assertEq(hook.emaPeriods(), 65);
+
+        hook.setTimingParams(PERIOD_SECONDS, 96, LULL_RESET_SECONDS);
+        assertEq(hook.emaPeriods(), 96);
+
+        hook.setTimingParams(PERIOD_SECONDS, MAX_EMA_PERIODS, LULL_RESET_SECONDS);
+        assertEq(hook.emaPeriods(), MAX_EMA_PERIODS);
+    }
+
+    function test_setTimingParams_reverts_when_emaPeriods_exceeds_128() public {
+        hook.pause();
+
+        vm.expectRevert(VolumeDynamicFeeHook.InvalidConfig.selector);
+        hook.setTimingParams(PERIOD_SECONDS, uint8(MAX_EMA_PERIODS + 1), LULL_RESET_SECONDS);
+    }
+
     function test_setControllerParams_reverts_when_cash_volume_threshold_exceeds_extreme_threshold() public {
         hook.pause();
 
@@ -1185,6 +1366,62 @@ contract VolumeDynamicFeeHookAdminTest is Test, VolumeDynamicFeeHookV2DeployHelp
 
         hook.setControllerParams(p);
         assertEq(hook.emergencyFloorCloseVolUsd6(), p.emergencyFloorCloseVolUsd6);
+    }
+
+    function test_setControllerParams_accepts_new_maximum_supported_ranges() public {
+        hook.pause();
+
+        VolumeDynamicFeeHook.ControllerParams memory p = _defaultControllerParams();
+        p.cashHoldPeriods = MAX_HOLD_PERIODS;
+        p.extremeHoldPeriods = MAX_HOLD_PERIODS;
+        p.upExtremeConfirmPeriods = MAX_UP_EXTREME_CONFIRM_PERIODS;
+        p.downExtremeConfirmPeriods = MAX_DOWN_CONFIRM_PERIODS;
+        p.downCashConfirmPeriods = MAX_DOWN_CONFIRM_PERIODS;
+        p.emergencyConfirmPeriods = MAX_EMERGENCY_CONFIRM_PERIODS;
+
+        hook.setControllerParams(p);
+
+        VolumeDynamicFeeHook.ControllerParams memory updated = hook.getControllerParams();
+        assertEq(updated.cashHoldPeriods, MAX_HOLD_PERIODS);
+        assertEq(updated.extremeHoldPeriods, MAX_HOLD_PERIODS);
+        assertEq(updated.upExtremeConfirmPeriods, MAX_UP_EXTREME_CONFIRM_PERIODS);
+        assertEq(updated.downExtremeConfirmPeriods, MAX_DOWN_CONFIRM_PERIODS);
+        assertEq(updated.downCashConfirmPeriods, MAX_DOWN_CONFIRM_PERIODS);
+        assertEq(updated.emergencyConfirmPeriods, MAX_EMERGENCY_CONFIRM_PERIODS);
+    }
+
+    function test_setControllerParams_reverts_when_ranges_exceed_new_maximums() public {
+        hook.pause();
+
+        VolumeDynamicFeeHook.ControllerParams memory p = _defaultControllerParams();
+        p.cashHoldPeriods = uint8(MAX_HOLD_PERIODS + 1);
+        vm.expectRevert(VolumeDynamicFeeHook.InvalidHoldPeriods.selector);
+        hook.setControllerParams(p);
+
+        p = _defaultControllerParams();
+        p.extremeHoldPeriods = uint8(MAX_HOLD_PERIODS + 1);
+        vm.expectRevert(VolumeDynamicFeeHook.InvalidHoldPeriods.selector);
+        hook.setControllerParams(p);
+
+        p = _defaultControllerParams();
+        p.upExtremeConfirmPeriods = uint8(MAX_UP_EXTREME_CONFIRM_PERIODS + 1);
+        vm.expectRevert(VolumeDynamicFeeHook.InvalidConfirmPeriods.selector);
+        hook.setControllerParams(p);
+
+        p = _defaultControllerParams();
+        p.downExtremeConfirmPeriods = uint8(MAX_DOWN_CONFIRM_PERIODS + 1);
+        vm.expectRevert(VolumeDynamicFeeHook.InvalidConfirmPeriods.selector);
+        hook.setControllerParams(p);
+
+        p = _defaultControllerParams();
+        p.downCashConfirmPeriods = uint8(MAX_DOWN_CONFIRM_PERIODS + 1);
+        vm.expectRevert(VolumeDynamicFeeHook.InvalidConfirmPeriods.selector);
+        hook.setControllerParams(p);
+
+        p = _defaultControllerParams();
+        p.emergencyConfirmPeriods = uint8(MAX_EMERGENCY_CONFIRM_PERIODS + 1);
+        vm.expectRevert(VolumeDynamicFeeHook.InvalidConfirmPeriods.selector);
+        hook.setControllerParams(p);
     }
 
     function test_setControllerParams_preserves_mode_and_ema_but_clears_counters() public {
@@ -1275,9 +1512,9 @@ contract VolumeDynamicFeeHookAdminTest is Test, VolumeDynamicFeeHookV2DeployHelp
         hook.pause();
 
         uint32 newPeriod = uint32(bound(periodSeed, 1, 7200));
-        uint8 newEma = uint8(bound(emaSeed, 2, 64));
+        uint8 newEma = uint8(bound(emaSeed, 2, MAX_EMA_PERIODS));
         if (newPeriod == PERIOD_SECONDS && newEma == EMA_PERIODS) {
-            if (newEma < 64) newEma += 1;
+            if (newEma < MAX_EMA_PERIODS) newEma += 1;
             else newPeriod += 1;
         }
         uint32 newLull = newPeriod + 1;
@@ -1357,6 +1594,143 @@ contract VolumeDynamicFeeHookAdminTest is Test, VolumeDynamicFeeHookV2DeployHelp
 
         (uint8 feeIdx,,,,,,,,) = hook.getStateDebug();
         assertEq(feeIdx, hook.MODE_FLOOR(), "emergency floor should trigger from cash on low close volume");
+    }
+
+    function test_upExtremeConfirmPeriods_upper_bound_requires_full_7_close_streak() public {
+        hook.pause();
+
+        VolumeDynamicFeeHook.ControllerParams memory p = _defaultControllerParams();
+        p.cashEnterTriggerBps = 1;
+        p.extremeEnterTriggerBps = 1;
+        p.upExtremeConfirmPeriods = MAX_UP_EXTREME_CONFIRM_PERIODS;
+        hook.setControllerParams(p);
+        hook.unpause();
+
+        _enterCashMode();
+
+        for (uint256 i = 1; i < MAX_UP_EXTREME_CONFIRM_PERIODS; ++i) {
+            _closePeriodWithCountedVolume(EXTREME_STREAK2_CLOSEVOL_USD6);
+
+            (uint8 feeIdxDuringStreak,, uint8 upExtremeStreak,,,,,,) = hook.getStateDebug();
+            assertEq(
+                feeIdxDuringStreak, hook.MODE_CASH(), "cash must not jump to extreme before the 7th qualifying close"
+            );
+            assertEq(upExtremeStreak, uint8(i), "up streak must accumulate up to the new 3-bit maximum");
+        }
+
+        _closePeriodWithCountedVolume(EXTREME_STREAK2_CLOSEVOL_USD6);
+
+        (uint8 feeIdxAfterJump, uint8 holdRemaining,,,,,,,) = hook.getStateDebug();
+        assertEq(feeIdxAfterJump, hook.MODE_EXTREME(), "cash must jump to extreme on the 7th qualifying close");
+        assertEq(holdRemaining, hook.extremeHoldPeriods(), "extreme hold must initialize without truncation");
+    }
+
+    function test_downCashConfirmPeriods_upper_bound_requires_full_15_close_streak() public {
+        hook.pause();
+
+        VolumeDynamicFeeHook.ControllerParams memory p = _defaultControllerParams();
+        p.cashHoldPeriods = 1;
+        p.downCashConfirmPeriods = MAX_DOWN_CONFIRM_PERIODS;
+        p.emergencyFloorCloseVolUsd6 = 1;
+        hook.setControllerParams(p);
+        hook.unpause();
+
+        _enterCashMode();
+
+        for (uint256 i = 1; i < MAX_DOWN_CONFIRM_PERIODS; ++i) {
+            _closePeriodWithCountedVolume(LOW_NON_EMERGENCY_CLOSEVOL_USD6);
+
+            (uint8 feeIdxDuringStreak,,, uint8 downStreak,,,,,) = hook.getStateDebug();
+            assertEq(
+                feeIdxDuringStreak, hook.MODE_CASH(), "cash must remain active until the 15th downward confirmation"
+            );
+            assertEq(downStreak, uint8(i), "down streak must accumulate up to 14 without truncation");
+        }
+
+        _closePeriodWithCountedVolume(LOW_NON_EMERGENCY_CLOSEVOL_USD6);
+
+        (uint8 feeIdxAfterDrop,,, uint8 downStreakAfterDrop, uint8 emergencyStreak,,,,) = hook.getStateDebug();
+        assertEq(feeIdxAfterDrop, hook.MODE_FLOOR(), "cash must fall to floor on the 15th downward confirmation");
+        assertEq(downStreakAfterDrop, 0, "down streak must reset after the transition");
+        assertEq(emergencyStreak, 0, "emergency path must stay inactive in the non-emergency scenario");
+    }
+
+    function test_downExtremeConfirmPeriods_upper_bound_requires_full_15_close_streak() public {
+        hook.pause();
+
+        VolumeDynamicFeeHook.ControllerParams memory p = _defaultControllerParams();
+        p.upExtremeConfirmPeriods = 1;
+        p.extremeHoldPeriods = 1;
+        p.downExtremeConfirmPeriods = MAX_DOWN_CONFIRM_PERIODS;
+        p.emergencyFloorCloseVolUsd6 = 1;
+        hook.setControllerParams(p);
+        hook.unpause();
+
+        _enterCashMode();
+        _closePeriodWithCountedVolume(EXTREME_STREAK2_CLOSEVOL_USD6);
+
+        (uint8 feeIdxAfterJump, uint8 holdAfterJump,,,,,,,) = hook.getStateDebug();
+        assertEq(feeIdxAfterJump, hook.MODE_EXTREME(), "precondition: controller must enter extreme mode");
+        assertEq(holdAfterJump, 1, "precondition: extreme hold must initialize to one");
+
+        for (uint256 i = 1; i < MAX_DOWN_CONFIRM_PERIODS; ++i) {
+            _closePeriodWithCountedVolume(LOW_NON_EMERGENCY_CLOSEVOL_USD6);
+
+            (uint8 feeIdxDuringStreak,,, uint8 downStreak,,,,,) = hook.getStateDebug();
+            assertEq(
+                feeIdxDuringStreak,
+                hook.MODE_EXTREME(),
+                "extreme must remain active until the 15th downward confirmation"
+            );
+            assertEq(downStreak, uint8(i), "down streak must accumulate up to 14 without truncation");
+        }
+
+        _closePeriodWithCountedVolume(LOW_NON_EMERGENCY_CLOSEVOL_USD6);
+
+        (uint8 feeIdxAfterDrop,,, uint8 downStreakAfterDrop, uint8 emergencyStreak,,,,) = hook.getStateDebug();
+        assertEq(
+            feeIdxAfterDrop, hook.MODE_CASH(), "extreme must fall back to cash on the 15th downward confirmation"
+        );
+        assertEq(downStreakAfterDrop, 0, "down streak must reset after the transition");
+        assertEq(emergencyStreak, 0, "emergency path must stay inactive in the non-emergency scenario");
+    }
+
+    function test_emergencyConfirmPeriods_upper_bound_requires_full_15_close_streak() public {
+        hook.pause();
+
+        VolumeDynamicFeeHook.ControllerParams memory p = _defaultControllerParams();
+        p.cashHoldPeriods = 1;
+        p.downCashConfirmPeriods = MAX_DOWN_CONFIRM_PERIODS;
+        p.emergencyConfirmPeriods = MAX_EMERGENCY_CONFIRM_PERIODS;
+        hook.setControllerParams(p);
+        hook.unpause();
+
+        _enterCashMode();
+
+        for (uint256 i = 1; i < MAX_EMERGENCY_CONFIRM_PERIODS; ++i) {
+            _advanceOnePeriod();
+            _closeCurrentPeriod();
+
+            (uint8 feeIdxDuringStreak,,, uint8 downStreak, uint8 emergencyStreak,,,,) = hook.getStateDebug();
+            assertEq(
+                feeIdxDuringStreak, hook.MODE_CASH(), "emergency floor must not trigger before the 15th low close"
+            );
+            assertEq(downStreak, uint8(i), "down streak must keep counting alongside the emergency streak");
+            assertEq(emergencyStreak, uint8(i), "emergency streak must accumulate up to 14 without truncation");
+        }
+
+        _advanceOnePeriod();
+        SwapEventCapture memory capture = _captureZeroSwap();
+
+        assertEq(capture.lastTrace.reasonCode, hook.REASON_EMERGENCY_FLOOR());
+        assertEq(
+            capture.lastTrace.decisionFlags & TRACE_FLAG_EMERGENCY_TRIGGERED,
+            TRACE_FLAG_EMERGENCY_TRIGGERED,
+            "emergency path must win once the 15th low close arrives"
+        );
+
+        (uint8 feeIdxAfterDrop,,,,,,,,) = hook.getStateDebug();
+        assertEq(feeIdxAfterDrop, hook.MODE_FLOOR(), "emergency floor must trigger exactly on the 15th low close");
     }
 
     function test_pause_unpause_freeze_resume_semantics() public {

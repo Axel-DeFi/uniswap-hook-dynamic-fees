@@ -264,10 +264,10 @@ abstract contract VolumeDynamicFeeHookInvariantBase is
         ) = hook.getStateDebug();
 
         assertTrue(feeIdx <= hook.MODE_EXTREME(), "packed feeIdx overflow");
-        assertTrue(holdRemaining <= 31, "packed hold overflow");
-        assertTrue(upExtremeStreak <= 3, "packed up overflow");
-        assertTrue(downStreak <= 7, "packed down overflow");
-        assertTrue(emergencyStreak <= 3, "packed emergency overflow");
+        assertTrue(holdRemaining <= 15, "packed hold overflow");
+        assertTrue(upExtremeStreak <= 7, "packed up overflow");
+        assertTrue(downStreak <= 15, "packed down overflow");
+        assertTrue(emergencyStreak <= 15, "packed emergency overflow");
     }
 
     function invariant_pendingTimelockStateConsistent() public view {
