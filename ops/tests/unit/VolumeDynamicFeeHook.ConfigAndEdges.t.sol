@@ -414,8 +414,8 @@ contract VolumeDynamicFeeHookConfigAndEdgesTest is Test, VolumeDynamicFeeHookV2D
         assertEq(hook.minCountedSwapUsd6(), hook.DEFAULT_MIN_COUNTED_SWAP_USD6());
     }
 
-    function test_regimeFees_are_exposed_explicitly() public view {
-        (uint24 floorFee_, uint24 cashFee_, uint24 extremeFee_) = hook.getRegimeFees();
+    function test_modeFees_are_exposed_explicitly() public view {
+        (uint24 floorFee_, uint24 cashFee_, uint24 extremeFee_) = hook.getModeFees();
         assertEq(floorFee_, V2_DEFAULT_FLOOR_FEE);
         assertEq(cashFee_, V2_DEFAULT_CASH_FEE);
         assertEq(extremeFee_, V2_DEFAULT_EXTREME_FEE);

@@ -91,7 +91,7 @@ contract RunRerunSafeValidationLive is LiveOpsBase {
         require(!swapFailed, "rerun-safe validation swap reverted");
 
         OpsTypes.PoolSnapshot memory snapshot = PoolStateLib.snapshotHook(cfg.hookAddress);
-        // Explicit three-regime model guarantees feeIdx in [0..2].
+        // Explicit three-mode model guarantees feeIdx in [0..2].
         require(snapshot.feeIdx <= 2, "fee out of bounds");
 
         if (executed == 0) {

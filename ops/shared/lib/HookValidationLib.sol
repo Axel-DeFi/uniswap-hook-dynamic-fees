@@ -100,7 +100,7 @@ library HookValidationLib {
                 || hook.extremeFee() != cfg.extremeFeePips
         ) {
             validation.ok = false;
-            validation.reason = "hook regime fee mismatch";
+            validation.reason = "hook mode fee mismatch";
             return validation;
         }
 

@@ -45,7 +45,7 @@ contract RunRerunSafeValidationLocal is Script {
 
         OpsTypes.PoolSnapshot memory snapshot = PoolStateLib.snapshotHook(cfg.hookAddress);
         require(snapshot.initialized, "hook uninitialized");
-        // Explicit three-regime model guarantees feeIdx in [0..2].
+        // Explicit three-mode model guarantees feeIdx in [0..2].
         require(snapshot.feeIdx <= 2, "fee out of bounds");
 
         LoggingLib.ok("rerun-safe validation complete (2 cycles)");

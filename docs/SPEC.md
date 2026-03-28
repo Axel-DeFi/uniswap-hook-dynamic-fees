@@ -7,7 +7,7 @@ If there is any mismatch, contract NatSpec takes precedence over this document, 
 
 `VolumeDynamicFeeHook` is a single-pool Uniswap v4 hook that:
 - tracks stable-side notional volume (`USD6`) per period,
-- updates LP fee using an explicit three-regime controller,
+- updates LP fee using an explicit three-mode controller,
 - charges an additional HookFee to traders via `afterSwap` return delta,
 - persists accrued HookFees in PoolManager ERC6909 claims and allows explicit owner-driven claim.
 
@@ -36,12 +36,12 @@ Address mining must include:
 
 ### LP fee
 
-LP fee remains dynamic and is updated through the existing regime logic.
+LP fee remains dynamic and is updated through the existing mode logic.
 
 ### HookFee
 
 - HookFee is a separate trader charge returned from `afterSwap` delta path.
-- HookFee is numerically tied to currently applied LP fee for active regime.
+- HookFee is numerically tied to currently applied LP fee for active mode.
 - HookFee is derived from an approximate LP-fee estimate, not from an exact LP-fee accounting replica.
 - Estimation base is the unspecified side selected by current execution path (exact-input vs exact-output).
 - Small systematic deviation between exact-input and exact-output paths is expected by design.
@@ -87,8 +87,8 @@ Events:
 - Upper bound remains `lullResetSeconds <= periodSeconds * MAX_LULL_PERIODS`.
 - `setTimingParams(...)` semantics are explicit:
   - if `periodSeconds` or `emaPeriods` changes, this is a time-scale change and triggers a safe reset:
-    FLOOR regime, EMA reset, hold/streak counters reset, fresh open period, immediate LP-fee sync when active tier changes.
-  - if only `lullResetSeconds` changes, regime + EMA + counters are preserved and only a fresh open period is started.
+    FLOOR mode, EMA reset, hold/streak counters reset, fresh open period, immediate LP-fee sync when active tier changes.
+  - if only `lullResetSeconds` changes, mode + EMA + counters are preserved and only a fresh open period is started.
 
 ## Overdue catch-up semantics (accepted behavior)
 
@@ -120,7 +120,7 @@ Controller params are validated with cross-invariants:
 Invalid combinations revert with `InvalidConfig`.
 
 Paused maintenance behavior:
-- `setControllerParams(...)` preserves active regime id and EMA.
+- `setControllerParams(...)` preserves active mode id and EMA.
 - It always clears hold/streak counters (`holdRemaining`, `upExtremeStreak`, `downStreak`, `emergencyStreak`).
 - It always starts a fresh open period (`periodVol = 0`, refreshed `periodStart`).
 
@@ -129,11 +129,11 @@ Paused maintenance behavior:
 ### pause()
 
 Freeze semantics only:
-- keeps fee regime and streak counters,
+- keeps fee mode and streak counters,
 - keeps EMA,
 - clears only open-period volume,
 - restarts period boundary (`periodStart`) for clean resume.
-- freezes regulator transitions at the last active LP fee regime until `unpause()` or explicit paused-mode emergency reset.
+- freezes regulator transitions at the last active LP fee mode until `unpause()` or explicit paused-mode emergency reset.
 - does not disable swaps,
 - suspends HookFee accrual while paused,
 - does not zero previously accrued HookFee.
@@ -141,7 +141,7 @@ Freeze semantics only:
 ### unpause()
 
 Resume semantics:
-- keeps fee regime/counters/EMA,
+- keeps fee mode/counters/EMA,
 - starts a fresh open period,
 - does not perform global reset.
 
@@ -151,12 +151,12 @@ Resume semantics:
 - `emergencyResetToCash()`
 
 Both explicitly:
-- set target regime id,
+- set target mode id,
 - reset EMA to zero,
 - clear hold/streak counters,
 - reset `periodVol` and restart `periodStart`,
 - keep contract paused.
-- when target regime equals current regime, reset still happens but no `FeeUpdated` event is emitted.
+- when target mode equals current mode, reset still happens but no `FeeUpdated` event is emitted.
 
 `resetToCash` is generally preferred as default emergency option when total floor reset is not required.
 Monitoring must consume `EmergencyResetToFloorApplied` / `EmergencyResetToCashApplied`, not only `FeeUpdated`.
@@ -219,7 +219,7 @@ Removed legacy entities:
 - legacy direction marker field
 - legacy next-fee wrapper function
 
-Controller model now uses fixed regime ids:
+Controller model now uses fixed mode ids:
 - `0 = FLOOR`
 - `1 = CASH`
 - `2 = EXTREME`
@@ -248,8 +248,8 @@ Emission rules:
 
 Field semantics:
 - `periodStart`: start timestamp of the period being closed. In multi-close catch-up, this advances by `periodSeconds` per closed period.
-- `fromFee` / `fromFeeIdx`: regime before controller evaluation for this closed period.
-- `toFee` / `toFeeIdx`: regime after controller evaluation for this closed period.
+- `fromFee` / `fromFeeIdx`: mode before controller evaluation for this closed period.
+- `toFee` / `toFeeIdx`: mode after controller evaluation for this closed period.
 - `closeVolumeUsd6`: counted volume of the closed period (`0` for zero-volume catch-up closes and lull reset).
 - `emaBeforeUsd6Scaled`: EMA before `_updateEmaScaled(...)`.
 - `emaAfterUsd6Scaled`: EMA immediately after `_updateEmaScaled(...)`. This is still non-zero for ordinary zero-volume closes; only lull reset forces it to `0`.
@@ -276,7 +276,7 @@ Compact decision flag packing:
 
 Interpretation notes:
 - `holdWasActive` refers to the pre-decrement hold state at close start; `countersAfter` reflects post-decrement/post-transition counters.
-- `emergencyTriggered` means the automatic emergency-floor rule fired before ordinary regime logic.
+- `emergencyTriggered` means the automatic emergency-floor rule fired before ordinary mode logic.
 - trigger flags are diagnostic hints for which transition thresholds were met on that close; they do not imply a transition actually happened.
 
 Lull reset trace semantics:
@@ -327,7 +327,7 @@ All admin state transitions emit events, including:
 - threshold schedule/cancel/apply,
 - pause/unpause,
 - emergency resets,
-- controller/regime/timing updates.
+- controller/mode/timing updates.
 
 Monitoring interpretation note:
 - `downStreak` is context-dependent and must be interpreted together with current `feeIdx`.
@@ -348,16 +348,16 @@ Monitoring interpretation note:
   current release and the frozen `ops/<network>/config/deploy.env` constructor snapshot, while current runtime/admin
   expectations come from `ops/<network>/config/defaults.env`. Reuse also requires the exact minimal callback surface
   (`afterInitialize`, `afterSwap`, `afterSwapReturnDelta` only) plus exact PoolManager binding: owner, no pending
-  owner transfer, stable decimals mode, current `minCountedSwapUsd6`, regime fees, HookFee percent, timing params,
+  owner transfer, stable decimals mode, current `minCountedSwapUsd6`, mode fees, HookFee percent, timing params,
   controller params, and no pending HookFee / min-counted-swap changes.
-- monitor `PeriodClosed` and alert on repeated abnormal regime escalations.
+- monitor `PeriodClosed` and alert on repeated abnormal mode escalations.
 - consume `ControllerTransitionTrace` together with `PeriodClosed` when debugging controller decisions, especially
   hold-protected closes, emergency-floor triggers, trigger-threshold hits, and lull resets.
 - monitor admin/security events as a minimum set:
-  `RegimeFeesUpdated`, `ControllerParamsUpdated`, `TimingParamsUpdated`, `Paused`, `Unpaused`,
+  `ModeFeesUpdated`, `ControllerParamsUpdated`, `TimingParamsUpdated`, `Paused`, `Unpaused`,
   `EmergencyResetToFloorApplied`, `EmergencyResetToCashApplied`.
 - for native-asset pools, ownership changes must preserve native payout compatibility.
-- EMA preservation across `setRegimeFees(...)` is intentional for paused maintenance updates.
+- EMA preservation across `setModeFees(...)` is intentional for paused maintenance updates.
 - production guidance for hold parameters:
   `cashHoldPeriods >= 2`, `extremeHoldPeriods >= 2`, recommended `3..4`.
 - deploy/preflight guardrails block weak hold configs in non-local runtime by default; explicit override is

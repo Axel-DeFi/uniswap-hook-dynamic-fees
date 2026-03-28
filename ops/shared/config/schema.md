@@ -45,13 +45,13 @@ Stable-token decimals resolution:
 - `INIT_PRICE_USD` — initial pool price in USD stored in `deploy.env`. Example: `2500`.
 - `EnsurePoolLive` derives `sqrtPriceX96` directly from `INIT_PRICE_USD` and token decimals.
 
-## Explicit regime fees
+## Explicit mode fees
 
 - Runtime fee/controller keys may be omitted from `defaults.env`. If omitted, the loader inherits the corresponding
   `DEPLOY_*` value. Set the runtime key only when post-deploy admin changes are expected onchain.
-- `FLOOR_FEE_PERCENT` — LP fee for the `FLOOR` regime, as a percent. Example: `0.04`.
-- `CASH_FEE_PERCENT` — LP fee for the `CASH` regime, as a percent. Example: `0.25`.
-- `EXTREME_FEE_PERCENT` — LP fee for the `EXTREME` regime, as a percent. Example: `0.9`.
+- `FLOOR_FEE_PERCENT` — LP fee for the `FLOOR` mode, as a percent. Example: `0.04`.
+- `CASH_FEE_PERCENT` — LP fee for the `CASH` mode, as a percent. Example: `0.25`.
+- `EXTREME_FEE_PERCENT` — LP fee for the `EXTREME` mode, as a percent. Example: `0.9`.
 
 ## Timing / controller
 

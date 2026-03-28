@@ -142,12 +142,12 @@ contract VolumeDynamicFeeHookFuzzTest is Test, VolumeDynamicFeeHookV2DeployHelpe
         (uint64 pv, uint96 ema, uint64 ps, uint8 feeIdx) = s.hook.unpackedState();
 
         assertTrue(ps != 0, "periodStart==0");
-        assertTrue(feeIdx <= s.hook.REGIME_EXTREME(), "feeIdx out of range");
+        assertTrue(feeIdx <= s.hook.MODE_EXTREME(), "feeIdx out of range");
 
         uint24 fee = s.hook.currentFeeBips();
-        if (feeIdx == s.hook.REGIME_FLOOR()) {
+        if (feeIdx == s.hook.MODE_FLOOR()) {
             assertEq(fee, s.hook.floorFee(), "floor fee mismatch");
-        } else if (feeIdx == s.hook.REGIME_CASH()) {
+        } else if (feeIdx == s.hook.MODE_CASH()) {
             assertEq(fee, s.hook.cashFee(), "cash fee mismatch");
         } else {
             assertEq(fee, s.hook.extremeFee(), "extreme fee mismatch");

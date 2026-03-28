@@ -217,21 +217,21 @@ abstract contract GasMeasurementLocalBase is CommonBase {
         _primeExtremeToCash();
         _warpPeriod();
         _swapStable(_minCountedStableRaw());
-        _assertRegime(hook.REGIME_CASH());
+        _assertMode(hook.MODE_CASH());
     }
 
     function _measureCashToFloor() internal {
         _primeCashToFloor();
         _warpPeriod();
         _swapStable(_minCountedStableRaw());
-        _assertRegime(hook.REGIME_FLOOR());
+        _assertMode(hook.MODE_FLOOR());
     }
 
     function _measureLullReset() internal {
         _moveToCash();
         vm.warp(block.timestamp + uint256(cfg.lullResetSeconds) + 1);
         _swapStable(_minCountedStableRaw());
-        _assertRegime(hook.REGIME_FLOOR());
+        _assertMode(hook.MODE_FLOOR());
     }
 
     function _measureClaimAllHookFees() internal {
@@ -252,13 +252,13 @@ abstract contract GasMeasurementLocalBase is CommonBase {
         uint64 cashUsd6 = _chooseNextUpOpenPeriodUsd6(passThreshold, cfg.minCloseVolToCashUsd6);
         _warpPeriod();
         _swapStable(GasMeasurementLib.usd6ToStableRaw(cashUsd6, cfg.stableDecimals));
-        _assertRegime(hook.REGIME_FLOOR());
+        _assertMode(hook.MODE_FLOOR());
     }
 
     function _completeFloorToCash(uint64 nextOpenUsd6) internal {
         _warpPeriod();
         _swapStable(GasMeasurementLib.usd6ToStableRaw(nextOpenUsd6, cfg.stableDecimals));
-        _assertRegime(hook.REGIME_CASH());
+        _assertMode(hook.MODE_CASH());
     }
 
     function _primeCashToExtreme() internal {
@@ -272,13 +272,13 @@ abstract contract GasMeasurementLocalBase is CommonBase {
                 _chooseNextUpOpenPeriodUsd6(passThreshold, cfg.minCloseVolToExtremeUsd6), cfg.stableDecimals
             )
         );
-        _assertRegime(hook.REGIME_CASH());
+        _assertMode(hook.MODE_CASH());
     }
 
     function _completeCashToExtreme(uint64 nextOpenUsd6) internal {
         _warpPeriod();
         _swapStable(GasMeasurementLib.usd6ToStableRaw(nextOpenUsd6, cfg.stableDecimals));
-        _assertRegime(hook.REGIME_EXTREME());
+        _assertMode(hook.MODE_EXTREME());
     }
 
     function _primeExtremeToCash() internal {
@@ -290,7 +290,7 @@ abstract contract GasMeasurementLocalBase is CommonBase {
             uint64 nextDownUsd6 = _chooseNextDownOpenPeriodUsd6(downPassThreshold);
             _warpPeriod();
             _swapStable(GasMeasurementLib.usd6ToStableRaw(nextDownUsd6, cfg.stableDecimals));
-            _assertRegime(hook.REGIME_EXTREME());
+            _assertMode(hook.MODE_EXTREME());
         }
     }
 
@@ -302,13 +302,13 @@ abstract contract GasMeasurementLocalBase is CommonBase {
         _swapStable(
             GasMeasurementLib.usd6ToStableRaw(_chooseNextDownOpenPeriodUsd6(downPassThreshold), cfg.stableDecimals)
         );
-        _assertRegime(hook.REGIME_CASH());
+        _assertMode(hook.MODE_CASH());
 
         for (uint256 i = 0; i + 1 < uint256(cfg.downCashConfirmPeriods); ++i) {
             uint64 nextDownUsd6 = _chooseNextDownOpenPeriodUsd6(downPassThreshold);
             _warpPeriod();
             _swapStable(GasMeasurementLib.usd6ToStableRaw(nextDownUsd6, cfg.stableDecimals));
-            _assertRegime(hook.REGIME_CASH());
+            _assertMode(hook.MODE_CASH());
         }
     }
 
@@ -330,9 +330,9 @@ abstract contract GasMeasurementLocalBase is CommonBase {
         vm.warp(block.timestamp + uint256(cfg.periodSeconds));
     }
 
-    function _assertRegime(uint8 expected) internal view {
+    function _assertMode(uint8 expected) internal view {
         (,,, uint8 feeIdx) = hook.unpackedState();
-        require(feeIdx == expected, "unexpected regime");
+        require(feeIdx == expected, "unexpected mode");
     }
 
     function _seedUsd6() internal view returns (uint64) {

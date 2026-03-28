@@ -42,22 +42,22 @@ contract MeasureGasLocalScenarioTest is Test, GasMeasurementLocalBase {
 
     function test_floorToCash_measurement_path_ends_in_cash() public {
         _runOperation(GasMeasurementLib.Operation.FloorToCash);
-        _assertRegime(hook.REGIME_CASH());
+        _assertMode(hook.MODE_CASH());
     }
 
     function test_cashToExtreme_measurement_path_ends_in_extreme() public {
         _runOperation(GasMeasurementLib.Operation.CashToExtreme);
-        _assertRegime(hook.REGIME_EXTREME());
+        _assertMode(hook.MODE_EXTREME());
     }
 
     function test_extremeToCash_measurement_path_ends_in_cash() public {
         _runOperation(GasMeasurementLib.Operation.ExtremeToCash);
-        _assertRegime(hook.REGIME_CASH());
+        _assertMode(hook.MODE_CASH());
     }
 
     function test_cashToFloor_measurement_path_ends_in_floor() public {
         _runOperation(GasMeasurementLib.Operation.CashToFloor);
-        _assertRegime(hook.REGIME_FLOOR());
+        _assertMode(hook.MODE_FLOOR());
     }
 
     function test_claimAllHookFees_measurement_path_clears_accrued_balances() public {

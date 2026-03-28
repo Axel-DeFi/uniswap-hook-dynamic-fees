@@ -1,7 +1,7 @@
 # Uniswap v4 VolumeDynamicFeeHook
 
 `VolumeDynamicFeeHook` is a single-pool Uniswap v4 hook that:
-- updates dynamic LP fee across explicit FLOOR/CASH/EXTREME regimes from stable-side volume telemetry,
+- updates dynamic LP fee across explicit FLOOR/CASH/EXTREME modes from stable-side volume telemetry,
 - charges an additional trader-facing `HookFee` in `afterSwap` via return delta,
 - keeps state compact and operational controls explicit.
 
@@ -46,12 +46,12 @@ See `LICENSE` for full terms.
 - Live liquidity/swap helper drivers are reused only if their runtime codehash and bound `manager()` match the expected
   canonical helper for the configured `POOL_MANAGER`; otherwise wrappers reprovision them before broadcast-capable
   phases.
-- `pause()/unpause()` freeze/resume regulator transitions at the current LP fee regime (no automatic floor reset, no swap stop; HookFee accrual is suspended while paused).
-- `setRegimeFees(...)` (paused-only) preserves EMA, resets hold/streak counters, starts a fresh open period, and updates current LP fee immediately if active regime fee changed.
-- `setControllerParams(...)` (paused-only) preserves active regime + EMA, clears hold/streak counters, and starts a fresh open period.
+- `pause()/unpause()` freeze/resume regulator transitions at the current LP fee mode (no automatic floor reset, no swap stop; HookFee accrual is suspended while paused).
+- `setModeFees(...)` (paused-only) preserves EMA, resets hold/streak counters, starts a fresh open period, and updates current LP fee immediately if active mode fee changed.
+- `setControllerParams(...)` (paused-only) preserves active mode + EMA, clears hold/streak counters, and starts a fresh open period.
 - `setTimingParams(...)` (paused-only) has explicit split semantics:
   - time-scale change (`periodSeconds` or `emaPeriods`) => safe reset to FLOOR, EMA/counters cleared, fresh open period, immediate LP-fee sync if tier changed.
-  - non-time-scale change (`lullResetSeconds` only) => preserve regime + EMA/counters, fresh open period only.
+  - non-time-scale change (`lullResetSeconds` only) => preserve mode + EMA/counters, fresh open period only.
 - Emergency resets are explicit and available only while paused:
   - `emergencyResetToFloor()`
   - `emergencyResetToCash()`
@@ -86,7 +86,7 @@ See `LICENSE` for full terms.
 ## Accepted risks (current scope)
 
 - Dust-splitting remains a residual architectural/model risk. The configurable dust filter mitigates it, and the default `$4 / 4e6` was selected from observed v1 telemetry. This is not a formal proof against all fragmentation patterns on cheap L2.
-- Wash-trading / regime-poisoning remains a residual economic manipulation risk (more realistic as competitor-funded distortion/DoS in adversarial routing environments).
+- Wash-trading / mode-poisoning remains a residual economic manipulation risk (more realistic as competitor-funded distortion/DoS in adversarial routing environments).
 - HookFee percent timelock is intentionally transparent; observable pending changes mainly affect HookFee timing while LP fee ownership/accrual remains unchanged.
 - `scheduleMinCountedSwapUsd6Change(...)` has no timelock by design (pending + next-period activation only).
 - Overdue period catch-up can close multiple periods in one swap. Only the first closed period uses accumulated close volume, while subsequent closed periods use zero close volume; this can produce multi-step downward transitions in one transaction and is accepted as an architectural/economic trade-off in current scope.
@@ -97,7 +97,7 @@ See `LICENSE` for full terms.
 - Hot-wallet owner usage is unacceptable for production.
 - Owner key material should be held in cold/hardware custody.
 - For native-asset pools, ownership changes must keep native payout compatibility because payout always follows current `owner()`.
-- Monitor `PeriodClosed`, `RegimeFeesUpdated`, `ControllerParamsUpdated`, `TimingParamsUpdated`, `Paused`, `Unpaused`, and emergency-reset events; alert on repeated abnormal regime escalations.
+- Monitor `PeriodClosed`, `ModeFeesUpdated`, `ControllerParamsUpdated`, `TimingParamsUpdated`, `Paused`, `Unpaused`, and emergency-reset events; alert on repeated abnormal mode escalations.
 - Monitoring should treat repeated multi-close downward `PeriodClosed` sequences as notable routing/yield behavior.
 
 ## Build and test

@@ -63,7 +63,7 @@ ops/sepolia/scripts/emergency.sh
 - `ops/sepolia/out/reports/gas.sepolia.md`
 
 The wrapper temporarily shortens timing parameters for fast period-boundary measurement, resets the hook to `FLOOR`,
-and restores original timing parameters on exit. Runtime EMA/regime state is not preserved exactly; use this path only
+and restores original timing parameters on exit. Runtime EMA/mode state is not preserved exactly; use this path only
 against the Sepolia rehearsal deployment.
 
 ## Owner flows
@@ -104,8 +104,8 @@ Timelock visibility is intentional. The main exposed effect is HookFee timing; L
 - If reset target tier already equals current tier, state still resets and emits reset event, but no `FeeUpdated`.
 - Monitoring should consume reset events, not only fee update events.
 - Paused maintenance updates:
-  - `setControllerParams(...)` preserves regime + EMA, clears counters, and starts a fresh open period.
-  - `setTimingParams(...)` does a safe reset only for time-scale changes (`periodSeconds`/`emaPeriods`); changing only `lullResetSeconds` preserves regime + EMA + counters and restarts the open period only.
+  - `setControllerParams(...)` preserves mode + EMA, clears counters, and starts a fresh open period.
+  - `setTimingParams(...)` does a safe reset only for time-scale changes (`periodSeconds`/`emaPeriods`); changing only `lullResetSeconds` preserves mode + EMA + counters and restarts the open period only.
 
 ## Telemetry controls
 
@@ -139,6 +139,6 @@ Controller safety note:
 
 ## Monitoring and response
 
-- Monitor `PeriodClosed` for repeated abnormal regime escalations.
-- Monitor admin/security events: `RegimeFeesUpdated`, `ControllerParamsUpdated`, `TimingParamsUpdated`, `Paused`, `Unpaused`, emergency reset events.
+- Monitor `PeriodClosed` for repeated abnormal mode escalations.
+- Monitor admin/security events: `ModeFeesUpdated`, `ControllerParamsUpdated`, `TimingParamsUpdated`, `Paused`, `Unpaused`, emergency reset events.
 - Treat wash-trading / fee-poisoning as residual economic manipulation risk, especially on low-cost networks.

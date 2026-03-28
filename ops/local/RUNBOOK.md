@@ -79,17 +79,17 @@ Timelock visibility is intentional. The main exposed effect is HookFee timing; L
 ### `pause()` / `unpause()`
 
 - Freeze/resume controller evolution.
-- Preserve fee regime and EMA.
+- Preserve fee mode and EMA.
 - Clear only open `periodVol` and restart period boundary.
 - Do not disable swaps.
 - Do not disable HookFee accrual.
 
 ### Paused maintenance updates
 
-- `setControllerParams(...)` preserves active regime + EMA, clears hold/streak counters, and starts a fresh open period.
+- `setControllerParams(...)` preserves active mode + EMA, clears hold/streak counters, and starts a fresh open period.
 - `setTimingParams(...)` behavior depends on what changed:
   - if `periodSeconds` or `emaPeriods` changed: safe reset to FLOOR, EMA/counters cleared, fresh open period, immediate LP-fee sync if needed.
-  - if only `lullResetSeconds` changed: preserve regime + EMA + counters, fresh open period only.
+  - if only `lullResetSeconds` changed: preserve mode + EMA + counters, fresh open period only.
 
 ### Emergency resets (paused-only)
 
@@ -138,6 +138,6 @@ Controller safety note:
 
 ## Monitoring minimums
 
-- Track `PeriodClosed` and alert on repeated abnormal regime escalations.
-- Track admin/security events: `RegimeFeesUpdated`, `ControllerParamsUpdated`, `TimingParamsUpdated`, `Paused`, `Unpaused`, emergency-reset events.
+- Track `PeriodClosed` and alert on repeated abnormal mode escalations.
+- Track admin/security events: `ModeFeesUpdated`, `ControllerParamsUpdated`, `TimingParamsUpdated`, `Paused`, `Unpaused`, emergency-reset events.
 - Treat wash-trading and fee-poisoning as residual economic risks in adversarial routing environments.

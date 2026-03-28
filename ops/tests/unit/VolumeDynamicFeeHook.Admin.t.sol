@@ -255,7 +255,7 @@ contract VolumeDynamicFeeHookAdminTest is Test, VolumeDynamicFeeHookV2DeployHelp
         manager.callAfterSwapWithParams(targetHook, targetKey, params, delta);
     }
 
-    function _moveToCashRegimeWithHold() internal {
+    function _moveToCashModeWithHold() internal {
         _swap(true, -1, -1_000_000_000, 900_000_000);
         vm.warp(block.timestamp + PERIOD_SECONDS);
         _swap(true, -1, 0, 0);
@@ -265,19 +265,19 @@ contract VolumeDynamicFeeHookAdminTest is Test, VolumeDynamicFeeHookV2DeployHelp
         _swap(true, -1, 0, 0);
 
         (uint8 feeIdx, uint8 holdRemaining,,,,,,,) = hook.getStateDebug();
-        assertEq(feeIdx, hook.REGIME_CASH(), "precondition: active tier must be cash");
+        assertEq(feeIdx, hook.MODE_CASH(), "precondition: active tier must be cash");
         assertGt(holdRemaining, 0, "precondition: cash hold must be active");
     }
 
     function _moveToCashWithPendingUpExtremeStreak() internal {
-        _moveToCashRegimeWithHold();
+        _moveToCashModeWithHold();
 
         _swap(true, -1, -10_000_000_000, 9_000_000_000);
         vm.warp(block.timestamp + PERIOD_SECONDS);
         _swap(true, -1, 0, 0);
 
         (uint8 feeIdx,, uint8 upExtremeStreak,,,,,,) = hook.getStateDebug();
-        assertEq(feeIdx, hook.REGIME_CASH(), "precondition: active tier must stay cash");
+        assertEq(feeIdx, hook.MODE_CASH(), "precondition: active tier must stay cash");
         assertEq(upExtremeStreak, 1, "precondition: one pending up streak expected");
     }
 
@@ -475,7 +475,7 @@ contract VolumeDynamicFeeHookAdminTest is Test, VolumeDynamicFeeHookV2DeployHelp
         emaSeed = _expectedUpdatedEma(0, SEED_CLOSEVOL_USD6);
     }
 
-    function _enterCashRegime() internal returns (uint96 emaCash) {
+    function _enterCashMode() internal returns (uint96 emaCash) {
         uint96 emaSeed = _seedFloorEma();
         _countedSwap(CASH_JUMP_CLOSEVOL_USD6);
         _advanceOnePeriod();
@@ -484,7 +484,7 @@ contract VolumeDynamicFeeHookAdminTest is Test, VolumeDynamicFeeHookV2DeployHelp
         emaCash = _expectedUpdatedEma(emaSeed, CASH_JUMP_CLOSEVOL_USD6);
 
         (uint8 feeIdx, uint8 holdRemaining,,,,,,,) = hook.getStateDebug();
-        assertEq(feeIdx, hook.REGIME_CASH(), "precondition: active tier must be cash");
+        assertEq(feeIdx, hook.MODE_CASH(), "precondition: active tier must be cash");
         assertEq(holdRemaining, hook.cashHoldPeriods(), "precondition: cash hold must be freshly set");
     }
 
@@ -515,9 +515,9 @@ contract VolumeDynamicFeeHookAdminTest is Test, VolumeDynamicFeeHookV2DeployHelp
 
         assertEq(capture.lastTrace.periodStart, closedPeriodStart);
         assertEq(capture.lastTrace.fromFee, hook.floorFee());
-        assertEq(capture.lastTrace.fromFeeIdx, hook.REGIME_FLOOR());
+        assertEq(capture.lastTrace.fromFeeIdx, hook.MODE_FLOOR());
         assertEq(capture.lastTrace.toFee, hook.floorFee());
-        assertEq(capture.lastTrace.toFeeIdx, hook.REGIME_FLOOR());
+        assertEq(capture.lastTrace.toFeeIdx, hook.MODE_FLOOR());
         assertEq(capture.lastTrace.closeVolumeUsd6, SEED_CLOSEVOL_USD6);
         assertEq(capture.lastTrace.emaBeforeUsd6Scaled, emaBefore);
         assertEq(capture.lastTrace.emaAfterUsd6Scaled, emaAfter);
@@ -528,15 +528,15 @@ contract VolumeDynamicFeeHookAdminTest is Test, VolumeDynamicFeeHookV2DeployHelp
         assertEq(capture.lastTrace.reasonCode, hook.REASON_NO_CHANGE());
 
         assertEq(capture.lastPeriodClosed.fromFee, hook.floorFee());
-        assertEq(capture.lastPeriodClosed.fromFeeIdx, hook.REGIME_FLOOR());
+        assertEq(capture.lastPeriodClosed.fromFeeIdx, hook.MODE_FLOOR());
         assertEq(capture.lastPeriodClosed.toFee, hook.floorFee());
-        assertEq(capture.lastPeriodClosed.toFeeIdx, hook.REGIME_FLOOR());
+        assertEq(capture.lastPeriodClosed.toFeeIdx, hook.MODE_FLOOR());
         assertEq(capture.lastPeriodClosed.closedVolumeUsd6, SEED_CLOSEVOL_USD6);
         assertEq(capture.lastPeriodClosed.emaVolumeUsd6Scaled, emaAfter);
         assertEq(capture.lastPeriodClosed.approxLpFeesUsd6, approxLpFees);
         assertEq(capture.lastPeriodClosed.reasonCode, hook.REASON_NO_CHANGE());
 
-        assertEq(hook.currentRegime(), hook.REGIME_FLOOR(), "fee regime must stay floor");
+        assertEq(hook.currentMode(), hook.MODE_FLOOR(), "fee mode must stay floor");
         assertEq(manager.lastFee(), hook.floorFee(), "active fee must stay floor");
     }
 
@@ -558,9 +558,9 @@ contract VolumeDynamicFeeHookAdminTest is Test, VolumeDynamicFeeHookV2DeployHelp
 
         assertEq(capture.lastTrace.periodStart, closedPeriodStart);
         assertEq(capture.lastTrace.fromFee, hook.floorFee());
-        assertEq(capture.lastTrace.fromFeeIdx, hook.REGIME_FLOOR());
+        assertEq(capture.lastTrace.fromFeeIdx, hook.MODE_FLOOR());
         assertEq(capture.lastTrace.toFee, hook.cashFee());
-        assertEq(capture.lastTrace.toFeeIdx, hook.REGIME_CASH());
+        assertEq(capture.lastTrace.toFeeIdx, hook.MODE_CASH());
         assertEq(capture.lastTrace.closeVolumeUsd6, CASH_JUMP_CLOSEVOL_USD6);
         assertEq(capture.lastTrace.emaBeforeUsd6Scaled, emaBefore);
         assertEq(capture.lastTrace.emaAfterUsd6Scaled, emaAfter);
@@ -578,16 +578,16 @@ contract VolumeDynamicFeeHookAdminTest is Test, VolumeDynamicFeeHookV2DeployHelp
         assertEq(capture.lastPeriodClosed.reasonCode, hook.REASON_JUMP_CASH());
 
         assertEq(capture.lastFeeUpdated.newFee, hook.cashFee());
-        assertEq(capture.lastFeeUpdated.newFeeIdx, hook.REGIME_CASH());
+        assertEq(capture.lastFeeUpdated.newFeeIdx, hook.MODE_CASH());
         assertEq(capture.lastFeeUpdated.closedVolumeUsd6, CASH_JUMP_CLOSEVOL_USD6);
         assertEq(capture.lastFeeUpdated.emaVolumeUsd6Scaled, emaAfter);
 
-        assertEq(hook.currentRegime(), hook.REGIME_CASH(), "fee regime must jump to cash");
+        assertEq(hook.currentMode(), hook.MODE_CASH(), "fee mode must jump to cash");
         assertEq(manager.lastFee(), hook.cashFee(), "active fee must update to cash");
     }
 
     function test_controllerTransitionTrace_cash_to_extreme() public {
-        uint96 emaCash = _enterCashRegime();
+        uint96 emaCash = _enterCashMode();
 
         _countedSwap(EXTREME_STREAK1_CLOSEVOL_USD6);
         _advanceOnePeriod();
@@ -610,9 +610,9 @@ contract VolumeDynamicFeeHookAdminTest is Test, VolumeDynamicFeeHookV2DeployHelp
 
         assertEq(capture.lastTrace.periodStart, closedPeriodStart);
         assertEq(capture.lastTrace.fromFee, hook.cashFee());
-        assertEq(capture.lastTrace.fromFeeIdx, hook.REGIME_CASH());
+        assertEq(capture.lastTrace.fromFeeIdx, hook.MODE_CASH());
         assertEq(capture.lastTrace.toFee, hook.extremeFee());
-        assertEq(capture.lastTrace.toFeeIdx, hook.REGIME_EXTREME());
+        assertEq(capture.lastTrace.toFeeIdx, hook.MODE_EXTREME());
         assertEq(capture.lastTrace.closeVolumeUsd6, EXTREME_STREAK2_CLOSEVOL_USD6);
         assertEq(capture.lastTrace.emaBeforeUsd6Scaled, emaBefore);
         assertEq(capture.lastTrace.emaAfterUsd6Scaled, emaAfter);
@@ -632,16 +632,16 @@ contract VolumeDynamicFeeHookAdminTest is Test, VolumeDynamicFeeHookV2DeployHelp
         assertEq(capture.lastPeriodClosed.reasonCode, hook.REASON_JUMP_EXTREME());
 
         assertEq(capture.lastFeeUpdated.newFee, hook.extremeFee());
-        assertEq(capture.lastFeeUpdated.newFeeIdx, hook.REGIME_EXTREME());
+        assertEq(capture.lastFeeUpdated.newFeeIdx, hook.MODE_EXTREME());
         assertEq(capture.lastFeeUpdated.closedVolumeUsd6, EXTREME_STREAK2_CLOSEVOL_USD6);
         assertEq(capture.lastFeeUpdated.emaVolumeUsd6Scaled, emaAfter);
 
-        assertEq(hook.currentRegime(), hook.REGIME_EXTREME(), "fee regime must jump to extreme");
+        assertEq(hook.currentMode(), hook.MODE_EXTREME(), "fee mode must jump to extreme");
         assertEq(manager.lastFee(), hook.extremeFee(), "active fee must update to extreme");
     }
 
     function test_controllerTransitionTrace_hold_blocked_close() public {
-        uint96 emaBefore = _enterCashRegime();
+        uint96 emaBefore = _enterCashMode();
         uint64 closedPeriodStart = _currentPeriodStart();
 
         _advanceOnePeriod();
@@ -656,9 +656,9 @@ contract VolumeDynamicFeeHookAdminTest is Test, VolumeDynamicFeeHookV2DeployHelp
 
         assertEq(capture.lastTrace.periodStart, closedPeriodStart);
         assertEq(capture.lastTrace.fromFee, hook.cashFee());
-        assertEq(capture.lastTrace.fromFeeIdx, hook.REGIME_CASH());
+        assertEq(capture.lastTrace.fromFeeIdx, hook.MODE_CASH());
         assertEq(capture.lastTrace.toFee, hook.cashFee());
-        assertEq(capture.lastTrace.toFeeIdx, hook.REGIME_CASH());
+        assertEq(capture.lastTrace.toFeeIdx, hook.MODE_CASH());
         assertEq(capture.lastTrace.closeVolumeUsd6, 0);
         assertEq(capture.lastTrace.emaBeforeUsd6Scaled, emaBefore);
         assertEq(capture.lastTrace.emaAfterUsd6Scaled, emaAfter);
@@ -675,12 +675,12 @@ contract VolumeDynamicFeeHookAdminTest is Test, VolumeDynamicFeeHookV2DeployHelp
         assertEq(capture.lastPeriodClosed.approxLpFeesUsd6, 0);
         assertEq(capture.lastPeriodClosed.reasonCode, hook.REASON_HOLD());
 
-        assertEq(hook.currentRegime(), hook.REGIME_CASH(), "fee regime must stay cash under hold");
+        assertEq(hook.currentMode(), hook.MODE_CASH(), "fee mode must stay cash under hold");
         assertEq(manager.lastFee(), hook.cashFee(), "active fee must stay cash");
     }
 
     function test_controllerTransitionTrace_emergency_floor_transition() public {
-        uint96 emaLow1 = _enterCashRegime();
+        uint96 emaLow1 = _enterCashMode();
 
         _advanceOnePeriod();
         _closeCurrentPeriod();
@@ -703,9 +703,9 @@ contract VolumeDynamicFeeHookAdminTest is Test, VolumeDynamicFeeHookV2DeployHelp
 
         assertEq(capture.lastTrace.periodStart, closedPeriodStart);
         assertEq(capture.lastTrace.fromFee, hook.cashFee());
-        assertEq(capture.lastTrace.fromFeeIdx, hook.REGIME_CASH());
+        assertEq(capture.lastTrace.fromFeeIdx, hook.MODE_CASH());
         assertEq(capture.lastTrace.toFee, hook.floorFee());
-        assertEq(capture.lastTrace.toFeeIdx, hook.REGIME_FLOOR());
+        assertEq(capture.lastTrace.toFeeIdx, hook.MODE_FLOOR());
         assertEq(capture.lastTrace.closeVolumeUsd6, 0);
         assertEq(capture.lastTrace.emaBeforeUsd6Scaled, emaBefore);
         assertEq(capture.lastTrace.emaAfterUsd6Scaled, emaAfter);
@@ -723,16 +723,16 @@ contract VolumeDynamicFeeHookAdminTest is Test, VolumeDynamicFeeHookV2DeployHelp
         assertEq(capture.lastPeriodClosed.reasonCode, hook.REASON_EMERGENCY_FLOOR());
 
         assertEq(capture.lastFeeUpdated.newFee, hook.floorFee());
-        assertEq(capture.lastFeeUpdated.newFeeIdx, hook.REGIME_FLOOR());
+        assertEq(capture.lastFeeUpdated.newFeeIdx, hook.MODE_FLOOR());
         assertEq(capture.lastFeeUpdated.closedVolumeUsd6, 0);
         assertEq(capture.lastFeeUpdated.emaVolumeUsd6Scaled, emaAfter);
 
-        assertEq(hook.currentRegime(), hook.REGIME_FLOOR(), "fee regime must reset to floor");
+        assertEq(hook.currentMode(), hook.MODE_FLOOR(), "fee mode must reset to floor");
         assertEq(manager.lastFee(), hook.floorFee(), "active fee must update to floor");
     }
 
     function test_controllerTransitionTrace_catchUp_emergency_floor_triggers_mid_loop() public {
-        _enterCashRegime();
+        _enterCashMode();
 
         _countedSwap(EXTREME_STREAK1_CLOSEVOL_USD6);
         _advanceOnePeriod();
@@ -744,7 +744,7 @@ contract VolumeDynamicFeeHookAdminTest is Test, VolumeDynamicFeeHookV2DeployHelp
 
         (uint8 feeIdxBeforeCatchUp, uint8 holdBeforeCatchUp,,,, uint64 periodStartBeforeCatchUp,,,) =
             hook.getStateDebug();
-        assertEq(feeIdxBeforeCatchUp, hook.REGIME_EXTREME(), "precondition: active tier must be extreme");
+        assertEq(feeIdxBeforeCatchUp, hook.MODE_EXTREME(), "precondition: active tier must be extreme");
         assertEq(
             holdBeforeCatchUp,
             hook.extremeHoldPeriods(),
@@ -763,9 +763,9 @@ contract VolumeDynamicFeeHookAdminTest is Test, VolumeDynamicFeeHookV2DeployHelp
 
         assertEq(capture.lastTrace.periodStart, periodStartBeforeCatchUp + uint64(PERIOD_SECONDS * 2));
         assertEq(capture.lastTrace.fromFee, hook.extremeFee());
-        assertEq(capture.lastTrace.fromFeeIdx, hook.REGIME_EXTREME());
+        assertEq(capture.lastTrace.fromFeeIdx, hook.MODE_EXTREME());
         assertEq(capture.lastTrace.toFee, hook.floorFee());
-        assertEq(capture.lastTrace.toFeeIdx, hook.REGIME_FLOOR());
+        assertEq(capture.lastTrace.toFeeIdx, hook.MODE_FLOOR());
         assertEq(capture.lastTrace.closeVolumeUsd6, 0);
         assertEq(capture.lastTrace.approxLpFeesUsd6, 0);
         assertEq(capture.lastTrace.decisionFlags, TRACE_FLAG_HOLD_WAS_ACTIVE | TRACE_FLAG_EMERGENCY_TRIGGERED);
@@ -787,7 +787,7 @@ contract VolumeDynamicFeeHookAdminTest is Test, VolumeDynamicFeeHookV2DeployHelp
             uint8 emergencyAfterCatchUp,
             uint64 periodStartAfterCatchUp,,,
         ) = hook.getStateDebug();
-        assertEq(feeIdxAfterCatchUp, hook.REGIME_FLOOR(), "emergency floor should win inside catch-up loop");
+        assertEq(feeIdxAfterCatchUp, hook.MODE_FLOOR(), "emergency floor should win inside catch-up loop");
         assertEq(holdAfterCatchUp, 0, "hold must be cleared after emergency floor reset");
         assertEq(upAfterCatchUp, 0, "up streak must reset after emergency floor");
         assertEq(downAfterCatchUp, 0, "down streak must reset after emergency floor");
@@ -803,7 +803,7 @@ contract VolumeDynamicFeeHookAdminTest is Test, VolumeDynamicFeeHookV2DeployHelp
     }
 
     function test_controllerTransitionTrace_lull_reset() public {
-        uint96 emaBefore = _enterCashRegime();
+        uint96 emaBefore = _enterCashMode();
         uint64 closedPeriodStart = _currentPeriodStart();
 
         vm.warp(block.timestamp + LULL_RESET_SECONDS);
@@ -816,9 +816,9 @@ contract VolumeDynamicFeeHookAdminTest is Test, VolumeDynamicFeeHookV2DeployHelp
 
         assertEq(capture.lastTrace.periodStart, closedPeriodStart);
         assertEq(capture.lastTrace.fromFee, hook.cashFee());
-        assertEq(capture.lastTrace.fromFeeIdx, hook.REGIME_CASH());
+        assertEq(capture.lastTrace.fromFeeIdx, hook.MODE_CASH());
         assertEq(capture.lastTrace.toFee, hook.floorFee());
-        assertEq(capture.lastTrace.toFeeIdx, hook.REGIME_FLOOR());
+        assertEq(capture.lastTrace.toFeeIdx, hook.MODE_FLOOR());
         assertEq(capture.lastTrace.closeVolumeUsd6, 0);
         assertEq(capture.lastTrace.emaBeforeUsd6Scaled, emaBefore);
         assertEq(capture.lastTrace.emaAfterUsd6Scaled, 0);
@@ -836,11 +836,11 @@ contract VolumeDynamicFeeHookAdminTest is Test, VolumeDynamicFeeHookV2DeployHelp
         assertEq(capture.lastPeriodClosed.reasonCode, hook.REASON_LULL_RESET());
 
         assertEq(capture.lastFeeUpdated.newFee, hook.floorFee());
-        assertEq(capture.lastFeeUpdated.newFeeIdx, hook.REGIME_FLOOR());
+        assertEq(capture.lastFeeUpdated.newFeeIdx, hook.MODE_FLOOR());
         assertEq(capture.lastFeeUpdated.closedVolumeUsd6, 0);
         assertEq(capture.lastFeeUpdated.emaVolumeUsd6Scaled, 0);
 
-        assertEq(hook.currentRegime(), hook.REGIME_FLOOR(), "fee regime must reset to floor on lull");
+        assertEq(hook.currentMode(), hook.MODE_FLOOR(), "fee mode must reset to floor on lull");
         assertEq(manager.lastFee(), hook.floorFee(), "active fee must update to floor");
     }
 
@@ -1008,7 +1008,7 @@ contract VolumeDynamicFeeHookAdminTest is Test, VolumeDynamicFeeHookV2DeployHelp
         hook.setTimingParams(PERIOD_SECONDS, EMA_PERIODS, PERIOD_SECONDS);
     }
 
-    function test_setTimingParams_lull_only_keeps_regime_ema_and_counters() public {
+    function test_setTimingParams_lull_only_keeps_mode_ema_and_counters() public {
         _moveToCashWithPendingUpExtremeStreak();
         hook.pause();
 
@@ -1054,7 +1054,7 @@ contract VolumeDynamicFeeHookAdminTest is Test, VolumeDynamicFeeHookV2DeployHelp
         hook.pause();
 
         (uint8 feeIdxBefore,,,,, uint64 periodStartBefore,, uint96 emaBefore,) = hook.getStateDebug();
-        assertEq(feeIdxBefore, hook.REGIME_CASH(), "precondition: must be in cash before reset");
+        assertEq(feeIdxBefore, hook.MODE_CASH(), "precondition: must be in cash before reset");
         assertGt(emaBefore, 0, "precondition: EMA must be seeded");
 
         uint256 updatesBefore = manager.updateCount();
@@ -1074,7 +1074,7 @@ contract VolumeDynamicFeeHookAdminTest is Test, VolumeDynamicFeeHookV2DeployHelp
             bool pausedAfter
         ) = hook.getStateDebug();
 
-        assertEq(feeIdxAfter, hook.REGIME_FLOOR());
+        assertEq(feeIdxAfter, hook.MODE_FLOOR());
         assertEq(holdAfter, 0);
         assertEq(upAfter, 0);
         assertEq(downAfter, 0);
@@ -1094,7 +1094,7 @@ contract VolumeDynamicFeeHookAdminTest is Test, VolumeDynamicFeeHookV2DeployHelp
         hook.pause();
 
         (uint8 feeIdxBefore,,,,,,,,) = hook.getStateDebug();
-        assertEq(feeIdxBefore, hook.REGIME_CASH(), "precondition: must be in cash before reset");
+        assertEq(feeIdxBefore, hook.MODE_CASH(), "precondition: must be in cash before reset");
 
         uint256 updatesBefore = manager.updateCount();
         uint8 newEmaPeriods = EMA_PERIODS + 1;
@@ -1111,7 +1111,7 @@ contract VolumeDynamicFeeHookAdminTest is Test, VolumeDynamicFeeHookV2DeployHelp
             bool pausedAfter
         ) = hook.getStateDebug();
 
-        assertEq(feeIdxAfter, hook.REGIME_FLOOR());
+        assertEq(feeIdxAfter, hook.MODE_FLOOR());
         assertEq(holdAfter, 0);
         assertEq(upAfter, 0);
         assertEq(downAfter, 0);
@@ -1187,7 +1187,7 @@ contract VolumeDynamicFeeHookAdminTest is Test, VolumeDynamicFeeHookV2DeployHelp
         assertEq(hook.emergencyFloorCloseVolUsd6(), p.emergencyFloorCloseVolUsd6);
     }
 
-    function test_setControllerParams_preserves_regime_and_ema_but_clears_counters() public {
+    function test_setControllerParams_preserves_mode_and_ema_but_clears_counters() public {
         _moveToCashWithPendingUpExtremeStreak();
         hook.pause();
 
@@ -1200,7 +1200,7 @@ contract VolumeDynamicFeeHookAdminTest is Test, VolumeDynamicFeeHookV2DeployHelp
             uint64 periodStartBefore,,
             uint96 emaBefore,
         ) = hook.getStateDebug();
-        assertEq(feeIdxBefore, hook.REGIME_CASH());
+        assertEq(feeIdxBefore, hook.MODE_CASH());
         assertGt(holdBefore, 0, "precondition: hold must be active");
         assertGt(upBefore, 0, "precondition: up streak must be active");
 
@@ -1222,7 +1222,7 @@ contract VolumeDynamicFeeHookAdminTest is Test, VolumeDynamicFeeHookV2DeployHelp
         ) = hook.getStateDebug();
         downBefore;
         emergencyBefore;
-        assertEq(feeIdxAfter, feeIdxBefore, "regime must be preserved");
+        assertEq(feeIdxAfter, feeIdxBefore, "mode must be preserved");
         assertEq(emaAfter, emaBefore, "EMA must be preserved");
         assertEq(holdAfter, 0, "hold counter must reset");
         assertEq(upAfter, 0, "up streak must reset");
@@ -1249,7 +1249,7 @@ contract VolumeDynamicFeeHookAdminTest is Test, VolumeDynamicFeeHookV2DeployHelp
 
         (uint8 feeIdxAfter,,,,,,,,) = hook.getStateDebug();
         assertEq(
-            feeIdxAfter, hook.REGIME_CASH(), "stale up streak must not trigger immediate jump to extreme"
+            feeIdxAfter, hook.MODE_CASH(), "stale up streak must not trigger immediate jump to extreme"
         );
     }
 
@@ -1271,7 +1271,7 @@ contract VolumeDynamicFeeHookAdminTest is Test, VolumeDynamicFeeHookV2DeployHelp
     function testFuzz_setTimingParams_time_scale_change_performs_safe_reset(uint32 periodSeed, uint8 emaSeed)
         public
     {
-        _moveToCashRegimeWithHold();
+        _moveToCashModeWithHold();
         hook.pause();
 
         uint32 newPeriod = uint32(bound(periodSeed, 1, 7200));
@@ -1294,7 +1294,7 @@ contract VolumeDynamicFeeHookAdminTest is Test, VolumeDynamicFeeHookV2DeployHelp
             uint96 emaAfter,
         ) = hook.getStateDebug();
 
-        assertEq(feeIdxAfter, hook.REGIME_FLOOR());
+        assertEq(feeIdxAfter, hook.MODE_FLOOR());
         assertEq(holdAfter, 0);
         assertEq(upAfter, 0);
         assertEq(downAfter, 0);
@@ -1324,9 +1324,9 @@ contract VolumeDynamicFeeHookAdminTest is Test, VolumeDynamicFeeHookV2DeployHelp
         hook.setControllerParams(p);
         hook.unpause();
 
-        _moveToCashRegimeWithHold();
+        _moveToCashModeWithHold();
         (uint8 feeIdxAfterJump, uint8 holdAfterJump,,,,,,,) = hook.getStateDebug();
-        assertEq(feeIdxAfterJump, hook.REGIME_CASH(), "precondition: active tier must be cash");
+        assertEq(feeIdxAfterJump, hook.MODE_CASH(), "precondition: active tier must be cash");
         assertEq(holdAfterJump, 1, "configured hold must initialize to one");
 
         vm.warp(block.timestamp + PERIOD_SECONDS);
@@ -1335,7 +1335,7 @@ contract VolumeDynamicFeeHookAdminTest is Test, VolumeDynamicFeeHookV2DeployHelp
         (uint8 feeIdxAfterNextClose, uint8 holdAfterNextClose,,,,,,,) = hook.getStateDebug();
         assertEq(
             feeIdxAfterNextClose,
-            hook.REGIME_FLOOR(),
+            hook.MODE_FLOOR(),
             "cashHoldPeriods=1 should not provide an extra fully protected period"
         );
         assertEq(holdAfterNextClose, 0, "hold must be consumed at the next close");
@@ -1350,13 +1350,13 @@ contract VolumeDynamicFeeHookAdminTest is Test, VolumeDynamicFeeHookV2DeployHelp
         hook.setControllerParams(p);
         hook.unpause();
 
-        _moveToCashRegimeWithHold();
+        _moveToCashModeWithHold();
 
         vm.warp(block.timestamp + PERIOD_SECONDS);
         _swap(true, -1, 0, 0);
 
         (uint8 feeIdx,,,,,,,,) = hook.getStateDebug();
-        assertEq(feeIdx, hook.REGIME_FLOOR(), "emergency floor should trigger from cash on low close volume");
+        assertEq(feeIdx, hook.MODE_FLOOR(), "emergency floor should trigger from cash on low close volume");
     }
 
     function test_pause_unpause_freeze_resume_semantics() public {
@@ -1447,7 +1447,7 @@ contract VolumeDynamicFeeHookAdminTest is Test, VolumeDynamicFeeHookV2DeployHelp
             bool paused
         ) = hook.getStateDebug();
 
-        assertEq(feeIdx, hook.REGIME_CASH());
+        assertEq(feeIdx, hook.MODE_CASH());
         assertEq(hold, 0);
         assertEq(up, 0);
         assertEq(down, 0);
@@ -1459,17 +1459,17 @@ contract VolumeDynamicFeeHookAdminTest is Test, VolumeDynamicFeeHookV2DeployHelp
 
         hook.emergencyResetToFloor();
         (feeIdx,,,,,, periodVol, ema, paused) = hook.getStateDebug();
-        assertEq(feeIdx, hook.REGIME_FLOOR());
+        assertEq(feeIdx, hook.MODE_FLOOR());
         assertEq(periodVol, 0);
         assertEq(ema, 0);
         assertTrue(paused);
     }
 
-    function test_setRegimeFees_pausedMaintenance_preservesEma_resetsCounters_andKeepsRegime() public {
-        _moveToCashRegimeWithHold();
+    function test_setModeFees_pausedMaintenance_preservesEma_resetsCounters_andKeepsMode() public {
+        _moveToCashModeWithHold();
 
         (
-            uint8 regimeBefore,
+            uint8 modeBefore,
             uint8 holdBefore,
             uint8 upBefore,
             uint8 downBefore,
@@ -1484,7 +1484,7 @@ contract VolumeDynamicFeeHookAdminTest is Test, VolumeDynamicFeeHookV2DeployHelp
         emergencyBefore;
         periodVolBefore;
         pausedBefore;
-        assertEq(regimeBefore, hook.REGIME_CASH());
+        assertEq(modeBefore, hook.MODE_CASH());
         assertGt(holdBefore, 0);
 
         _swap(true, -1, -10_000_000, 9_500_000);
@@ -1496,10 +1496,10 @@ contract VolumeDynamicFeeHookAdminTest is Test, VolumeDynamicFeeHookV2DeployHelp
 
         hook.pause();
         uint256 updatesBefore = manager.updateCount();
-        hook.setRegimeFees(400, 3000, 9000);
+        hook.setModeFees(400, 3000, 9000);
 
         (
-            uint8 regimeAfter,
+            uint8 modeAfter,
             uint8 holdAfter,
             uint8 upAfter,
             uint8 downAfter,
@@ -1511,7 +1511,7 @@ contract VolumeDynamicFeeHookAdminTest is Test, VolumeDynamicFeeHookV2DeployHelp
         ) = hook.getStateDebug();
         periodVolAfter;
         pausedAfter;
-        assertEq(regimeAfter, hook.REGIME_CASH(), "active regime must stay cash");
+        assertEq(modeAfter, hook.MODE_CASH(), "active mode must stay cash");
         assertEq(holdAfter, 0, "hold must reset");
         assertEq(upAfter, 0, "up streak must reset");
         assertEq(downAfter, 0, "down streak must reset");
@@ -1522,21 +1522,21 @@ contract VolumeDynamicFeeHookAdminTest is Test, VolumeDynamicFeeHookV2DeployHelp
         assertEq(manager.lastFee(), 3000);
     }
 
-    function test_setRegimeFees_rejects_invalid_fee_order() public {
+    function test_setModeFees_rejects_invalid_fee_order() public {
         hook.pause();
 
         vm.expectRevert(VolumeDynamicFeeHook.InvalidConfig.selector);
-        hook.setRegimeFees(0, 2500, 9000);
+        hook.setModeFees(0, 2500, 9000);
 
         vm.expectRevert(VolumeDynamicFeeHook.InvalidConfig.selector);
-        hook.setRegimeFees(400, 400, 9000);
+        hook.setModeFees(400, 400, 9000);
 
         vm.expectRevert(VolumeDynamicFeeHook.InvalidConfig.selector);
-        hook.setRegimeFees(400, 9000, 2500);
+        hook.setModeFees(400, 9000, 2500);
     }
 
-    function test_getRegimeFees_returns_explicit_triplet() public view {
-        (uint24 floorFee_, uint24 cashFee_, uint24 extremeFee_) = hook.getRegimeFees();
+    function test_getModeFees_returns_explicit_triplet() public view {
+        (uint24 floorFee_, uint24 cashFee_, uint24 extremeFee_) = hook.getModeFees();
         assertEq(floorFee_, 400);
         assertEq(cashFee_, 2500);
         assertEq(extremeFee_, 9000);
@@ -1609,11 +1609,11 @@ contract VolumeDynamicFeeHookAdminTest is Test, VolumeDynamicFeeHookV2DeployHelp
     function test_stable_decimals_only_6_or_18() public {
         VolumeDynamicFeeHookAdminHarness h6 =
             _deployHarness(V2_DEFAULT_FLOOR_FEE, V2_DEFAULT_CASH_FEE, V2_DEFAULT_EXTREME_FEE, owner, 1, 6);
-        assertEq(h6.REGIME_FLOOR(), 0);
+        assertEq(h6.MODE_FLOOR(), 0);
 
         VolumeDynamicFeeHookAdminHarness h18 =
             _deployHarness(V2_DEFAULT_FLOOR_FEE, V2_DEFAULT_CASH_FEE, V2_DEFAULT_EXTREME_FEE, owner, 1, 18);
-        assertEq(h18.REGIME_FLOOR(), 0);
+        assertEq(h18.MODE_FLOOR(), 0);
 
         vm.expectRevert(abi.encodeWithSelector(VolumeDynamicFeeHook.InvalidStableDecimals.selector, uint8(8)));
         _deployHarness(V2_DEFAULT_FLOOR_FEE, V2_DEFAULT_CASH_FEE, V2_DEFAULT_EXTREME_FEE, owner, 1, 8);

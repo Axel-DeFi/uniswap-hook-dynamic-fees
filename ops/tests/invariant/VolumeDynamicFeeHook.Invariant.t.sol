@@ -246,10 +246,10 @@ abstract contract VolumeDynamicFeeHookInvariantBase is
     function invariant_feeIdxAlwaysWithinBounds() public view {
         (,, uint64 ps, uint8 feeIdx) = hook.unpackedState();
         assertTrue(ps != 0, "not initialized");
-        assertTrue(feeIdx <= hook.REGIME_EXTREME(), "feeIdx out of range");
+        assertTrue(feeIdx <= hook.MODE_EXTREME(), "feeIdx out of range");
     }
 
-    function invariant_regimeFeeOrderingAlwaysStrict() public view {
+    function invariant_modeFeeOrderingAlwaysStrict() public view {
         assertTrue(hook.floorFee() < hook.cashFee(), "floor !< cash");
         assertTrue(hook.cashFee() < hook.extremeFee(), "cash !< extreme");
     }
@@ -263,7 +263,7 @@ abstract contract VolumeDynamicFeeHookInvariantBase is
             uint8 emergencyStreak,,,,
         ) = hook.getStateDebug();
 
-        assertTrue(feeIdx <= hook.REGIME_EXTREME(), "packed feeIdx overflow");
+        assertTrue(feeIdx <= hook.MODE_EXTREME(), "packed feeIdx overflow");
         assertTrue(holdRemaining <= 31, "packed hold overflow");
         assertTrue(upExtremeStreak <= 3, "packed up overflow");
         assertTrue(downStreak <= 7, "packed down overflow");

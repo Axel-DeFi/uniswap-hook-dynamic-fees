@@ -8,7 +8,7 @@ Legacy concept PDFs are archival and non-normative for this repository behavior.
 ## Can I change parameters without redeploy?
 
 Yes, Owner can update runtime config onchain:
-- `setRegimeFees(...)` (paused only)
+- `setModeFees(...)` (paused only)
 - `setControllerParams(...)` (paused only)
 - `setTimingParams(...)` (paused only)
 - HookFee timelock flow (`schedule/cancel/execute`)
@@ -16,12 +16,12 @@ Yes, Owner can update runtime config onchain:
 ## What exactly happens on `setTimingParams(...)`?
 
 Two explicit paths:
-- Time-scale change (`periodSeconds` or `emaPeriods`) does a safe reset: FLOOR regime, EMA reset, counters reset, fresh open period, immediate LP-fee sync if tier changed.
-- Non-time-scale change (only `lullResetSeconds`) preserves regime + EMA + counters and only restarts open period.
+- Time-scale change (`periodSeconds` or `emaPeriods`) does a safe reset: FLOOR mode, EMA reset, counters reset, fresh open period, immediate LP-fee sync if tier changed.
+- Non-time-scale change (only `lullResetSeconds`) preserves mode + EMA + counters and only restarts open period.
 
 ## What exactly happens on `setControllerParams(...)`?
 
-While paused, it preserves active regime and EMA, clears hold/streak counters, and starts a fresh open period.
+While paused, it preserves active mode and EMA, clears hold/streak counters, and starts a fresh open period.
 This avoids stale counter carry-over after config updates.
 
 ## Is HookFee the same as LP fee?
@@ -48,9 +48,9 @@ Timelock transparency is intentional; the main exposed effect is HookFee timing.
 ## What does pause do now?
 
 `pause()` freezes controller evolution but does not reset to floor by default.
-It preserves fee regime and EMA, clears only open period volume, and restarts period clock.
+It preserves fee mode and EMA, clears only open period volume, and restarts period clock.
 It does not stop swaps, but it does suspend HookFee accrual until `unpause()`.
-The active LP fee regime stays frozen until `unpause()` or explicit paused-mode emergency reset.
+The active LP fee mode stays frozen until `unpause()` or explicit paused-mode emergency reset.
 
 ## How do hold periods work?
 
@@ -78,7 +78,7 @@ Treat repeated multi-close downward `PeriodClosed` sequences as notable monitori
 
 Only when paused and explicit reset is required:
 - `emergencyResetToFloor()` for full conservative reset.
-- `emergencyResetToCash()` when you need fast recovery without forcing floor regime.
+- `emergencyResetToCash()` when you need fast recovery without forcing floor mode.
 
 Operationally, `emergencyResetToCash()` is typically preferred default.
 Monitoring should track emergency reset events directly, not only fee update events.
@@ -114,7 +114,7 @@ If ownership changes later, this compatibility requirement must still be preserv
 
 ## Is `approxLpFeesUsd6` accounting-accurate?
 
-No. It is approximate telemetry for regime analytics.
+No. It is approximate telemetry for mode analytics.
 
 ## What is `ControllerTransitionTrace`?
 
@@ -145,7 +145,7 @@ exposes the exact minimal callback surface, and matches the expected config iden
 - no `pendingOwner()`,
 - configured stable decimals mode,
 - current `minCountedSwapUsd6()`,
-- regime fees,
+- mode fees,
 - `hookFeePercent`,
 - timing params,
 - controller params,
@@ -154,12 +154,12 @@ exposes the exact minimal callback surface, and matches the expected config iden
 ## Is wash-trading fully prevented onchain?
 
 No. Residual manipulation risk remains (especially competitor-funded distortion / fee-poisoning in low-cost, adversarial routing environments).
-Operational mitigations are conservative defaults plus monitoring of `PeriodClosed` and alerting on repeated abnormal regime escalations.
+Operational mitigations are conservative defaults plus monitoring of `PeriodClosed` and alerting on repeated abnormal mode escalations.
 
-## Does `setRegimeFees(...)` reset EMA?
+## Does `setModeFees(...)` reset EMA?
 
-No. `setRegimeFees(...)` preserves EMA intentionally.
-While paused, it resets hold/streak counters, starts a fresh open period, and keeps the current regime id.
+No. `setModeFees(...)` preserves EMA intentionally.
+While paused, it resets hold/streak counters, starts a fresh open period, and keeps the current mode id.
 
 ## How does EMA bootstrap work after init/reset?
 

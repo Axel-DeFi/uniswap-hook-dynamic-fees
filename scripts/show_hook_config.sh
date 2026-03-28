@@ -107,7 +107,7 @@ fmt_seconds() {
   }'
 }
 
-fmt_regime() {
+fmt_mode() {
   case "$1" in
     0) echo "FLOOR" ;;
     1) echo "CASH" ;;
@@ -172,7 +172,7 @@ emaPeriods="$(read_uint "emaPeriods()(uint8)")"
 lullResetSeconds="$(read_uint "lullResetSeconds()(uint32)")"
 minCountedSwapUsd6="$(read_uint "minCountedSwapUsd6()(uint64)")"
 
-currentRegime="$(read_uint "currentRegime()(uint8)")"
+currentMode="$(read_uint "currentMode()(uint8)")"
 
 STATE_DEBUG=()
 while IFS= read -r line; do
@@ -231,8 +231,8 @@ print_param "minCountedSwapUsd6"          "$minCountedSwapUsd6"          "$(fmt_
 
 echo
 echo "=== Live state ==="
-print_param "currentRegime"               "$currentRegime"               "$(fmt_regime "$currentRegime")"
-print_param "state.feeIdx"                "$state_feeIdx"                "$(fmt_regime "$state_feeIdx")"
+print_param "currentMode"               "$currentMode"               "$(fmt_mode "$currentMode")"
+print_param "state.feeIdx"                "$state_feeIdx"                "$(fmt_mode "$state_feeIdx")"
 print_param "state.holdRemaining"         "$state_holdRemaining"
 print_param "state.upExtremeStreak"       "$state_upExtremeStreak"
 print_param "state.downStreak"            "$state_downStreak"

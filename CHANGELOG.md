@@ -48,9 +48,9 @@
 - Fixed controller misconfiguration trap: `0 < emergencyFloorCloseVolUsd6 < minCloseVolToCashUsd6` is now enforced onchain in shared validation path.
 - Updated paused `setTimingParams(...)` semantics:
   - time-scale updates (`periodSeconds` / `emaPeriods`) perform safe reset to FLOOR with EMA/counter reset and immediate LP-fee sync when tier changes;
-  - non-time-scale updates preserve regime + EMA + counters and only restart open period.
+  - non-time-scale updates preserve mode + EMA + counters and only restart open period.
 - Updated paused `setControllerParams(...)` semantics:
-  - preserve active regime + EMA,
+  - preserve active mode + EMA,
   - clear hold/streak counters,
   - restart fresh open period.
 - Added/updated tests for constructor/admin guards, timing reset split behavior, and stale-counter clearing after controller updates.
@@ -119,7 +119,7 @@
 ## 2026-02-14
 
 ### Updated fee model
-- Switched from `score = volumeUSD * fee` to a **volume-regime** model:
+- Switched from `score = volumeUSD * fee` to a **volume-mode** model:
   - Maintain `emaVolume` (EMA of period volume).
   - Adjust fee based on deviation of `volumeUSD` from `emaVolume`.
 - Enforced **max one step per period** (`maxStep = 1`).
@@ -134,7 +134,7 @@
 
 ### Inactivity handling
 - Added `lullResetSeconds` (immutable). On the first swap after a long lull, the hook resets
-  `feeIdx` to floor regime and clears `emaVolume` to re-learn quickly.
+  `feeIdx` to floor mode and clears `emaVolume` to re-learn quickly.
 
 ## 2026-02-15
 

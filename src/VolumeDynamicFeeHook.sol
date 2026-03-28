@@ -57,9 +57,9 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
     uint8 private constant MAX_DOWN_STREAK = 7;
     uint8 private constant MAX_EMERGENCY_STREAK = 3;
 
-    uint8 public constant REGIME_FLOOR = 0;
-    uint8 public constant REGIME_CASH = 1;
-    uint8 public constant REGIME_EXTREME = 2;
+    uint8 public constant MODE_FLOOR = 0;
+    uint8 public constant MODE_CASH = 1;
+    uint8 public constant MODE_EXTREME = 2;
 
     // Period-close reason codes.
     uint8 public constant REASON_NO_SWAPS = 7;
@@ -241,8 +241,8 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
     /// @notice Emitted when pending owner accepts ownership.
     event OwnerTransferAccepted(address indexed previousOwner, address indexed newOwner);
 
-    /// @notice Emitted when explicit regime fees are updated.
-    event RegimeFeesUpdated(uint24 floorFee, uint24 cashFee, uint24 extremeFee);
+    /// @notice Emitted when explicit mode fees are updated.
+    event ModeFeesUpdated(uint24 floorFee, uint24 cashFee, uint24 extremeFee);
 
     /// @notice Emitted when core controller thresholds/confirm params are updated.
     event ControllerParamsUpdated(
@@ -282,10 +282,10 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
     /// @notice Emitted when min counted swap threshold is applied.
     event MinCountedSwapUsd6Changed(uint64 oldMinCountedSwapUsd6, uint64 newMinCountedSwapUsd6);
 
-    /// @notice Emitted when paused emergency reset sets controller to floor regime.
+    /// @notice Emitted when paused emergency reset sets controller to floor mode.
     event EmergencyResetToFloorApplied(uint8 feeIdx, uint64 periodStart, uint96 emaVolumeUsd6Scaled);
 
-    /// @notice Emitted when paused emergency reset sets controller to cash regime.
+    /// @notice Emitted when paused emergency reset sets controller to cash mode.
     event EmergencyResetToCashApplied(uint8 feeIdx, uint64 periodStart, uint96 emaVolumeUsd6Scaled);
 
     /// @notice Emitted when non-pool assets or ETH are rescued.
@@ -460,7 +460,7 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
         _setTimingParamsInternal(_periodSeconds, _emaPeriods, _lullResetSeconds);
         _setOwnerInternal(ownerAddr);
         _setHookFeePercentInternal(hookFeePercent_);
-        _setRegimeFeesInternal(_floorFee, _cashFee, _extremeFee);
+        _setModeFeesInternal(_floorFee, _cashFee, _extremeFee);
 
         ControllerParams memory p = ControllerParams({
             minCloseVolToCashUsd6: _minCloseVolToCashUsd6,
@@ -483,7 +483,7 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
 
         emit OwnerUpdated(address(0), ownerAddr);
         emit HookFeePercentChanged(0, hookFeePercent_);
-        emit RegimeFeesUpdated(_floorFee, _cashFee, _extremeFee);
+        emit ModeFeesUpdated(_floorFee, _cashFee, _extremeFee);
         emit ControllerParamsUpdated(
             p.minCloseVolToCashUsd6,
             p.cashEnterTriggerBps,
@@ -544,12 +544,12 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
         if (periodStart != 0) revert AlreadyInitialized();
 
         uint64 nowTs = _now64();
-        uint8 feeIdx = REGIME_FLOOR;
+        uint8 feeIdx = MODE_FLOOR;
 
         _state = _packState(0, 0, nowTs, feeIdx, isPaused(), 0, 0, 0, 0);
 
-        poolManager.updateDynamicLPFee(key, _regimeFee(feeIdx));
-        emit FeeUpdated(_regimeFee(feeIdx), feeIdx, 0, 0);
+        poolManager.updateDynamicLPFee(key, _modeFee(feeIdx));
+        emit FeeUpdated(_modeFee(feeIdx), feeIdx, 0, 0);
 
         return IHooks.afterInitialize.selector;
     }
@@ -577,7 +577,7 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
 
         if (periodStart == 0) revert NotInitialized();
 
-        uint24 appliedFeeBips = _regimeFee(feeIdx);
+        uint24 appliedFeeBips = _modeFee(feeIdx);
         int128 hookFeeDelta;
 
         if (paused_) {
@@ -600,7 +600,7 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
             );
 
             emaVolScaled = 0;
-            feeIdx = REGIME_FLOOR;
+            feeIdx = MODE_FLOOR;
             periodStart = nowTs;
             holdRemaining = 0;
             upExtremeStreak = 0;
@@ -622,8 +622,8 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
                 emergencyStreak
             );
 
-            uint24 oldFee = _regimeFee(oldFeeIdx);
-            uint24 newFee = _regimeFee(feeIdx);
+            uint24 oldFee = _modeFee(oldFeeIdx);
+            uint24 newFee = _modeFee(feeIdx);
             if (feeIdx != oldFeeIdx) {
                 poolManager.updateDynamicLPFee(key, newFee);
                 emit FeeUpdated(newFee, feeIdx, 0, 0);
@@ -677,15 +677,15 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
                 bool bootstrapV2 = emaBefore == 0 && closeVol > 0;
 
                 uint8 fromFeeIdx = f;
-                uint24 fromFee = _regimeFee(fromFeeIdx);
+                uint24 fromFee = _modeFee(fromFeeIdx);
                 ControllerTransitionResult memory transition =
-                    _computeNextRegimeV2(f, closeVol, ema, bootstrapV2, hold, upStreak, down, emergency);
+                    _computeNextModeV2(f, closeVol, ema, bootstrapV2, hold, upStreak, down, emergency);
                 f = transition.feeIdx;
                 hold = transition.holdRemaining;
                 upStreak = transition.upExtremeStreak;
                 down = transition.downStreak;
                 emergency = transition.emergencyStreak;
-                uint24 toFee = _regimeFee(f);
+                uint24 toFee = _modeFee(f);
                 uint64 approxLpFeesUsd6 = _estimateApproxLpFeesUsd6(closeVol, fromFee);
 
                 emit PeriodClosed(
@@ -741,7 +741,7 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
         );
 
         if (feeChanged) {
-            uint24 activeFee = _regimeFee(feeIdx);
+            uint24 activeFee = _modeFee(feeIdx);
             poolManager.updateDynamicLPFee(key, activeFee);
             emit FeeUpdated(activeFee, feeIdx, closeVolForEvent, emaVolScaled);
         }
@@ -763,14 +763,14 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
     function currentFeeBips() external view returns (uint24) {
         (,, uint64 periodStart, uint8 feeIdx,,,,,) = _unpackState(_state);
         if (periodStart == 0) revert NotInitialized();
-        return _regimeFee(feeIdx);
+        return _modeFee(feeIdx);
     }
 
     /// @notice Returns packed runtime fields used by offchain telemetry.
     /// @return periodVolumeUsd6 Counted stable-side period volume in USD6.
     /// @return emaVolumeUsd6Scaled Scaled EMA in USD6 * 1e6.
     /// @return periodStart Current period start timestamp.
-    /// @return feeIdx Active regime id (`0` floor, `1` cash, `2` extreme).
+    /// @return feeIdx Active mode id (`0` floor, `1` cash, `2` extreme).
     function unpackedState()
         external
         view
@@ -779,11 +779,11 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
         (periodVolumeUsd6, emaVolumeUsd6Scaled, periodStart, feeIdx,,,,,) = _unpackState(_state);
     }
 
-    /// @notice Returns currently active regime id (`0` floor, `1` cash, `2` extreme).
-    function currentRegime() public view returns (uint8 regime) {
+    /// @notice Returns currently active mode id (`0` floor, `1` cash, `2` extreme).
+    function currentMode() public view returns (uint8 mode) {
         (,, uint64 periodStart, uint8 feeIdx,,,,,) = _unpackState(_state);
         if (periodStart == 0) revert NotInitialized();
-        regime = feeIdx;
+        mode = feeIdx;
     }
 
     /// @notice Returns floor LP fee.
@@ -811,7 +811,7 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
         return _config.cashEnterTriggerBps;
     }
 
-    /// @notice Returns configured cash hold length `N` after entering cash regime.
+    /// @notice Returns configured cash hold length `N` after entering cash mode.
     /// @dev Effective fully protected hold periods are `N - 1` because hold is decremented at period-close start.
     function cashHoldPeriods() public view returns (uint8) {
         return _config.cashHoldPeriods;
@@ -832,7 +832,7 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
         return _config.upExtremeConfirmPeriods;
     }
 
-    /// @notice Returns hold periods after entering extreme regime.
+    /// @notice Returns hold periods after entering extreme mode.
     function extremeHoldPeriods() public view returns (uint8) {
         return _config.extremeHoldPeriods;
     }
@@ -937,8 +937,8 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
         });
     }
 
-    /// @notice Returns explicit regime fees.
-    function getRegimeFees() external view returns (uint24 floorFee_, uint24 cashFee_, uint24 extremeFee_) {
+    /// @notice Returns explicit mode fees.
+    function getModeFees() external view returns (uint24 floorFee_, uint24 cashFee_, uint24 extremeFee_) {
         floorFee_ = _config.floorFee;
         cashFee_ = _config.cashFee;
         extremeFee_ = _config.extremeFee;
@@ -946,7 +946,7 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
 
     /// @notice Returns detailed packed state counters for debugging and monitoring.
     /// @dev `downStreak` is context-dependent and must be interpreted together with current `feeIdx`:
-    /// when `feeIdx==REGIME_CASH` it tracks cash->floor confirmations, and when `feeIdx==REGIME_EXTREME` it tracks
+    /// when `feeIdx==MODE_CASH` it tracks cash->floor confirmations, and when `feeIdx==MODE_EXTREME` it tracks
     /// extreme->cash confirmations.
     function getStateDebug()
         external
@@ -1083,26 +1083,26 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
         emit MinCountedSwapUsd6ChangeCancelled(cancelled);
     }
 
-    /// @notice Updates explicit regime fees while paused.
+    /// @notice Updates explicit mode fees while paused.
     /// @dev Preserves EMA, always clears hold/streak counters, and starts a fresh open period.
-    /// @dev Active regime id is preserved; if the active regime fee changes, LP fee is updated immediately.
-    function setRegimeFees(uint24 floorFee_, uint24 cashFee_, uint24 extremeFee_)
+    /// @dev Active mode id is preserved; if the active mode fee changes, LP fee is updated immediately.
+    function setModeFees(uint24 floorFee_, uint24 cashFee_, uint24 extremeFee_)
         external
         onlyOwner
         whenPaused
     {
         (, uint96 emaVolScaled, uint64 periodStart, uint8 feeIdx, bool paused_,,,,) = _unpackState(_state);
-        uint24 oldActiveFee = _regimeFee(feeIdx);
+        uint24 oldActiveFee = _modeFee(feeIdx);
 
-        _setRegimeFeesInternal(floorFee_, cashFee_, extremeFee_);
-        emit RegimeFeesUpdated(floorFee_, cashFee_, extremeFee_);
+        _setModeFeesInternal(floorFee_, cashFee_, extremeFee_);
+        emit ModeFeesUpdated(floorFee_, cashFee_, extremeFee_);
 
         if (periodStart == 0) return;
 
         uint64 nextPeriodStart = _now64();
         _state = _packState(0, emaVolScaled, nextPeriodStart, feeIdx, paused_, 0, 0, 0, 0);
 
-        uint24 newActiveFee = _regimeFee(feeIdx);
+        uint24 newActiveFee = _modeFee(feeIdx);
         if (newActiveFee != oldActiveFee) {
             poolManager.updateDynamicLPFee(_poolKey(), newActiveFee);
             emit FeeUpdated(newActiveFee, feeIdx, 0, emaVolScaled);
@@ -1112,7 +1112,7 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
     /// @notice Updates controller transition parameters while paused.
     /// @dev Hold counters are decremented at the start of each closed period, so configured hold `N` yields `N - 1`
     /// fully protected periods (`N = 1` means zero extra hold protection).
-    /// @dev Preserves active regime id and EMA, clears hold/streak counters, and starts a fresh open period.
+    /// @dev Preserves active mode id and EMA, clears hold/streak counters, and starts a fresh open period.
     function setControllerParams(ControllerParams calldata p) external onlyOwner whenPaused {
         (, uint96 emaVolScaled, uint64 periodStart, uint8 feeIdx, bool paused_,,,,) = _unpackState(_state);
 
@@ -1141,8 +1141,8 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
     /// @notice Updates timing and smoothing parameters while paused.
     /// @dev Requires `lullResetSeconds_ > periodSeconds_`; equality is rejected.
     /// @dev Time-scale updates (`periodSeconds` or `emaPeriods`) perform a safe reset:
-    /// floor regime, zero EMA/counters, fresh open period, and immediate LP fee sync when active tier changes.
-    /// @dev Non-time-scale updates (only `lullResetSeconds`) preserve regime and EMA/counters,
+    /// floor mode, zero EMA/counters, fresh open period, and immediate LP fee sync when active tier changes.
+    /// @dev Non-time-scale updates (only `lullResetSeconds`) preserve mode and EMA/counters,
     /// and only restart a fresh open period.
     function setTimingParams(uint32 periodSeconds_, uint8 emaPeriods_, uint32 lullResetSeconds_)
         external
@@ -1162,7 +1162,7 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
         ) = _unpackState(_state);
 
         bool timeScaleChanged = periodSeconds_ != _config.periodSeconds || emaPeriods_ != _config.emaPeriods;
-        uint24 oldActiveFee = _regimeFee(feeIdx);
+        uint24 oldActiveFee = _modeFee(feeIdx);
 
         _setTimingParamsInternal(periodSeconds_, emaPeriods_, lullResetSeconds_);
         emit TimingParamsUpdated(periodSeconds_, emaPeriods_, lullResetSeconds_);
@@ -1170,7 +1170,7 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
         if (periodStart == 0) return;
 
         if (timeScaleChanged) {
-            feeIdx = REGIME_FLOOR;
+            feeIdx = MODE_FLOOR;
             emaVolScaled = 0;
             holdRemaining = 0;
             upExtremeStreak = 0;
@@ -1191,7 +1191,7 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
         );
 
         if (timeScaleChanged) {
-            uint24 newActiveFee = _regimeFee(feeIdx);
+            uint24 newActiveFee = _modeFee(feeIdx);
             if (newActiveFee != oldActiveFee) {
                 poolManager.updateDynamicLPFee(_poolKey(), newActiveFee);
                 emit FeeUpdated(newActiveFee, feeIdx, 0, emaVolScaled);
@@ -1230,11 +1230,11 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
             emergencyStreak
         );
 
-        emit Paused(_regimeFee(feeIdx), feeIdx);
+        emit Paused(_modeFee(feeIdx), feeIdx);
     }
 
     /// @notice Exits paused freeze mode.
-    /// @dev Continues from the same fee regime and counters, with a fresh open period.
+    /// @dev Continues from the same fee mode and counters, with a fresh open period.
     /// @dev LP fee tier stays at the frozen value until normal transitions run after unpause.
     /// @dev Resuming does not retroactively accrue HookFee for swaps that executed while paused.
     function unpause() external onlyOwner {
@@ -1264,21 +1264,21 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
             emergencyStreak
         );
 
-        emit Unpaused(_regimeFee(feeIdx), feeIdx);
+        emit Unpaused(_modeFee(feeIdx), feeIdx);
     }
 
-    /// @notice Emergency reset while paused to floor regime.
+    /// @notice Emergency reset while paused to floor mode.
     /// @dev Clears EMA/counters (`emaVolumeUsd6Scaled`, hold/streak counters) and restarts open period state.
     /// @dev If the target fee index already matches current index, fee state still resets but no `FeeUpdated` is emitted.
     function emergencyResetToFloor() external onlyOwner whenPaused {
-        _emergencyReset(REGIME_FLOOR, true);
+        _emergencyReset(MODE_FLOOR, true);
     }
 
-    /// @notice Emergency reset while paused to cash regime.
+    /// @notice Emergency reset while paused to cash mode.
     /// @dev Clears EMA/counters (`emaVolumeUsd6Scaled`, hold/streak counters) and restarts open period state.
     /// @dev If the target fee index already matches current index, fee state still resets but no `FeeUpdated` is emitted.
     function emergencyResetToCash() external onlyOwner whenPaused {
-        _emergencyReset(REGIME_CASH, false);
+        _emergencyReset(MODE_CASH, false);
     }
 
     /// @notice Claims selected amounts of accrued HookFees.
@@ -1413,7 +1413,7 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
         _config.emergencyConfirmPeriods = p.emergencyConfirmPeriods;
     }
 
-    function _setRegimeFeesInternal(uint24 floorFee_, uint24 cashFee_, uint24 extremeFee_) internal {
+    function _setModeFeesInternal(uint24 floorFee_, uint24 cashFee_, uint24 extremeFee_) internal {
         if (
             floorFee_ == 0 || floorFee_ >= cashFee_ || cashFee_ >= extremeFee_
                 || extremeFee_ > LPFeeLibrary.MAX_LP_FEE
@@ -1434,7 +1434,7 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
         _state = _packState(0, 0, nowTs, targetFeeIdx, paused_, 0, 0, 0, 0);
 
         if (oldFeeIdx != targetFeeIdx) {
-            uint24 targetFee = _regimeFee(targetFeeIdx);
+            uint24 targetFee = _modeFee(targetFeeIdx);
             poolManager.updateDynamicLPFee(_poolKey(), targetFee);
             emit FeeUpdated(targetFee, targetFeeIdx, 0, 0);
         }
@@ -1530,10 +1530,10 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
         return uint64(block.timestamp);
     }
 
-    function _regimeFee(uint8 idx) internal view returns (uint24) {
-        if (idx == REGIME_FLOOR) return _config.floorFee;
-        if (idx == REGIME_CASH) return _config.cashFee;
-        if (idx == REGIME_EXTREME) return _config.extremeFee;
+    function _modeFee(uint8 idx) internal view returns (uint24) {
+        if (idx == MODE_FLOOR) return _config.floorFee;
+        if (idx == MODE_CASH) return _config.cashFee;
+        if (idx == MODE_EXTREME) return _config.extremeFee;
         revert InvalidConfig();
     }
 
@@ -1653,12 +1653,12 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
         return current < maxValue ? current + 1 : maxValue;
     }
 
-    /// @notice Computes the next LP-fee regime and transition counters for a closed period.
+    /// @notice Computes the next LP-fee mode and transition counters for a closed period.
     /// @dev Hold is decremented at period-close start, so configured hold `N` yields `N - 1` fully protected periods.
     /// @dev The automatic emergency floor trigger is evaluated before hold protection and can reset to `FLOOR`
     /// @dev even when `holdRemaining > 0` once `emergencyConfirmPeriods` consecutive closes stay below
     /// @dev `emergencyFloorCloseVolUsd6`.
-    function _computeNextRegimeV2(
+    function _computeNextModeV2(
         uint8 feeIdx,
         uint64 closeVol,
         uint96 emaVolScaled,
@@ -1693,8 +1693,8 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
         } else {
             result.emergencyStreak = 0;
         }
-        if (result.emergencyStreak >= _config.emergencyConfirmPeriods && result.feeIdx != REGIME_FLOOR) {
-            result.feeIdx = REGIME_FLOOR;
+        if (result.emergencyStreak >= _config.emergencyConfirmPeriods && result.feeIdx != MODE_FLOOR) {
+            result.feeIdx = MODE_FLOOR;
             result.holdRemaining = 0;
             result.upExtremeStreak = 0;
             result.downStreak = 0;
@@ -1707,7 +1707,7 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
         uint256 rBps =
             emaVolScaled == 0 ? 0 : (uint256(closeVol) * EMA_SCALE * BPS_SCALE) / uint256(emaVolScaled);
 
-        if (result.feeIdx == REGIME_FLOOR) {
+        if (result.feeIdx == MODE_FLOOR) {
             uint256 cashThreshold = uint256(_config.cashEnterTriggerBps);
             bool cashEnterTriggered = rBps >= cashThreshold;
             if (cashEnterTriggered) {
@@ -1715,8 +1715,8 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
             }
             bool canJumpCash =
                 !bootstrapV2 && emaVolScaled != 0 && closeVol >= _config.minCloseVolToCashUsd6 && cashEnterTriggered;
-            if (canJumpCash && result.feeIdx != REGIME_CASH) {
-                result.feeIdx = REGIME_CASH;
+            if (canJumpCash && result.feeIdx != MODE_CASH) {
+                result.feeIdx = MODE_CASH;
                 result.holdRemaining = _config.cashHoldPeriods;
                 result.upExtremeStreak = 0;
                 result.downStreak = 0;
@@ -1726,7 +1726,7 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
             }
         }
 
-        if (result.feeIdx == REGIME_CASH) {
+        if (result.feeIdx == MODE_CASH) {
             uint256 extremeThreshold = uint256(_config.extremeEnterTriggerBps);
             bool extremeEnterTriggered = closeVol >= _config.minCloseVolToExtremeUsd6 && rBps >= extremeThreshold;
             if (extremeEnterTriggered) {
@@ -1739,9 +1739,9 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
             }
             if (
                 !bootstrapV2 && result.upExtremeStreak >= _config.upExtremeConfirmPeriods
-                    && result.feeIdx != REGIME_EXTREME
+                    && result.feeIdx != MODE_EXTREME
             ) {
-                result.feeIdx = REGIME_EXTREME;
+                result.feeIdx = MODE_EXTREME;
                 result.holdRemaining = _config.extremeHoldPeriods;
                 result.upExtremeStreak = 0;
                 result.downStreak = 0;
@@ -1753,11 +1753,11 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
             result.upExtremeStreak = 0;
         }
 
-        if (result.feeIdx == REGIME_EXTREME) {
+        if (result.feeIdx == MODE_EXTREME) {
             if (rBps <= uint256(_config.extremeExitTriggerBps)) {
                 result.decisionFlags |= TRACE_FLAG_EXTREME_EXIT_TRIGGER;
             }
-        } else if (result.feeIdx == REGIME_CASH) {
+        } else if (result.feeIdx == MODE_CASH) {
             if (rBps <= uint256(_config.cashExitTriggerBps)) {
                 result.decisionFlags |= TRACE_FLAG_CASH_EXIT_TRIGGER;
             }
@@ -1769,7 +1769,7 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
             return result;
         }
 
-        if (result.feeIdx == REGIME_EXTREME) {
+        if (result.feeIdx == MODE_EXTREME) {
             bool downExtremePass = rBps <= uint256(_config.extremeExitTriggerBps);
             if (downExtremePass) {
                 result.downStreak = _incrementStreak(result.downStreak, MAX_DOWN_STREAK);
@@ -1778,13 +1778,13 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
             }
             if (result.downStreak >= _config.downExtremeConfirmPeriods) {
                 result.downStreak = 0;
-                if (result.feeIdx != REGIME_CASH) {
-                    result.feeIdx = REGIME_CASH;
+                if (result.feeIdx != MODE_CASH) {
+                    result.feeIdx = MODE_CASH;
                     result.reasonCode = REASON_DOWN_TO_CASH;
                     return result;
                 }
             }
-        } else if (result.feeIdx == REGIME_CASH) {
+        } else if (result.feeIdx == MODE_CASH) {
             bool downCashPass = rBps <= uint256(_config.cashExitTriggerBps);
             if (downCashPass) {
                 result.downStreak = _incrementStreak(result.downStreak, MAX_DOWN_STREAK);
@@ -1793,8 +1793,8 @@ contract VolumeDynamicFeeHook is BaseHook, IUnlockCallback {
             }
             if (result.downStreak >= _config.downCashConfirmPeriods) {
                 result.downStreak = 0;
-                if (result.feeIdx != REGIME_FLOOR) {
-                    result.feeIdx = REGIME_FLOOR;
+                if (result.feeIdx != MODE_FLOOR) {
+                    result.feeIdx = MODE_FLOOR;
                     result.reasonCode = REASON_DOWN_TO_FLOOR;
                     return result;
                 }
