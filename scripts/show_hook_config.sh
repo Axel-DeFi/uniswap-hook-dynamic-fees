@@ -149,28 +149,28 @@ floorFee="$(read_uint "floorFee()(uint24)")"
 cashFee="$(read_uint "cashFee()(uint24)")"
 extremeFee="$(read_uint "extremeFee()(uint24)")"
 
-minCloseVolToCashUsd6="$(read_uint "minCloseVolToCashUsd6()(uint64)")"
-cashEnterTriggerBps="$(read_uint "cashEnterTriggerBps()(uint16)")"
+floorToCashMinCloseVolume="$(read_uint "floorToCashMinCloseVolume()(uint64)")"
+floorToCashMinFlowBps="$(read_uint "floorToCashMinFlowBps()(uint16)")"
 cashHoldPeriods="$(read_uint "cashHoldPeriods()(uint8)")"
 
-minCloseVolToExtremeUsd6="$(read_uint "minCloseVolToExtremeUsd6()(uint64)")"
-extremeEnterTriggerBps="$(read_uint "extremeEnterTriggerBps()(uint16)")"
-upExtremeConfirmPeriods="$(read_uint "upExtremeConfirmPeriods()(uint8)")"
+cashToExtremeMinCloseVolume="$(read_uint "cashToExtremeMinCloseVolume()(uint64)")"
+cashToExtremeMinFlowBps="$(read_uint "cashToExtremeMinFlowBps()(uint16)")"
+cashToExtremeConfirmPeriods="$(read_uint "cashToExtremeConfirmPeriods()(uint8)")"
 extremeHoldPeriods="$(read_uint "extremeHoldPeriods()(uint8)")"
 
-extremeExitTriggerBps="$(read_uint "extremeExitTriggerBps()(uint16)")"
-downExtremeConfirmPeriods="$(read_uint "downExtremeConfirmPeriods()(uint8)")"
+extremeToCashMaxFlowBps="$(read_uint "extremeToCashMaxFlowBps()(uint16)")"
+extremeToCashConfirmPeriods="$(read_uint "extremeToCashConfirmPeriods()(uint8)")"
 
-cashExitTriggerBps="$(read_uint "cashExitTriggerBps()(uint16)")"
-downCashConfirmPeriods="$(read_uint "downCashConfirmPeriods()(uint8)")"
+cashToFloorMaxFlowBps="$(read_uint "cashToFloorMaxFlowBps()(uint16)")"
+cashToFloorConfirmPeriods="$(read_uint "cashToFloorConfirmPeriods()(uint8)")"
 
-emergencyFloorCloseVolUsd6="$(read_uint "emergencyFloorCloseVolUsd6()(uint64)")"
-emergencyConfirmPeriods="$(read_uint "emergencyConfirmPeriods()(uint8)")"
+emergencyToFloorMaxCloseVolume="$(read_uint "emergencyToFloorMaxCloseVolume()(uint64)")"
+emergencyToFloorConfirmPeriods="$(read_uint "emergencyToFloorConfirmPeriods()(uint8)")"
 
 periodSeconds="$(read_uint "periodSeconds()(uint32)")"
 emaPeriods="$(read_uint "emaPeriods()(uint8)")"
 lullResetSeconds="$(read_uint "lullResetSeconds()(uint32)")"
-minCountedSwapUsd6="$(read_uint "minCountedSwapUsd6()(uint64)")"
+minCountedSwapVolume="$(read_uint "minCountedSwapVolume()(uint64)")"
 
 currentMode="$(read_uint "currentMode()(uint8)")"
 
@@ -196,38 +196,38 @@ print_param "extremeFee"                  "$extremeFee"                  "$(fmt_
 
 echo
 echo "=== Cash enter ==="
-print_param "minCloseVolToCashUsd6"       "$minCloseVolToCashUsd6"       "$(fmt_usd6 "$minCloseVolToCashUsd6")"
-print_param "cashEnterTriggerBps"         "$cashEnterTriggerBps"         "$(fmt_ratio_bps "$cashEnterTriggerBps")"
+print_param "floorToCashMinCloseVolume"   "$floorToCashMinCloseVolume"   "$(fmt_usd6 "$floorToCashMinCloseVolume")"
+print_param "floorToCashMinFlowBps"       "$floorToCashMinFlowBps"       "$(fmt_ratio_bps "$floorToCashMinFlowBps")"
 print_param "cashHoldPeriods"             "$cashHoldPeriods"
 
 echo
 echo "=== Extreme enter ==="
-print_param "minCloseVolToExtremeUsd6"    "$minCloseVolToExtremeUsd6"    "$(fmt_usd6 "$minCloseVolToExtremeUsd6")"
-print_param "extremeEnterTriggerBps"      "$extremeEnterTriggerBps"      "$(fmt_ratio_bps "$extremeEnterTriggerBps")"
-print_param "upExtremeConfirmPeriods"     "$upExtremeConfirmPeriods"
+print_param "cashToExtremeMinCloseVolume" "$cashToExtremeMinCloseVolume" "$(fmt_usd6 "$cashToExtremeMinCloseVolume")"
+print_param "cashToExtremeMinFlowBps"     "$cashToExtremeMinFlowBps"     "$(fmt_ratio_bps "$cashToExtremeMinFlowBps")"
+print_param "cashToExtremeConfirmPeriods" "$cashToExtremeConfirmPeriods"
 print_param "extremeHoldPeriods"          "$extremeHoldPeriods"
 
 echo
 echo "=== Extreme exit ==="
-print_param "extremeExitTriggerBps"       "$extremeExitTriggerBps"       "$(fmt_ratio_bps "$extremeExitTriggerBps")"
-print_param "downExtremeConfirmPeriods"   "$downExtremeConfirmPeriods"
+print_param "extremeToCashMaxFlowBps"     "$extremeToCashMaxFlowBps"     "$(fmt_ratio_bps "$extremeToCashMaxFlowBps")"
+print_param "extremeToCashConfirmPeriods" "$extremeToCashConfirmPeriods"
 
 echo
 echo "=== Cash exit ==="
-print_param "cashExitTriggerBps"          "$cashExitTriggerBps"          "$(fmt_ratio_bps "$cashExitTriggerBps")"
-print_param "downCashConfirmPeriods"      "$downCashConfirmPeriods"
+print_param "cashToFloorMaxFlowBps"       "$cashToFloorMaxFlowBps"       "$(fmt_ratio_bps "$cashToFloorMaxFlowBps")"
+print_param "cashToFloorConfirmPeriods"   "$cashToFloorConfirmPeriods"
 
 echo
 echo "=== Emergency / reset ==="
-print_param "emergencyFloorCloseVolUsd6"  "$emergencyFloorCloseVolUsd6"  "$(fmt_usd6 "$emergencyFloorCloseVolUsd6")"
-print_param "emergencyConfirmPeriods"     "$emergencyConfirmPeriods"
+print_param "emergencyToFloorMaxCloseVolume" "$emergencyToFloorMaxCloseVolume" "$(fmt_usd6 "$emergencyToFloorMaxCloseVolume")"
+print_param "emergencyToFloorConfirmPeriods" "$emergencyToFloorConfirmPeriods"
 print_param "lullResetSeconds"            "$lullResetSeconds"            "$(fmt_seconds "$lullResetSeconds")"
 
 echo
 echo "=== Timing / smoothing ==="
 print_param "periodSeconds"               "$periodSeconds"               "$(fmt_seconds "$periodSeconds")"
 print_param "emaPeriods"                  "$emaPeriods"
-print_param "minCountedSwapUsd6"          "$minCountedSwapUsd6"          "$(fmt_usd6 "$minCountedSwapUsd6")"
+print_param "minCountedSwapVolume"        "$minCountedSwapVolume"        "$(fmt_usd6 "$minCountedSwapVolume")"
 
 echo
 echo "=== Live state ==="
@@ -247,22 +247,22 @@ echo
 echo "=== setControllerParams JSON (current) ==="
 cat <<EOF2
 {
-  "minCloseVolToCashUsd6": $minCloseVolToCashUsd6,
-  "cashEnterTriggerBps": $cashEnterTriggerBps,
+  "floorToCashMinCloseVolume": $floorToCashMinCloseVolume,
+  "floorToCashMinFlowBps": $floorToCashMinFlowBps,
   "cashHoldPeriods": $cashHoldPeriods,
-  "minCloseVolToExtremeUsd6": $minCloseVolToExtremeUsd6,
-  "extremeEnterTriggerBps": $extremeEnterTriggerBps,
-  "upExtremeConfirmPeriods": $upExtremeConfirmPeriods,
+  "cashToExtremeMinCloseVolume": $cashToExtremeMinCloseVolume,
+  "cashToExtremeMinFlowBps": $cashToExtremeMinFlowBps,
+  "cashToExtremeConfirmPeriods": $cashToExtremeConfirmPeriods,
   "extremeHoldPeriods": $extremeHoldPeriods,
-  "extremeExitTriggerBps": $extremeExitTriggerBps,
-  "downExtremeConfirmPeriods": $downExtremeConfirmPeriods,
-  "cashExitTriggerBps": $cashExitTriggerBps,
-  "downCashConfirmPeriods": $downCashConfirmPeriods,
-  "emergencyFloorCloseVolUsd6": $emergencyFloorCloseVolUsd6,
-  "emergencyConfirmPeriods": $emergencyConfirmPeriods
+  "extremeToCashMaxFlowBps": $extremeToCashMaxFlowBps,
+  "extremeToCashConfirmPeriods": $extremeToCashConfirmPeriods,
+  "cashToFloorMaxFlowBps": $cashToFloorMaxFlowBps,
+  "cashToFloorConfirmPeriods": $cashToFloorConfirmPeriods,
+  "emergencyToFloorMaxCloseVolume": $emergencyToFloorMaxCloseVolume,
+  "emergencyToFloorConfirmPeriods": $emergencyToFloorConfirmPeriods
 }
 EOF2
 
 echo
 echo "=== setControllerParams tuple (current) ==="
-echo "($minCloseVolToCashUsd6,$cashEnterTriggerBps,$cashHoldPeriods,$minCloseVolToExtremeUsd6,$extremeEnterTriggerBps,$upExtremeConfirmPeriods,$extremeHoldPeriods,$extremeExitTriggerBps,$downExtremeConfirmPeriods,$cashExitTriggerBps,$downCashConfirmPeriods,$emergencyFloorCloseVolUsd6,$emergencyConfirmPeriods)"
+echo "($floorToCashMinCloseVolume,$floorToCashMinFlowBps,$cashHoldPeriods,$cashToExtremeMinCloseVolume,$cashToExtremeMinFlowBps,$cashToExtremeConfirmPeriods,$extremeHoldPeriods,$extremeToCashMaxFlowBps,$extremeToCashConfirmPeriods,$cashToFloorMaxFlowBps,$cashToFloorConfirmPeriods,$emergencyToFloorMaxCloseVolume,$emergencyToFloorConfirmPeriods)"

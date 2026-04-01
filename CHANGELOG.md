@@ -45,7 +45,7 @@
 ## v2.0.5 - 2026-03-11
 
 ### Release summary
-- Fixed controller misconfiguration trap: `0 < emergencyFloorCloseVolUsd6 < minCloseVolToCashUsd6` is now enforced onchain in shared validation path.
+- Fixed controller misconfiguration trap: `0 < emergencyToFloorMaxCloseVolume < floorToCashMinCloseVolume` is now enforced onchain in shared validation path.
 - Updated paused `setTimingParams(...)` semantics:
   - time-scale updates (`periodSeconds` / `emaPeriods`) perform safe reset to FLOOR with EMA/counter reset and immediate LP-fee sync when tier changes;
   - non-time-scale updates preserve mode + EMA + counters and only restart open period.

@@ -109,7 +109,7 @@ Timelock visibility is intentional. The main exposed effect is HookFee timing; L
 
 ## Telemetry controls
 
-- `minCountedSwapUsd6` filters dust from telemetry only.
+- `minCountedSwapVolume` filters dust from telemetry only.
 - Swap execution and fee charging are unchanged for filtered trades.
 - Scheduled threshold changes activate only at next period boundary.
 - Allowed threshold update range is `1e6..10e6` (default `$4 / 4e6`, selected from observed v1 telemetry).
@@ -129,11 +129,11 @@ Timelock visibility is intentional. The main exposed effect is HookFee timing; L
   current release and the frozen `ops/sepolia/config/deploy.env` constructor snapshot; current runtime/admin
   expectations come from `ops/sepolia/config/defaults.env` only when explicitly overridden, otherwise they inherit the
   frozen snapshot. Reuse also requires the exact minimal callback surface, exact PoolManager binding, current
-  `minCountedSwapUsd6`, and zero pending owner / pending config changes.
+  `minCountedSwapVolume`, and zero pending owner / pending config changes.
 
 Controller safety note:
-- `emergencyFloorCloseVolUsd6` must remain strictly greater than zero.
-- `emergencyFloorCloseVolUsd6` must remain strictly less than `minCloseVolToCashUsd6`.
+- `emergencyToFloorMaxCloseVolume` must remain strictly greater than zero.
+- `emergencyToFloorMaxCloseVolume` must remain strictly less than `floorToCashMinCloseVolume`.
 - Hold semantics are `N -> N - 1`; production guidance is `cashHoldPeriods >= 2`, `extremeHoldPeriods >= 2` (recommended `3..4`).
 - Non-local deploy/preflight paths block weak hold configs by default; explicit override: `ALLOW_WEAK_HOLD_PERIODS=1`.
 

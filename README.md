@@ -32,7 +32,7 @@ See `LICENSE` for full terms.
   the frozen constructor snapshot in `ops/<network>/config/deploy.env`; current runtime/admin expectations continue to
   come from `ops/<network>/config/defaults.env`. Reuse also requires the exact minimal callback surface
   (`afterInitialize`, `afterSwap`, `afterSwapReturnDelta` only), expected PoolManager binding, current
-  `minCountedSwapUsd6`, and zero pending owner / pending config changes.
+  `minCountedSwapVolume`, and zero pending owner / pending config changes.
 - The frozen deployment snapshot covers the full constructor identity, including `PoolManager`, pool currencies,
   `tickSpacing`, stable token/decimals, owner, fee tiers, and controller/timing params.
 - `deploy.env` snapshot entries are expected to be literal `DEPLOY_*` values; shell interpolation in frozen snapshot
@@ -57,15 +57,20 @@ See `LICENSE` for full terms.
   - `emergencyResetToCash()`
 - Timing guardrail: `lullResetSeconds` must be strictly greater than `periodSeconds`.
 - Hold semantics: configured `cashHoldPeriods = N` gives `N - 1` fully protected periods (`N = 1` means zero effective hold protection).
+- Hold blocks only the ordinary downward path; emergency counting continues during hold.
+- Earliest ordinary cash->floor descent under uninterrupted weakness is `cashHoldPeriods + cashToFloorConfirmPeriods - 1`.
+- Earliest ordinary extreme->cash descent under uninterrupted weakness is `extremeHoldPeriods + extremeToCashConfirmPeriods - 1`.
+- Earliest emergency descent is `emergencyToFloorConfirmPeriods`.
 - Automatic emergency floor evaluation has priority over hold protection and can reset to `FLOOR` even when `holdRemaining > 0`.
 - Controller parameter cross-checks are enforced:
-  - `minCloseVolToCashUsd6 <= minCloseVolToExtremeUsd6`
-  - `cashEnterTriggerBps <= extremeEnterTriggerBps`
-  - `cashExitTriggerBps >= extremeExitTriggerBps`
-  - `0 < emergencyFloorCloseVolUsd6 < minCloseVolToCashUsd6`
+  - `floorToCashMinCloseVolume <= cashToExtremeMinCloseVolume`
+  - `floorToCashMinFlowBps <= cashToExtremeMinFlowBps`
+  - `cashToFloorMaxFlowBps >= extremeToCashMaxFlowBps`
+  - `0 < emergencyToFloorMaxCloseVolume < floorToCashMinCloseVolume`
 - Pool key validation requires exact dynamic-fee flag: `key.fee == LPFeeLibrary.DYNAMIC_FEE_FLAG`.
 - Telemetry fields are explicit:
-  - counted volume threshold `minCountedSwapUsd6` (default `$4 / 4e6`, bounded to `1e6..10e6`)
+  - all controller `*Volume` fields are USD amounts in the internal 6-decimal scale; the unit is intentionally omitted from names
+  - counted volume threshold `minCountedSwapVolume` (default `$4 / 4e6`, bounded to `1e6..10e6`)
   - threshold update is pending-state only and activates from next period boundary (no timelock by design)
   - offchain threshold recalibration cadence target is 5 days
   - approximate LP fee metric `approxLpFeesUsd6`
@@ -88,7 +93,7 @@ See `LICENSE` for full terms.
 - Dust-splitting remains a residual architectural/model risk. The configurable dust filter mitigates it, and the default `$4 / 4e6` was selected from observed v1 telemetry. This is not a formal proof against all fragmentation patterns on cheap L2.
 - Wash-trading / mode-poisoning remains a residual economic manipulation risk (more realistic as competitor-funded distortion/DoS in adversarial routing environments).
 - HookFee percent timelock is intentionally transparent; observable pending changes mainly affect HookFee timing while LP fee ownership/accrual remains unchanged.
-- `scheduleMinCountedSwapUsd6Change(...)` has no timelock by design (pending + next-period activation only).
+- `scheduleMinCountedSwapVolumeChange(...)` has no timelock by design (pending + next-period activation only).
 - Overdue period catch-up can close multiple periods in one swap. Only the first closed period uses accumulated close volume, while subsequent closed periods use zero close volume; this can produce multi-step downward transitions in one transaction and is accepted as an architectural/economic trade-off in current scope.
 
 ## Ops baseline

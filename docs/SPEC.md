@@ -104,24 +104,30 @@ Events:
 - Hold counter is decremented at the start of each closed period, before hold protection checks.
 - Configured hold `N` therefore provides `N - 1` fully protected periods.
 - `cashHoldPeriods = 1` provides zero effective extra hold protection.
+- Hold blocks only the ordinary downward path; emergency counting continues during hold.
+- Earliest ordinary cash->floor descent under uninterrupted weakness is
+  `cashHoldPeriods + cashToFloorConfirmPeriods - 1`.
+- Earliest ordinary extreme->cash descent under uninterrupted weakness is
+  `extremeHoldPeriods + extremeToCashConfirmPeriods - 1`.
+- Earliest emergency descent under uninterrupted weakness is `emergencyToFloorConfirmPeriods`.
 - Automatic emergency floor evaluation has priority over hold protection.
-- If `closeVol < emergencyFloorCloseVolUsd6` for `emergencyConfirmPeriods` consecutive closes, the controller resets
+- If `closeVol < emergencyToFloorMaxCloseVolume` for `emergencyToFloorConfirmPeriods` consecutive closes, the controller resets
   to `FLOOR` even when `holdRemaining > 0`.
 - This behavior is intentional in the current design and is regression-tested.
 
 ## Controller parameter consistency
 
 Controller params are validated with cross-invariants:
-- `minCloseVolToCashUsd6 <= minCloseVolToExtremeUsd6`
-- `cashEnterTriggerBps <= extremeEnterTriggerBps`
-- `cashExitTriggerBps >= extremeExitTriggerBps`
-- `0 < emergencyFloorCloseVolUsd6 < minCloseVolToCashUsd6`
+- `floorToCashMinCloseVolume <= cashToExtremeMinCloseVolume`
+- `floorToCashMinFlowBps <= cashToExtremeMinFlowBps`
+- `cashToFloorMaxFlowBps >= extremeToCashMaxFlowBps`
+- `0 < emergencyToFloorMaxCloseVolume < floorToCashMinCloseVolume`
 
 Current validated ranges:
 - `emaPeriods`: `2..128`
 - `cashHoldPeriods`, `extremeHoldPeriods`: `1..15`
-- `upExtremeConfirmPeriods`: `1..7`
-- `downExtremeConfirmPeriods`, `downCashConfirmPeriods`, `emergencyConfirmPeriods`: `1..15`
+- `cashToExtremeConfirmPeriods`: `1..7`
+- `extremeToCashConfirmPeriods`, `cashToFloorConfirmPeriods`, `emergencyToFloorConfirmPeriods`: `1..15`
 
 Invalid combinations revert with `InvalidConfig`.
 
@@ -169,7 +175,9 @@ Monitoring must consume `EmergencyResetToFloorApplied` / `EmergencyResetToCashAp
 
 ## Volume telemetry and dust filtering
 
-- `minCountedSwapUsd6` default is `$4 / 4e6`.
+- All controller `*Volume` fields are USD amounts in the internal 6-decimal scale; this unit is intentionally omitted
+  from parameter names.
+- `minCountedSwapVolume` default is `$4 / 4e6`.
 - Allowed update range is `[1e6, 10e6]`.
 - If swap stable-side notional is below threshold:
   - swap still executes,
@@ -177,8 +185,8 @@ Monitoring must consume `EmergencyResetToFloorApplied` / `EmergencyResetToCashAp
   - swap is excluded from period volume telemetry.
 
 Threshold updates are staged:
-- `scheduleMinCountedSwapUsd6Change(uint64)`
-- `cancelMinCountedSwapUsd6Change()`
+- `scheduleMinCountedSwapVolumeChange(uint64)`
+- `cancelMinCountedSwapVolumeChange()`
 
 Scheduled threshold is activated only at next period boundary (never mid-period).
 There is no timelock for this update path by project decision.
@@ -354,7 +362,7 @@ Monitoring interpretation note:
   current release and the frozen `ops/<network>/config/deploy.env` constructor snapshot, while current runtime/admin
   expectations come from `ops/<network>/config/defaults.env`. Reuse also requires the exact minimal callback surface
   (`afterInitialize`, `afterSwap`, `afterSwapReturnDelta` only) plus exact PoolManager binding: owner, no pending
-  owner transfer, stable decimals mode, current `minCountedSwapUsd6`, mode fees, HookFee percent, timing params,
+  owner transfer, stable decimals mode, current `minCountedSwapVolume`, mode fees, HookFee percent, timing params,
   controller params, and no pending HookFee / min-counted-swap changes.
 - monitor `PeriodClosed` and alert on repeated abnormal mode escalations.
 - consume `ControllerTransitionTrace` together with `PeriodClosed` when debugging controller decisions, especially

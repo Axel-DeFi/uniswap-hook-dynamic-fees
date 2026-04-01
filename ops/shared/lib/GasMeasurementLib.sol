@@ -136,13 +136,13 @@ library GasMeasurementLib {
         uint96 emaBeforeScaled,
         uint8 emaPeriods,
         uint16 passThresholdBps,
-        uint64 minCountedSwapUsd6,
-        uint64 emergencyFloorCloseVolUsd6
+        uint64 minCountedSwapVolume,
+        uint64 emergencyToFloorMaxCloseVolume
     ) internal pure returns (uint64 closeVolUsd6) {
-        uint64 floorRequired = minCountedSwapUsd6;
-        if (emergencyFloorCloseVolUsd6 >= floorRequired) {
+        uint64 floorRequired = minCountedSwapVolume;
+        if (emergencyToFloorMaxCloseVolume >= floorRequired) {
             unchecked {
-                floorRequired = emergencyFloorCloseVolUsd6 + 1;
+                floorRequired = emergencyToFloorMaxCloseVolume + 1;
             }
         }
 

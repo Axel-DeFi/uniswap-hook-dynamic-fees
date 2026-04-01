@@ -34,19 +34,19 @@ library HookIdentityLib {
             cfg.lullResetSeconds,
             cfg.owner,
             cfg.hookFeePercent,
-            cfg.minCloseVolToCashUsd6,
-            cfg.cashEnterTriggerBps,
+            cfg.floorToCashMinCloseVolume,
+            cfg.floorToCashMinFlowBps,
             cfg.cashHoldPeriods,
-            cfg.minCloseVolToExtremeUsd6,
-            cfg.extremeEnterTriggerBps,
-            cfg.upExtremeConfirmPeriods,
+            cfg.cashToExtremeMinCloseVolume,
+            cfg.cashToExtremeMinFlowBps,
+            cfg.cashToExtremeConfirmPeriods,
             cfg.extremeHoldPeriods,
-            cfg.extremeExitTriggerBps,
-            cfg.downExtremeConfirmPeriods,
-            cfg.cashExitTriggerBps,
-            cfg.downCashConfirmPeriods,
-            cfg.emergencyFloorCloseVolUsd6,
-            cfg.emergencyConfirmPeriods
+            cfg.extremeToCashMaxFlowBps,
+            cfg.extremeToCashConfirmPeriods,
+            cfg.cashToFloorMaxFlowBps,
+            cfg.cashToFloorConfirmPeriods,
+            cfg.emergencyToFloorMaxCloseVolume,
+            cfg.emergencyToFloorConfirmPeriods
         );
     }
 

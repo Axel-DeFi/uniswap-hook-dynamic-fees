@@ -34,19 +34,19 @@ contract VolumeDynamicFeeHookGasLocalHarness is VolumeDynamicFeeHook {
         uint32 _lullResetSeconds,
         address ownerAddr,
         uint16 hookFeePercent,
-        uint64 _minCloseVolToCashUsd6,
-        uint16 _cashEnterTriggerBps,
+        uint64 _floorToCashMinCloseVolume,
+        uint16 _floorToCashMinFlowBps,
         uint8 _cashHoldPeriods,
-        uint64 _minCloseVolToExtremeUsd6,
-        uint16 _extremeEnterTriggerBps,
-        uint8 _upExtremeConfirmPeriods,
+        uint64 _cashToExtremeMinCloseVolume,
+        uint16 _cashToExtremeMinFlowBps,
+        uint8 _cashToExtremeConfirmPeriods,
         uint8 _extremeHoldPeriods,
-        uint16 _extremeExitTriggerBps,
-        uint8 _downExtremeConfirmPeriods,
-        uint16 _cashExitTriggerBps,
-        uint8 _downCashConfirmPeriods,
-        uint64 _emergencyFloorCloseVolUsd6,
-        uint8 _emergencyConfirmPeriods
+        uint16 _extremeToCashMaxFlowBps,
+        uint8 _extremeToCashConfirmPeriods,
+        uint16 _cashToFloorMaxFlowBps,
+        uint8 _cashToFloorConfirmPeriods,
+        uint64 _emergencyToFloorMaxCloseVolume,
+        uint8 _emergencyToFloorConfirmPeriods
     )
         VolumeDynamicFeeHook(
             _poolManager,
@@ -63,19 +63,19 @@ contract VolumeDynamicFeeHookGasLocalHarness is VolumeDynamicFeeHook {
             _lullResetSeconds,
             ownerAddr,
             hookFeePercent,
-            _minCloseVolToCashUsd6,
-            _cashEnterTriggerBps,
+            _floorToCashMinCloseVolume,
+            _floorToCashMinFlowBps,
             _cashHoldPeriods,
-            _minCloseVolToExtremeUsd6,
-            _extremeEnterTriggerBps,
-            _upExtremeConfirmPeriods,
+            _cashToExtremeMinCloseVolume,
+            _cashToExtremeMinFlowBps,
+            _cashToExtremeConfirmPeriods,
             _extremeHoldPeriods,
-            _extremeExitTriggerBps,
-            _downExtremeConfirmPeriods,
-            _cashExitTriggerBps,
-            _downCashConfirmPeriods,
-            _emergencyFloorCloseVolUsd6,
-            _emergencyConfirmPeriods
+            _extremeToCashMaxFlowBps,
+            _extremeToCashConfirmPeriods,
+            _cashToFloorMaxFlowBps,
+            _cashToFloorConfirmPeriods,
+            _emergencyToFloorMaxCloseVolume,
+            _emergencyToFloorConfirmPeriods
         )
     {}
 
@@ -110,19 +110,19 @@ abstract contract GasMeasurementLocalBase is CommonBase {
             cfg.lullResetSeconds,
             ownerAddr,
             cfg.hookFeePercent,
-            cfg.minCloseVolToCashUsd6,
-            cfg.cashEnterTriggerBps,
+            cfg.floorToCashMinCloseVolume,
+            cfg.floorToCashMinFlowBps,
             cfg.cashHoldPeriods,
-            cfg.minCloseVolToExtremeUsd6,
-            cfg.extremeEnterTriggerBps,
-            cfg.upExtremeConfirmPeriods,
+            cfg.cashToExtremeMinCloseVolume,
+            cfg.cashToExtremeMinFlowBps,
+            cfg.cashToExtremeConfirmPeriods,
             cfg.extremeHoldPeriods,
-            cfg.extremeExitTriggerBps,
-            cfg.downExtremeConfirmPeriods,
-            cfg.cashExitTriggerBps,
-            cfg.downCashConfirmPeriods,
-            cfg.emergencyFloorCloseVolUsd6,
-            cfg.emergencyConfirmPeriods
+            cfg.extremeToCashMaxFlowBps,
+            cfg.extremeToCashConfirmPeriods,
+            cfg.cashToFloorMaxFlowBps,
+            cfg.cashToFloorConfirmPeriods,
+            cfg.emergencyToFloorMaxCloseVolume,
+            cfg.emergencyToFloorConfirmPeriods
         );
 
         key = PoolKey({
@@ -248,8 +248,8 @@ abstract contract GasMeasurementLocalBase is CommonBase {
         uint64 seedUsd6 = _seedUsd6();
         _swapStable(GasMeasurementLib.usd6ToStableRaw(seedUsd6, cfg.stableDecimals));
 
-        uint16 passThreshold = cfg.cashEnterTriggerBps;
-        uint64 cashUsd6 = _chooseNextUpOpenPeriodUsd6(passThreshold, cfg.minCloseVolToCashUsd6);
+        uint16 passThreshold = cfg.floorToCashMinFlowBps;
+        uint64 cashUsd6 = _chooseNextUpOpenPeriodUsd6(passThreshold, cfg.floorToCashMinCloseVolume);
         _warpPeriod();
         _swapStable(GasMeasurementLib.usd6ToStableRaw(cashUsd6, cfg.stableDecimals));
         _assertMode(hook.MODE_FLOOR());
@@ -262,14 +262,14 @@ abstract contract GasMeasurementLocalBase is CommonBase {
     }
 
     function _primeCashToExtreme() internal {
-        uint16 passThreshold = cfg.extremeEnterTriggerBps;
+        uint16 passThreshold = cfg.cashToExtremeMinFlowBps;
         _primeFloorToCash();
-        _completeFloorToCash(_chooseNextUpOpenPeriodUsd6(passThreshold, cfg.minCloseVolToExtremeUsd6));
+        _completeFloorToCash(_chooseNextUpOpenPeriodUsd6(passThreshold, cfg.cashToExtremeMinCloseVolume));
 
         _warpPeriod();
         _swapStable(
             GasMeasurementLib.usd6ToStableRaw(
-                _chooseNextUpOpenPeriodUsd6(passThreshold, cfg.minCloseVolToExtremeUsd6), cfg.stableDecimals
+                _chooseNextUpOpenPeriodUsd6(passThreshold, cfg.cashToExtremeMinCloseVolume), cfg.stableDecimals
             )
         );
         _assertMode(hook.MODE_CASH());
@@ -282,7 +282,7 @@ abstract contract GasMeasurementLocalBase is CommonBase {
     }
 
     function _primeExtremeToCash() internal {
-        uint16 downPassThreshold = cfg.extremeExitTriggerBps;
+        uint16 downPassThreshold = cfg.extremeToCashMaxFlowBps;
         _primeCashToExtreme();
         _completeCashToExtreme(_chooseNextDownOpenPeriodUsd6(downPassThreshold));
 
@@ -295,7 +295,7 @@ abstract contract GasMeasurementLocalBase is CommonBase {
     }
 
     function _primeCashToFloor() internal {
-        uint16 downPassThreshold = cfg.cashExitTriggerBps;
+        uint16 downPassThreshold = cfg.cashToFloorMaxFlowBps;
         _primeExtremeToCash();
 
         _warpPeriod();
@@ -304,7 +304,7 @@ abstract contract GasMeasurementLocalBase is CommonBase {
         );
         _assertMode(hook.MODE_CASH());
 
-        for (uint256 i = 0; i + 1 < uint256(cfg.downCashConfirmPeriods); ++i) {
+        for (uint256 i = 0; i + 1 < uint256(cfg.cashToFloorConfirmPeriods); ++i) {
             uint64 nextDownUsd6 = _chooseNextDownOpenPeriodUsd6(downPassThreshold);
             _warpPeriod();
             _swapStable(GasMeasurementLib.usd6ToStableRaw(nextDownUsd6, cfg.stableDecimals));
@@ -336,13 +336,13 @@ abstract contract GasMeasurementLocalBase is CommonBase {
     }
 
     function _seedUsd6() internal view returns (uint64) {
-        uint64 floor = cfg.minCloseVolToCashUsd6;
-        uint64 minCounted = uint64(cfg.minCountedSwapUsd6);
+        uint64 floor = cfg.floorToCashMinCloseVolume;
+        uint64 minCounted = uint64(cfg.minCountedSwapVolume);
         return floor > minCounted ? floor : minCounted;
     }
 
     function _minCountedUsd6() internal view returns (uint64) {
-        return uint64(cfg.minCountedSwapUsd6);
+        return uint64(cfg.minCountedSwapVolume);
     }
 
     function _seedStableRaw() internal view returns (uint256) {
@@ -371,8 +371,8 @@ abstract contract GasMeasurementLocalBase is CommonBase {
             emaAfterClose,
             cfg.emaPeriods,
             passThresholdBps,
-            uint64(cfg.minCountedSwapUsd6),
-            cfg.emergencyFloorCloseVolUsd6
+            uint64(cfg.minCountedSwapVolume),
+            cfg.emergencyToFloorMaxCloseVolume
         );
     }
 

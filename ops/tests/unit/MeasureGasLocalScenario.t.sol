@@ -24,20 +24,20 @@ contract MeasureGasLocalScenarioTest is Test, GasMeasurementLocalBase {
         cfg.emaPeriods = 8;
         cfg.lullResetSeconds = 600;
         cfg.hookFeePercent = 10;
-        cfg.minCountedSwapUsd6 = 4_000_000;
-        cfg.minCloseVolToCashUsd6 = 1_000 * 1e6;
-        cfg.cashEnterTriggerBps = 18_500;
+        cfg.minCountedSwapVolume = 4_000_000;
+        cfg.floorToCashMinCloseVolume = 1_000 * 1e6;
+        cfg.floorToCashMinFlowBps = 18_500;
         cfg.cashHoldPeriods = 4;
-        cfg.minCloseVolToExtremeUsd6 = 4_000 * 1e6;
-        cfg.extremeEnterTriggerBps = 40_500;
-        cfg.upExtremeConfirmPeriods = 2;
+        cfg.cashToExtremeMinCloseVolume = 4_000 * 1e6;
+        cfg.cashToExtremeMinFlowBps = 40_500;
+        cfg.cashToExtremeConfirmPeriods = 2;
         cfg.extremeHoldPeriods = 4;
-        cfg.extremeExitTriggerBps = 12_500;
-        cfg.downExtremeConfirmPeriods = 2;
-        cfg.cashExitTriggerBps = 12_500;
-        cfg.downCashConfirmPeriods = 3;
-        cfg.emergencyFloorCloseVolUsd6 = 600 * 1e6;
-        cfg.emergencyConfirmPeriods = 3;
+        cfg.extremeToCashMaxFlowBps = 12_500;
+        cfg.extremeToCashConfirmPeriods = 2;
+        cfg.cashToFloorMaxFlowBps = 12_500;
+        cfg.cashToFloorConfirmPeriods = 3;
+        cfg.emergencyToFloorMaxCloseVolume = 600 * 1e6;
+        cfg.emergencyToFloorConfirmPeriods = 3;
     }
 
     function test_floorToCash_measurement_path_ends_in_cash() public {

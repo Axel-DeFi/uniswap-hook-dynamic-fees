@@ -77,16 +77,17 @@ contract EnsureHookLive is LiveOpsBase {
         );
 
         address owner = deployCfg.owner;
-        uint64 minCloseVolToCashUsd6 = deployCfg.minCloseVolToCashUsd6;
+        uint64 floorToCashMinCloseVolume = deployCfg.floorToCashMinCloseVolume;
         uint8 cashHoldPeriods = deployCfg.cashHoldPeriods;
-        uint64 minCloseVolToExtremeUsd6 = deployCfg.minCloseVolToExtremeUsd6;
+        uint64 cashToExtremeMinCloseVolume = deployCfg.cashToExtremeMinCloseVolume;
         uint8 extremeHoldPeriods = deployCfg.extremeHoldPeriods;
-        uint64 emergencyFloorCloseVolUsd6 = deployCfg.emergencyFloorCloseVolUsd6;
+        uint64 emergencyToFloorMaxCloseVolume = deployCfg.emergencyToFloorMaxCloseVolume;
         bool allowWeakHoldPeriods = vm.envOr("ALLOW_WEAK_HOLD_PERIODS", false);
         require(
-            emergencyFloorCloseVolUsd6 > 0 && emergencyFloorCloseVolUsd6 < minCloseVolToCashUsd6,
+            emergencyToFloorMaxCloseVolume > 0 && emergencyToFloorMaxCloseVolume < floorToCashMinCloseVolume,
             "invalid emergency floor threshold"
         );
+        cashToExtremeMinCloseVolume;
         require(
             allowWeakHoldPeriods || (cashHoldPeriods >= 2 && extremeHoldPeriods >= 2),
             "weak hold periods blocked (set ALLOW_WEAK_HOLD_PERIODS=true to override)"

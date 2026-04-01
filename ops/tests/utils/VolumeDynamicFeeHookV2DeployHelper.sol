@@ -7,22 +7,22 @@ import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {VolumeDynamicFeeHook} from "src/VolumeDynamicFeeHook.sol";
 
 abstract contract VolumeDynamicFeeHookV2DeployHelper {
-    uint64 internal constant V2_MIN_VOLUME_TO_ENTER_CASH_USD6 = 1_000 * 1e6;
-    uint16 internal constant V2_CASH_ENTER_TRIGGER_BPS = 18_500;
-    uint8 internal constant V2_CASH_HOLD_PERIODS = 4;
+    uint64 internal constant V2_FLOOR_TO_CASH_MIN_CLOSE_VOLUME = 400 * 1e6;
+    uint16 internal constant V2_FLOOR_TO_CASH_MIN_FLOW_BPS = 13_500;
+    uint8 internal constant V2_CASH_HOLD_PERIODS = 2;
 
-    uint64 internal constant V2_MIN_VOLUME_TO_ENTER_EXTREME_USD6 = 4_000 * 1e6;
-    uint16 internal constant V2_EXTREME_ENTER_TRIGGER_BPS = 40_500;
-    uint8 internal constant V2_UP_EXTREME_CONFIRM_PERIODS = 2;
-    uint8 internal constant V2_EXTREME_HOLD_PERIODS = 4;
+    uint64 internal constant V2_CASH_TO_EXTREME_MIN_CLOSE_VOLUME = 2_500 * 1e6;
+    uint16 internal constant V2_CASH_TO_EXTREME_MIN_FLOW_BPS = 41_000;
+    uint8 internal constant V2_CASH_TO_EXTREME_CONFIRM_PERIODS = 2;
+    uint8 internal constant V2_EXTREME_HOLD_PERIODS = 2;
 
-    uint16 internal constant V2_EXTREME_EXIT_TRIGGER_BPS = 12_500;
-    uint8 internal constant V2_DOWN_EXTREME_CONFIRM_PERIODS = 2;
-    uint16 internal constant V2_CASH_EXIT_TRIGGER_BPS = 12_500;
-    uint8 internal constant V2_DOWN_CASH_CONFIRM_PERIODS = 3;
+    uint16 internal constant V2_EXTREME_TO_CASH_MAX_FLOW_BPS = 12_000;
+    uint8 internal constant V2_EXTREME_TO_CASH_CONFIRM_PERIODS = 2;
+    uint16 internal constant V2_CASH_TO_FLOOR_MAX_FLOW_BPS = 12_000;
+    uint8 internal constant V2_CASH_TO_FLOOR_CONFIRM_PERIODS = 3;
 
-    uint64 internal constant V2_EMERGENCY_FLOOR_TRIGGER_USD6 = 600 * 1e6;
-    uint8 internal constant V2_EMERGENCY_CONFIRM_PERIODS = 3;
+    uint64 internal constant V2_EMERGENCY_TO_FLOOR_MAX_CLOSE_VOLUME = 100 * 1e6;
+    uint8 internal constant V2_EMERGENCY_TO_FLOOR_CONFIRM_PERIODS = 6;
 
     uint16 internal constant V2_INITIAL_HOOK_FEE_PERCENT = 3;
 
@@ -61,19 +61,19 @@ abstract contract VolumeDynamicFeeHookV2DeployHelper {
             lullResetSeconds,
             owner,
             hookFeePercent,
-            V2_MIN_VOLUME_TO_ENTER_CASH_USD6,
-            V2_CASH_ENTER_TRIGGER_BPS,
+            V2_FLOOR_TO_CASH_MIN_CLOSE_VOLUME,
+            V2_FLOOR_TO_CASH_MIN_FLOW_BPS,
             V2_CASH_HOLD_PERIODS,
-            V2_MIN_VOLUME_TO_ENTER_EXTREME_USD6,
-            V2_EXTREME_ENTER_TRIGGER_BPS,
-            V2_UP_EXTREME_CONFIRM_PERIODS,
+            V2_CASH_TO_EXTREME_MIN_CLOSE_VOLUME,
+            V2_CASH_TO_EXTREME_MIN_FLOW_BPS,
+            V2_CASH_TO_EXTREME_CONFIRM_PERIODS,
             V2_EXTREME_HOLD_PERIODS,
-            V2_EXTREME_EXIT_TRIGGER_BPS,
-            V2_DOWN_EXTREME_CONFIRM_PERIODS,
-            V2_CASH_EXIT_TRIGGER_BPS,
-            V2_DOWN_CASH_CONFIRM_PERIODS,
-            V2_EMERGENCY_FLOOR_TRIGGER_USD6,
-            V2_EMERGENCY_CONFIRM_PERIODS
+            V2_EXTREME_TO_CASH_MAX_FLOW_BPS,
+            V2_EXTREME_TO_CASH_CONFIRM_PERIODS,
+            V2_CASH_TO_FLOOR_MAX_FLOW_BPS,
+            V2_CASH_TO_FLOOR_CONFIRM_PERIODS,
+            V2_EMERGENCY_TO_FLOOR_MAX_CLOSE_VOLUME,
+            V2_EMERGENCY_TO_FLOOR_CONFIRM_PERIODS
         );
     }
 
@@ -108,19 +108,19 @@ abstract contract VolumeDynamicFeeHookV2DeployHelper {
             lullResetSeconds,
             owner,
             hookFeePercent,
-            V2_MIN_VOLUME_TO_ENTER_CASH_USD6,
-            V2_CASH_ENTER_TRIGGER_BPS,
+            V2_FLOOR_TO_CASH_MIN_CLOSE_VOLUME,
+            V2_FLOOR_TO_CASH_MIN_FLOW_BPS,
             V2_CASH_HOLD_PERIODS,
-            V2_MIN_VOLUME_TO_ENTER_EXTREME_USD6,
-            V2_EXTREME_ENTER_TRIGGER_BPS,
-            V2_UP_EXTREME_CONFIRM_PERIODS,
+            V2_CASH_TO_EXTREME_MIN_CLOSE_VOLUME,
+            V2_CASH_TO_EXTREME_MIN_FLOW_BPS,
+            V2_CASH_TO_EXTREME_CONFIRM_PERIODS,
             V2_EXTREME_HOLD_PERIODS,
-            V2_EXTREME_EXIT_TRIGGER_BPS,
-            V2_DOWN_EXTREME_CONFIRM_PERIODS,
-            V2_CASH_EXIT_TRIGGER_BPS,
-            V2_DOWN_CASH_CONFIRM_PERIODS,
-            V2_EMERGENCY_FLOOR_TRIGGER_USD6,
-            V2_EMERGENCY_CONFIRM_PERIODS
+            V2_EXTREME_TO_CASH_MAX_FLOW_BPS,
+            V2_EXTREME_TO_CASH_CONFIRM_PERIODS,
+            V2_CASH_TO_FLOOR_MAX_FLOW_BPS,
+            V2_CASH_TO_FLOOR_CONFIRM_PERIODS,
+            V2_EMERGENCY_TO_FLOOR_MAX_CLOSE_VOLUME,
+            V2_EMERGENCY_TO_FLOOR_CONFIRM_PERIODS
         );
     }
 
@@ -156,19 +156,19 @@ abstract contract VolumeDynamicFeeHookV2DeployHelper {
             lullResetSeconds,
             owner,
             hookFeePercent,
-            V2_MIN_VOLUME_TO_ENTER_CASH_USD6,
-            V2_CASH_ENTER_TRIGGER_BPS,
+            V2_FLOOR_TO_CASH_MIN_CLOSE_VOLUME,
+            V2_FLOOR_TO_CASH_MIN_FLOW_BPS,
             V2_CASH_HOLD_PERIODS,
-            V2_MIN_VOLUME_TO_ENTER_EXTREME_USD6,
-            V2_EXTREME_ENTER_TRIGGER_BPS,
-            V2_UP_EXTREME_CONFIRM_PERIODS,
+            V2_CASH_TO_EXTREME_MIN_CLOSE_VOLUME,
+            V2_CASH_TO_EXTREME_MIN_FLOW_BPS,
+            V2_CASH_TO_EXTREME_CONFIRM_PERIODS,
             V2_EXTREME_HOLD_PERIODS,
-            V2_EXTREME_EXIT_TRIGGER_BPS,
-            V2_DOWN_EXTREME_CONFIRM_PERIODS,
-            V2_CASH_EXIT_TRIGGER_BPS,
-            V2_DOWN_CASH_CONFIRM_PERIODS,
-            V2_EMERGENCY_FLOOR_TRIGGER_USD6,
-            V2_EMERGENCY_CONFIRM_PERIODS
+            V2_EXTREME_TO_CASH_MAX_FLOW_BPS,
+            V2_EXTREME_TO_CASH_CONFIRM_PERIODS,
+            V2_CASH_TO_FLOOR_MAX_FLOW_BPS,
+            V2_CASH_TO_FLOOR_CONFIRM_PERIODS,
+            V2_EMERGENCY_TO_FLOOR_MAX_CLOSE_VOLUME,
+            V2_EMERGENCY_TO_FLOOR_CONFIRM_PERIODS
         );
     }
 }

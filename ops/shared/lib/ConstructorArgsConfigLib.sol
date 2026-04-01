@@ -24,19 +24,19 @@ library ConstructorArgsConfigLib {
             uint32 lullResetSeconds,
             address owner,
             uint16 hookFeePercent,
-            uint64 minCloseVolToCashUsd6,
-            uint16 cashEnterTriggerBps,
+            uint64 floorToCashMinCloseVolume,
+            uint16 floorToCashMinFlowBps,
             uint8 cashHoldPeriods,
-            uint64 minCloseVolToExtremeUsd6,
-            uint16 extremeEnterTriggerBps,
-            uint8 upExtremeConfirmPeriods,
+            uint64 cashToExtremeMinCloseVolume,
+            uint16 cashToExtremeMinFlowBps,
+            uint8 cashToExtremeConfirmPeriods,
             uint8 extremeHoldPeriods,
-            uint16 extremeExitTriggerBps,
-            uint8 downExtremeConfirmPeriods,
-            uint16 cashExitTriggerBps,
-            uint8 downCashConfirmPeriods,
-            uint64 emergencyFloorCloseVolUsd6,
-            uint8 emergencyConfirmPeriods
+            uint16 extremeToCashMaxFlowBps,
+            uint8 extremeToCashConfirmPeriods,
+            uint16 cashToFloorMaxFlowBps,
+            uint8 cashToFloorConfirmPeriods,
+            uint64 emergencyToFloorMaxCloseVolume,
+            uint8 emergencyToFloorConfirmPeriods
         ) = abi.decode(
             constructorArgs,
             (
@@ -84,18 +84,18 @@ library ConstructorArgsConfigLib {
         cfg.emaPeriods = emaPeriods;
         cfg.lullResetSeconds = lullResetSeconds;
         cfg.hookFeePercent = hookFeePercent;
-        cfg.minCloseVolToCashUsd6 = minCloseVolToCashUsd6;
-        cfg.cashEnterTriggerBps = cashEnterTriggerBps;
+        cfg.floorToCashMinCloseVolume = floorToCashMinCloseVolume;
+        cfg.floorToCashMinFlowBps = floorToCashMinFlowBps;
         cfg.cashHoldPeriods = cashHoldPeriods;
-        cfg.minCloseVolToExtremeUsd6 = minCloseVolToExtremeUsd6;
-        cfg.extremeEnterTriggerBps = extremeEnterTriggerBps;
-        cfg.upExtremeConfirmPeriods = upExtremeConfirmPeriods;
+        cfg.cashToExtremeMinCloseVolume = cashToExtremeMinCloseVolume;
+        cfg.cashToExtremeMinFlowBps = cashToExtremeMinFlowBps;
+        cfg.cashToExtremeConfirmPeriods = cashToExtremeConfirmPeriods;
         cfg.extremeHoldPeriods = extremeHoldPeriods;
-        cfg.extremeExitTriggerBps = extremeExitTriggerBps;
-        cfg.downExtremeConfirmPeriods = downExtremeConfirmPeriods;
-        cfg.cashExitTriggerBps = cashExitTriggerBps;
-        cfg.downCashConfirmPeriods = downCashConfirmPeriods;
-        cfg.emergencyFloorCloseVolUsd6 = emergencyFloorCloseVolUsd6;
-        cfg.emergencyConfirmPeriods = emergencyConfirmPeriods;
+        cfg.extremeToCashMaxFlowBps = extremeToCashMaxFlowBps;
+        cfg.extremeToCashConfirmPeriods = extremeToCashConfirmPeriods;
+        cfg.cashToFloorMaxFlowBps = cashToFloorMaxFlowBps;
+        cfg.cashToFloorConfirmPeriods = cashToFloorConfirmPeriods;
+        cfg.emergencyToFloorMaxCloseVolume = emergencyToFloorMaxCloseVolume;
+        cfg.emergencyToFloorConfirmPeriods = emergencyToFloorConfirmPeriods;
     }
 }

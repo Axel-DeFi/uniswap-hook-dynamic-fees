@@ -65,19 +65,19 @@ contract ConfigLoaderDeploymentSnapshotTest is Test {
         assertEq(deployCfg.emaPeriods, 8);
         assertEq(deployCfg.lullResetSeconds, 3_600);
         assertEq(deployCfg.hookFeePercent, 1);
-        assertEq(deployCfg.minCloseVolToCashUsd6, 1_000_000_000);
-        assertEq(deployCfg.cashEnterTriggerBps, 18_500);
+        assertEq(deployCfg.floorToCashMinCloseVolume, 1_000_000_000);
+        assertEq(deployCfg.floorToCashMinFlowBps, 18_500);
         assertEq(deployCfg.cashHoldPeriods, 4);
-        assertEq(deployCfg.minCloseVolToExtremeUsd6, 4_000_000_000);
-        assertEq(deployCfg.extremeEnterTriggerBps, 40_500);
-        assertEq(deployCfg.upExtremeConfirmPeriods, 2);
+        assertEq(deployCfg.cashToExtremeMinCloseVolume, 4_000_000_000);
+        assertEq(deployCfg.cashToExtremeMinFlowBps, 40_500);
+        assertEq(deployCfg.cashToExtremeConfirmPeriods, 2);
         assertEq(deployCfg.extremeHoldPeriods, 4);
-        assertEq(deployCfg.extremeExitTriggerBps, 12_500);
-        assertEq(deployCfg.downExtremeConfirmPeriods, 2);
-        assertEq(deployCfg.cashExitTriggerBps, 12_500);
-        assertEq(deployCfg.downCashConfirmPeriods, 3);
-        assertEq(deployCfg.emergencyFloorCloseVolUsd6, 600_000_000);
-        assertEq(deployCfg.emergencyConfirmPeriods, 3);
+        assertEq(deployCfg.extremeToCashMaxFlowBps, 12_500);
+        assertEq(deployCfg.extremeToCashConfirmPeriods, 2);
+        assertEq(deployCfg.cashToFloorMaxFlowBps, 12_500);
+        assertEq(deployCfg.cashToFloorConfirmPeriods, 3);
+        assertEq(deployCfg.emergencyToFloorMaxCloseVolume, 600_000_000);
+        assertEq(deployCfg.emergencyToFloorConfirmPeriods, 3);
     }
 
     function test_loadCoreConfig_live_uses_runtime_bindings_when_present() public {
@@ -98,19 +98,19 @@ contract ConfigLoaderDeploymentSnapshotTest is Test {
         assertEq(runtimeCfg.emaPeriods, 16);
         assertEq(runtimeCfg.lullResetSeconds, 7_200);
         assertEq(runtimeCfg.hookFeePercent, 3);
-        assertEq(runtimeCfg.minCloseVolToCashUsd6, 1_500_000_000);
-        assertEq(runtimeCfg.cashEnterTriggerBps, 20_200);
+        assertEq(runtimeCfg.floorToCashMinCloseVolume, 1_500_000_000);
+        assertEq(runtimeCfg.floorToCashMinFlowBps, 20_200);
         assertEq(runtimeCfg.cashHoldPeriods, 5);
-        assertEq(runtimeCfg.minCloseVolToExtremeUsd6, 4_500_000_000);
-        assertEq(runtimeCfg.extremeEnterTriggerBps, 43_200);
-        assertEq(runtimeCfg.upExtremeConfirmPeriods, 3);
+        assertEq(runtimeCfg.cashToExtremeMinCloseVolume, 4_500_000_000);
+        assertEq(runtimeCfg.cashToExtremeMinFlowBps, 43_200);
+        assertEq(runtimeCfg.cashToExtremeConfirmPeriods, 3);
         assertEq(runtimeCfg.extremeHoldPeriods, 5);
-        assertEq(runtimeCfg.extremeExitTriggerBps, 12_800);
-        assertEq(runtimeCfg.downExtremeConfirmPeriods, 3);
-        assertEq(runtimeCfg.cashExitTriggerBps, 12_800);
-        assertEq(runtimeCfg.downCashConfirmPeriods, 4);
-        assertEq(runtimeCfg.emergencyFloorCloseVolUsd6, 700_000_000);
-        assertEq(runtimeCfg.emergencyConfirmPeriods, 4);
+        assertEq(runtimeCfg.extremeToCashMaxFlowBps, 12_800);
+        assertEq(runtimeCfg.extremeToCashConfirmPeriods, 3);
+        assertEq(runtimeCfg.cashToFloorMaxFlowBps, 12_800);
+        assertEq(runtimeCfg.cashToFloorConfirmPeriods, 4);
+        assertEq(runtimeCfg.emergencyToFloorMaxCloseVolume, 700_000_000);
+        assertEq(runtimeCfg.emergencyToFloorConfirmPeriods, 4);
     }
 
     function test_loadCoreConfig_live_reads_pool_id_as_bytes32() public {

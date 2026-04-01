@@ -46,30 +46,27 @@ contract ConstructorArgsConfigLibTest is Test, VolumeDynamicFeeHookV2DeployHelpe
         assertEq(decoded.emaPeriods, original.emaPeriods);
         assertEq(decoded.lullResetSeconds, original.lullResetSeconds);
         assertEq(decoded.hookFeePercent, original.hookFeePercent);
-        assertEq(decoded.minCloseVolToCashUsd6, original.minCloseVolToCashUsd6);
-        assertEq(decoded.cashEnterTriggerBps, original.cashEnterTriggerBps);
+        assertEq(decoded.floorToCashMinCloseVolume, original.floorToCashMinCloseVolume);
+        assertEq(decoded.floorToCashMinFlowBps, original.floorToCashMinFlowBps);
         assertEq(decoded.cashHoldPeriods, original.cashHoldPeriods);
-        assertEq(decoded.minCloseVolToExtremeUsd6, original.minCloseVolToExtremeUsd6);
-        assertEq(decoded.extremeEnterTriggerBps, original.extremeEnterTriggerBps);
-        assertEq(decoded.upExtremeConfirmPeriods, original.upExtremeConfirmPeriods);
+        assertEq(decoded.cashToExtremeMinCloseVolume, original.cashToExtremeMinCloseVolume);
+        assertEq(decoded.cashToExtremeMinFlowBps, original.cashToExtremeMinFlowBps);
+        assertEq(decoded.cashToExtremeConfirmPeriods, original.cashToExtremeConfirmPeriods);
         assertEq(decoded.extremeHoldPeriods, original.extremeHoldPeriods);
-        assertEq(decoded.extremeExitTriggerBps, original.extremeExitTriggerBps);
-        assertEq(decoded.downExtremeConfirmPeriods, original.downExtremeConfirmPeriods);
-        assertEq(decoded.cashExitTriggerBps, original.cashExitTriggerBps);
-        assertEq(decoded.downCashConfirmPeriods, original.downCashConfirmPeriods);
-        assertEq(decoded.emergencyFloorCloseVolUsd6, original.emergencyFloorCloseVolUsd6);
-        assertEq(decoded.emergencyConfirmPeriods, original.emergencyConfirmPeriods);
+        assertEq(decoded.extremeToCashMaxFlowBps, original.extremeToCashMaxFlowBps);
+        assertEq(decoded.extremeToCashConfirmPeriods, original.extremeToCashConfirmPeriods);
+        assertEq(decoded.cashToFloorMaxFlowBps, original.cashToFloorMaxFlowBps);
+        assertEq(decoded.cashToFloorConfirmPeriods, original.cashToFloorConfirmPeriods);
+        assertEq(decoded.emergencyToFloorMaxCloseVolume, original.emergencyToFloorMaxCloseVolume);
+        assertEq(decoded.emergencyToFloorConfirmPeriods, original.emergencyToFloorConfirmPeriods);
     }
 
-    function test_toDeploymentConfig_preserves_canonical_hook_address() public view {
+    function test_toDeploymentConfig_preserves_constructor_args_encoding() public view {
         OpsTypes.DeploymentConfig memory original = _cfg(address(0xBEEF), 6, V2_INITIAL_HOOK_FEE_PERCENT);
         bytes memory args = HookIdentityLib.constructorArgs(original);
         OpsTypes.DeploymentConfig memory decoded = ConstructorArgsConfigLib.toDeploymentConfig(args);
 
-        (address originalHook,,) = HookIdentityLib.expectedHookAddress(original);
-        (address decodedHook,,) = HookIdentityLib.expectedHookAddress(decoded);
-
-        assertEq(decodedHook, originalHook);
+        assertEq(keccak256(HookIdentityLib.constructorArgs(decoded)), keccak256(args));
     }
 
     function _cfg(address owner_, uint8 stableDecimals_, uint16 hookFeePercent_)
@@ -91,18 +88,18 @@ contract ConstructorArgsConfigLibTest is Test, VolumeDynamicFeeHookV2DeployHelpe
         cfg.emaPeriods = EMA_PERIODS;
         cfg.lullResetSeconds = LULL_RESET_SECONDS;
         cfg.hookFeePercent = hookFeePercent_;
-        cfg.minCloseVolToCashUsd6 = V2_MIN_VOLUME_TO_ENTER_CASH_USD6;
-        cfg.cashEnterTriggerBps = V2_CASH_ENTER_TRIGGER_BPS;
+        cfg.floorToCashMinCloseVolume = V2_FLOOR_TO_CASH_MIN_CLOSE_VOLUME;
+        cfg.floorToCashMinFlowBps = V2_FLOOR_TO_CASH_MIN_FLOW_BPS;
         cfg.cashHoldPeriods = V2_CASH_HOLD_PERIODS;
-        cfg.minCloseVolToExtremeUsd6 = V2_MIN_VOLUME_TO_ENTER_EXTREME_USD6;
-        cfg.extremeEnterTriggerBps = V2_EXTREME_ENTER_TRIGGER_BPS;
-        cfg.upExtremeConfirmPeriods = V2_UP_EXTREME_CONFIRM_PERIODS;
+        cfg.cashToExtremeMinCloseVolume = V2_CASH_TO_EXTREME_MIN_CLOSE_VOLUME;
+        cfg.cashToExtremeMinFlowBps = V2_CASH_TO_EXTREME_MIN_FLOW_BPS;
+        cfg.cashToExtremeConfirmPeriods = V2_CASH_TO_EXTREME_CONFIRM_PERIODS;
         cfg.extremeHoldPeriods = V2_EXTREME_HOLD_PERIODS;
-        cfg.extremeExitTriggerBps = V2_EXTREME_EXIT_TRIGGER_BPS;
-        cfg.downExtremeConfirmPeriods = V2_DOWN_EXTREME_CONFIRM_PERIODS;
-        cfg.cashExitTriggerBps = V2_CASH_EXIT_TRIGGER_BPS;
-        cfg.downCashConfirmPeriods = V2_DOWN_CASH_CONFIRM_PERIODS;
-        cfg.emergencyFloorCloseVolUsd6 = V2_EMERGENCY_FLOOR_TRIGGER_USD6;
-        cfg.emergencyConfirmPeriods = V2_EMERGENCY_CONFIRM_PERIODS;
+        cfg.extremeToCashMaxFlowBps = V2_EXTREME_TO_CASH_MAX_FLOW_BPS;
+        cfg.extremeToCashConfirmPeriods = V2_EXTREME_TO_CASH_CONFIRM_PERIODS;
+        cfg.cashToFloorMaxFlowBps = V2_CASH_TO_FLOOR_MAX_FLOW_BPS;
+        cfg.cashToFloorConfirmPeriods = V2_CASH_TO_FLOOR_CONFIRM_PERIODS;
+        cfg.emergencyToFloorMaxCloseVolume = V2_EMERGENCY_TO_FLOOR_MAX_CLOSE_VOLUME;
+        cfg.emergencyToFloorConfirmPeriods = V2_EMERGENCY_TO_FLOOR_CONFIRM_PERIODS;
     }
 }

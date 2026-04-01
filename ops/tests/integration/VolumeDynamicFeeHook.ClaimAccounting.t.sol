@@ -242,14 +242,14 @@ contract VolumeDynamicFeeHookClaimAccountingIntegrationTest is Test, VolumeDynam
         assertEq(fees1, 0);
     }
 
-    function test_pending_minCountedSwapUsd6_activates_only_on_next_period_boundary_integration() public {
-        assertEq(hook.minCountedSwapUsd6(), 4_000_000);
+    function test_pending_minCountedSwapVolume_activates_only_on_next_period_boundary_integration() public {
+        assertEq(hook.minCountedSwapVolume(), 4_000_000);
 
         _swapExactInput(true, 6_000_000);
         (uint64 periodVol,,,) = hook.unpackedState();
         assertGt(periodVol, 0, "initial threshold must count this swap");
 
-        hook.scheduleMinCountedSwapUsd6Change(10_000_000);
+        hook.scheduleMinCountedSwapVolumeChange(10_000_000);
 
         uint64 periodVolBefore = periodVol;
         _swapExactInput(true, 6_000_000);
@@ -259,7 +259,7 @@ contract VolumeDynamicFeeHookClaimAccountingIntegrationTest is Test, VolumeDynam
         vm.warp(block.timestamp + PERIOD_SECONDS);
         _swapExactInput(true, 1_000_000);
 
-        assertEq(hook.minCountedSwapUsd6(), 10_000_000);
+        assertEq(hook.minCountedSwapVolume(), 10_000_000);
         (periodVol,,,) = hook.unpackedState();
         assertEq(periodVol, 0, "new threshold must apply after period rollover");
 

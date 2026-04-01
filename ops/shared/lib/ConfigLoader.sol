@@ -9,7 +9,7 @@ import {ErrorLib} from "./ErrorLib.sol";
 
 library ConfigLoader {
     Vm internal constant vm = Vm(address(uint160(uint256(keccak256("hevm cheat code")))));
-    uint64 internal constant DEFAULT_MIN_COUNTED_SWAP_USD6 = 4_000_000;
+    uint64 internal constant DEFAULT_MIN_COUNTED_SWAP_VOLUME = 4_000_000;
 
     function loadCoreConfig() internal view returns (OpsTypes.CoreConfig memory cfg) {
         cfg.runtime = _loadRuntime();
@@ -58,36 +58,36 @@ library ConfigLoader {
         cfg.emaPeriods = _requireUint8Either("EMA_PERIODS", "DEPLOY_EMA_PERIODS");
         cfg.lullResetSeconds = _requireUint32Either("LULL_RESET_SECONDS", "DEPLOY_LULL_RESET_SECONDS");
         cfg.hookFeePercent = _requireUint16Either("HOOK_FEE_PERCENT", "DEPLOY_HOOK_FEE_PERCENT");
-        cfg.minCountedSwapUsd6 = EnvLib.envOrUint64("MIN_COUNTED_SWAP_USD6", DEFAULT_MIN_COUNTED_SWAP_USD6);
-        if (cfg.minCountedSwapUsd6 < 1_000_000 || cfg.minCountedSwapUsd6 > 10_000_000) {
+        cfg.minCountedSwapVolume = EnvLib.envOrUint64("MIN_COUNTED_SWAP_USD6", DEFAULT_MIN_COUNTED_SWAP_VOLUME);
+        if (cfg.minCountedSwapVolume < 1_000_000 || cfg.minCountedSwapVolume > 10_000_000) {
             revert ErrorLib.InvalidEnv("MIN_COUNTED_SWAP_USD6", "must be in 1000000..10000000");
         }
-        cfg.minCloseVolToCashUsd6 =
+        cfg.floorToCashMinCloseVolume =
             _requireUsd6FromUsdEither("MIN_VOLUME_TO_ENTER_CASH_USD", "DEPLOY_MIN_VOLUME_TO_ENTER_CASH_USD");
-        cfg.cashEnterTriggerBps =
+        cfg.floorToCashMinFlowBps =
             _requireBpsFromMultiplierXEither("CASH_ENTER_TRIGGER_EMA_X", "DEPLOY_CASH_ENTER_TRIGGER_EMA_X");
         cfg.cashHoldPeriods = _requireUint8Either("CASH_HOLD_PERIODS", "DEPLOY_CASH_HOLD_PERIODS");
-        cfg.minCloseVolToExtremeUsd6 = _requireUsd6FromUsdEither(
+        cfg.cashToExtremeMinCloseVolume = _requireUsd6FromUsdEither(
             "MIN_VOLUME_TO_ENTER_EXTREME_USD", "DEPLOY_MIN_VOLUME_TO_ENTER_EXTREME_USD"
         );
-        cfg.extremeEnterTriggerBps = _requireBpsFromMultiplierXEither(
+        cfg.cashToExtremeMinFlowBps = _requireBpsFromMultiplierXEither(
             "EXTREME_ENTER_TRIGGER_EMA_X", "DEPLOY_EXTREME_ENTER_TRIGGER_EMA_X"
         );
-        cfg.upExtremeConfirmPeriods =
+        cfg.cashToExtremeConfirmPeriods =
             _requireUint8Either("ENTER_EXTREME_CONFIRM_PERIODS", "DEPLOY_ENTER_EXTREME_CONFIRM_PERIODS");
         cfg.extremeHoldPeriods = _requireUint8Either("EXTREME_HOLD_PERIODS", "DEPLOY_EXTREME_HOLD_PERIODS");
-        cfg.extremeExitTriggerBps = _requireBpsFromMultiplierXEither(
+        cfg.extremeToCashMaxFlowBps = _requireBpsFromMultiplierXEither(
             "EXTREME_EXIT_TRIGGER_EMA_X", "DEPLOY_EXTREME_EXIT_TRIGGER_EMA_X"
         );
-        cfg.downExtremeConfirmPeriods =
+        cfg.extremeToCashConfirmPeriods =
             _requireUint8Either("EXIT_EXTREME_CONFIRM_PERIODS", "DEPLOY_EXIT_EXTREME_CONFIRM_PERIODS");
-        cfg.cashExitTriggerBps =
+        cfg.cashToFloorMaxFlowBps =
             _requireBpsFromMultiplierXEither("CASH_EXIT_TRIGGER_EMA_X", "DEPLOY_CASH_EXIT_TRIGGER_EMA_X");
-        cfg.downCashConfirmPeriods =
+        cfg.cashToFloorConfirmPeriods =
             _requireUint8Either("EXIT_CASH_CONFIRM_PERIODS", "DEPLOY_EXIT_CASH_CONFIRM_PERIODS");
-        cfg.emergencyFloorCloseVolUsd6 =
+        cfg.emergencyToFloorMaxCloseVolume =
             _requireUsd6FromUsdEither("EMERGENCY_FLOOR_TRIGGER_USD", "DEPLOY_EMERGENCY_FLOOR_TRIGGER_USD");
-        cfg.emergencyConfirmPeriods =
+        cfg.emergencyToFloorConfirmPeriods =
             _requireUint8Either("EMERGENCY_CONFIRM_PERIODS", "DEPLOY_EMERGENCY_CONFIRM_PERIODS");
 
         cfg.initPriceUsdE18 = EnvLib.envOrDecimalE18("INIT_PRICE_USD", 0);
@@ -165,55 +165,67 @@ library ConfigLoader {
         cfg.hookFeePercent = strict
             ? EnvLib.requireUint16("DEPLOY_HOOK_FEE_PERCENT")
             : EnvLib.envOrUint16("DEPLOY_HOOK_FEE_PERCENT", runtimeCfg.hookFeePercent);
-        cfg.minCloseVolToCashUsd6 = strict
+        cfg.floorToCashMinCloseVolume = strict
             ? EnvLib.requireUsd6FromUsd("DEPLOY_MIN_VOLUME_TO_ENTER_CASH_USD")
-            : EnvLib.envOrUsd6FromUsd("DEPLOY_MIN_VOLUME_TO_ENTER_CASH_USD", runtimeCfg.minCloseVolToCashUsd6);
-        cfg.cashEnterTriggerBps = strict
+            : EnvLib.envOrUsd6FromUsd(
+                "DEPLOY_MIN_VOLUME_TO_ENTER_CASH_USD", runtimeCfg.floorToCashMinCloseVolume
+            );
+        cfg.floorToCashMinFlowBps = strict
             ? EnvLib.requireBpsFromMultiplierX("DEPLOY_CASH_ENTER_TRIGGER_EMA_X")
             : EnvLib.envOrBpsFromMultiplierX(
-                    "DEPLOY_CASH_ENTER_TRIGGER_EMA_X", runtimeCfg.cashEnterTriggerBps
+                    "DEPLOY_CASH_ENTER_TRIGGER_EMA_X", runtimeCfg.floorToCashMinFlowBps
                 );
         cfg.cashHoldPeriods = strict
             ? EnvLib.requireUint8("DEPLOY_CASH_HOLD_PERIODS")
             : EnvLib.envOrUint8("DEPLOY_CASH_HOLD_PERIODS", runtimeCfg.cashHoldPeriods);
-        cfg.minCloseVolToExtremeUsd6 = strict
+        cfg.cashToExtremeMinCloseVolume = strict
             ? EnvLib.requireUsd6FromUsd("DEPLOY_MIN_VOLUME_TO_ENTER_EXTREME_USD")
             : EnvLib.envOrUsd6FromUsd(
-                "DEPLOY_MIN_VOLUME_TO_ENTER_EXTREME_USD", runtimeCfg.minCloseVolToExtremeUsd6
+                "DEPLOY_MIN_VOLUME_TO_ENTER_EXTREME_USD", runtimeCfg.cashToExtremeMinCloseVolume
             );
-        cfg.extremeEnterTriggerBps = strict
+        cfg.cashToExtremeMinFlowBps = strict
             ? EnvLib.requireBpsFromMultiplierX("DEPLOY_EXTREME_ENTER_TRIGGER_EMA_X")
             : EnvLib.envOrBpsFromMultiplierX(
-                "DEPLOY_EXTREME_ENTER_TRIGGER_EMA_X", runtimeCfg.extremeEnterTriggerBps
+                "DEPLOY_EXTREME_ENTER_TRIGGER_EMA_X", runtimeCfg.cashToExtremeMinFlowBps
             );
-        cfg.upExtremeConfirmPeriods = strict
+        cfg.cashToExtremeConfirmPeriods = strict
             ? EnvLib.requireUint8("DEPLOY_ENTER_EXTREME_CONFIRM_PERIODS")
-            : EnvLib.envOrUint8("DEPLOY_ENTER_EXTREME_CONFIRM_PERIODS", runtimeCfg.upExtremeConfirmPeriods);
+            : EnvLib.envOrUint8(
+                "DEPLOY_ENTER_EXTREME_CONFIRM_PERIODS", runtimeCfg.cashToExtremeConfirmPeriods
+            );
         cfg.extremeHoldPeriods = strict
             ? EnvLib.requireUint8("DEPLOY_EXTREME_HOLD_PERIODS")
             : EnvLib.envOrUint8("DEPLOY_EXTREME_HOLD_PERIODS", runtimeCfg.extremeHoldPeriods);
-        cfg.extremeExitTriggerBps = strict
+        cfg.extremeToCashMaxFlowBps = strict
             ? EnvLib.requireBpsFromMultiplierX("DEPLOY_EXTREME_EXIT_TRIGGER_EMA_X")
             : EnvLib.envOrBpsFromMultiplierX(
-                "DEPLOY_EXTREME_EXIT_TRIGGER_EMA_X", runtimeCfg.extremeExitTriggerBps
+                "DEPLOY_EXTREME_EXIT_TRIGGER_EMA_X", runtimeCfg.extremeToCashMaxFlowBps
             );
-        cfg.downExtremeConfirmPeriods = strict
+        cfg.extremeToCashConfirmPeriods = strict
             ? EnvLib.requireUint8("DEPLOY_EXIT_EXTREME_CONFIRM_PERIODS")
-            : EnvLib.envOrUint8("DEPLOY_EXIT_EXTREME_CONFIRM_PERIODS", runtimeCfg.downExtremeConfirmPeriods);
-        cfg.cashExitTriggerBps = strict
+            : EnvLib.envOrUint8(
+                "DEPLOY_EXIT_EXTREME_CONFIRM_PERIODS", runtimeCfg.extremeToCashConfirmPeriods
+            );
+        cfg.cashToFloorMaxFlowBps = strict
             ? EnvLib.requireBpsFromMultiplierX("DEPLOY_CASH_EXIT_TRIGGER_EMA_X")
-            : EnvLib.envOrBpsFromMultiplierX("DEPLOY_CASH_EXIT_TRIGGER_EMA_X", runtimeCfg.cashExitTriggerBps);
-        cfg.downCashConfirmPeriods = strict
+            : EnvLib.envOrBpsFromMultiplierX(
+                "DEPLOY_CASH_EXIT_TRIGGER_EMA_X", runtimeCfg.cashToFloorMaxFlowBps
+            );
+        cfg.cashToFloorConfirmPeriods = strict
             ? EnvLib.requireUint8("DEPLOY_EXIT_CASH_CONFIRM_PERIODS")
-            : EnvLib.envOrUint8("DEPLOY_EXIT_CASH_CONFIRM_PERIODS", runtimeCfg.downCashConfirmPeriods);
-        cfg.emergencyFloorCloseVolUsd6 = strict
+            : EnvLib.envOrUint8(
+                "DEPLOY_EXIT_CASH_CONFIRM_PERIODS", runtimeCfg.cashToFloorConfirmPeriods
+            );
+        cfg.emergencyToFloorMaxCloseVolume = strict
             ? EnvLib.requireUsd6FromUsd("DEPLOY_EMERGENCY_FLOOR_TRIGGER_USD")
             : EnvLib.envOrUsd6FromUsd(
-                "DEPLOY_EMERGENCY_FLOOR_TRIGGER_USD", runtimeCfg.emergencyFloorCloseVolUsd6
+                "DEPLOY_EMERGENCY_FLOOR_TRIGGER_USD", runtimeCfg.emergencyToFloorMaxCloseVolume
             );
-        cfg.emergencyConfirmPeriods = strict
+        cfg.emergencyToFloorConfirmPeriods = strict
             ? EnvLib.requireUint8("DEPLOY_EMERGENCY_CONFIRM_PERIODS")
-            : EnvLib.envOrUint8("DEPLOY_EMERGENCY_CONFIRM_PERIODS", runtimeCfg.emergencyConfirmPeriods);
+            : EnvLib.envOrUint8(
+                "DEPLOY_EMERGENCY_CONFIRM_PERIODS", runtimeCfg.emergencyToFloorConfirmPeriods
+            );
     }
 
     function requireDeploymentBindingConsistency(

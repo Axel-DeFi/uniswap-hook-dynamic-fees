@@ -33,19 +33,19 @@ contract VolumeDynamicFeeHookConfigHarness is VolumeDynamicFeeHook {
         uint32 _lullResetSeconds,
         address ownerAddr,
         uint16 hookFeePercent,
-        uint64 _minCloseVolToCashUsd6,
-        uint16 _cashEnterTriggerBps,
+        uint64 _floorToCashMinCloseVolume,
+        uint16 _floorToCashMinFlowBps,
         uint8 _cashHoldPeriods,
-        uint64 _minCloseVolToExtremeUsd6,
-        uint16 _extremeEnterTriggerBps,
-        uint8 _upExtremeConfirmPeriods,
+        uint64 _cashToExtremeMinCloseVolume,
+        uint16 _cashToExtremeMinFlowBps,
+        uint8 _cashToExtremeConfirmPeriods,
         uint8 _extremeHoldPeriods,
-        uint16 _extremeExitTriggerBps,
-        uint8 _downExtremeConfirmPeriods,
-        uint16 _cashExitTriggerBps,
-        uint8 _downCashConfirmPeriods,
-        uint64 _emergencyFloorCloseVolUsd6,
-        uint8 _emergencyConfirmPeriods
+        uint16 _extremeToCashMaxFlowBps,
+        uint8 _extremeToCashConfirmPeriods,
+        uint16 _cashToFloorMaxFlowBps,
+        uint8 _cashToFloorConfirmPeriods,
+        uint64 _emergencyToFloorMaxCloseVolume,
+        uint8 _emergencyToFloorConfirmPeriods
     )
         VolumeDynamicFeeHook(
             _poolManager,
@@ -62,19 +62,19 @@ contract VolumeDynamicFeeHookConfigHarness is VolumeDynamicFeeHook {
             _lullResetSeconds,
             ownerAddr,
             hookFeePercent,
-            _minCloseVolToCashUsd6,
-            _cashEnterTriggerBps,
+            _floorToCashMinCloseVolume,
+            _floorToCashMinFlowBps,
             _cashHoldPeriods,
-            _minCloseVolToExtremeUsd6,
-            _extremeEnterTriggerBps,
-            _upExtremeConfirmPeriods,
+            _cashToExtremeMinCloseVolume,
+            _cashToExtremeMinFlowBps,
+            _cashToExtremeConfirmPeriods,
             _extremeHoldPeriods,
-            _extremeExitTriggerBps,
-            _downExtremeConfirmPeriods,
-            _cashExitTriggerBps,
-            _downCashConfirmPeriods,
-            _emergencyFloorCloseVolUsd6,
-            _emergencyConfirmPeriods
+            _extremeToCashMaxFlowBps,
+            _extremeToCashConfirmPeriods,
+            _cashToFloorMaxFlowBps,
+            _cashToFloorConfirmPeriods,
+            _emergencyToFloorMaxCloseVolume,
+            _emergencyToFloorConfirmPeriods
         )
     {}
 
@@ -107,8 +107,8 @@ contract VolumeDynamicFeeHookConfigAndEdgesTest is Test, VolumeDynamicFeeHookV2D
         uint32 lullResetSeconds;
         address owner;
         uint16 hookFeePercent;
-        uint64 emergencyFloorCloseVolUsd6;
-        uint8 emergencyConfirmPeriods;
+        uint64 emergencyToFloorMaxCloseVolume;
+        uint8 emergencyToFloorConfirmPeriods;
     }
 
     function setUp() public {
@@ -135,8 +135,8 @@ contract VolumeDynamicFeeHookConfigAndEdgesTest is Test, VolumeDynamicFeeHookV2D
             lullResetSeconds: LULL_RESET_SECONDS,
             owner: address(this),
             hookFeePercent: V2_INITIAL_HOOK_FEE_PERCENT,
-            emergencyFloorCloseVolUsd6: V2_EMERGENCY_FLOOR_TRIGGER_USD6,
-            emergencyConfirmPeriods: V2_EMERGENCY_CONFIRM_PERIODS
+            emergencyToFloorMaxCloseVolume: V2_EMERGENCY_TO_FLOOR_MAX_CLOSE_VOLUME,
+            emergencyToFloorConfirmPeriods: V2_EMERGENCY_TO_FLOOR_CONFIRM_PERIODS
         });
     }
 
@@ -156,19 +156,19 @@ contract VolumeDynamicFeeHookConfigAndEdgesTest is Test, VolumeDynamicFeeHookV2D
             cfg.lullResetSeconds,
             cfg.owner,
             cfg.hookFeePercent,
-            V2_MIN_VOLUME_TO_ENTER_CASH_USD6,
-            V2_CASH_ENTER_TRIGGER_BPS,
+            V2_FLOOR_TO_CASH_MIN_CLOSE_VOLUME,
+            V2_FLOOR_TO_CASH_MIN_FLOW_BPS,
             V2_CASH_HOLD_PERIODS,
-            V2_MIN_VOLUME_TO_ENTER_EXTREME_USD6,
-            V2_EXTREME_ENTER_TRIGGER_BPS,
-            V2_UP_EXTREME_CONFIRM_PERIODS,
+            V2_CASH_TO_EXTREME_MIN_CLOSE_VOLUME,
+            V2_CASH_TO_EXTREME_MIN_FLOW_BPS,
+            V2_CASH_TO_EXTREME_CONFIRM_PERIODS,
             V2_EXTREME_HOLD_PERIODS,
-            V2_EXTREME_EXIT_TRIGGER_BPS,
-            V2_DOWN_EXTREME_CONFIRM_PERIODS,
-            V2_CASH_EXIT_TRIGGER_BPS,
-            V2_DOWN_CASH_CONFIRM_PERIODS,
-            cfg.emergencyFloorCloseVolUsd6,
-            cfg.emergencyConfirmPeriods
+            V2_EXTREME_TO_CASH_MAX_FLOW_BPS,
+            V2_EXTREME_TO_CASH_CONFIRM_PERIODS,
+            V2_CASH_TO_FLOOR_MAX_FLOW_BPS,
+            V2_CASH_TO_FLOOR_CONFIRM_PERIODS,
+            cfg.emergencyToFloorMaxCloseVolume,
+            cfg.emergencyToFloorConfirmPeriods
         );
     }
 
@@ -211,19 +211,19 @@ contract VolumeDynamicFeeHookConfigAndEdgesTest is Test, VolumeDynamicFeeHookV2D
             cfg.lullResetSeconds,
             cfg.owner,
             cfg.hookFeePercent,
-            V2_MIN_VOLUME_TO_ENTER_CASH_USD6,
-            V2_CASH_ENTER_TRIGGER_BPS,
+            V2_FLOOR_TO_CASH_MIN_CLOSE_VOLUME,
+            V2_FLOOR_TO_CASH_MIN_FLOW_BPS,
             V2_CASH_HOLD_PERIODS,
-            V2_MIN_VOLUME_TO_ENTER_EXTREME_USD6,
-            V2_EXTREME_ENTER_TRIGGER_BPS,
-            V2_UP_EXTREME_CONFIRM_PERIODS,
+            V2_CASH_TO_EXTREME_MIN_CLOSE_VOLUME,
+            V2_CASH_TO_EXTREME_MIN_FLOW_BPS,
+            V2_CASH_TO_EXTREME_CONFIRM_PERIODS,
             V2_EXTREME_HOLD_PERIODS,
-            V2_EXTREME_EXIT_TRIGGER_BPS,
-            V2_DOWN_EXTREME_CONFIRM_PERIODS,
-            V2_CASH_EXIT_TRIGGER_BPS,
-            V2_DOWN_CASH_CONFIRM_PERIODS,
-            V2_EMERGENCY_FLOOR_TRIGGER_USD6,
-            V2_EMERGENCY_CONFIRM_PERIODS
+            V2_EXTREME_TO_CASH_MAX_FLOW_BPS,
+            V2_EXTREME_TO_CASH_CONFIRM_PERIODS,
+            V2_CASH_TO_FLOOR_MAX_FLOW_BPS,
+            V2_CASH_TO_FLOOR_CONFIRM_PERIODS,
+            V2_EMERGENCY_TO_FLOOR_MAX_CLOSE_VOLUME,
+            V2_EMERGENCY_TO_FLOOR_CONFIRM_PERIODS
         );
     }
 
@@ -274,7 +274,7 @@ contract VolumeDynamicFeeHookConfigAndEdgesTest is Test, VolumeDynamicFeeHookV2D
 
     function test_constructor_reverts_when_emergency_floor_threshold_is_zero() public {
         DeployCfg memory cfg = _defaultCfg();
-        cfg.emergencyFloorCloseVolUsd6 = 0;
+        cfg.emergencyToFloorMaxCloseVolume = 0;
 
         vm.expectRevert(VolumeDynamicFeeHook.InvalidConfig.selector);
         _deploy(cfg);
@@ -282,7 +282,7 @@ contract VolumeDynamicFeeHookConfigAndEdgesTest is Test, VolumeDynamicFeeHookV2D
 
     function test_constructor_reverts_when_emergency_floor_threshold_is_not_below_cash_threshold() public {
         DeployCfg memory cfg = _defaultCfg();
-        cfg.emergencyFloorCloseVolUsd6 = V2_MIN_VOLUME_TO_ENTER_CASH_USD6;
+        cfg.emergencyToFloorMaxCloseVolume = V2_FLOOR_TO_CASH_MIN_CLOSE_VOLUME;
 
         vm.expectRevert(VolumeDynamicFeeHook.InvalidConfig.selector);
         _deploy(cfg);
@@ -290,10 +290,10 @@ contract VolumeDynamicFeeHookConfigAndEdgesTest is Test, VolumeDynamicFeeHookV2D
 
     function test_constructor_accepts_positive_emergency_floor_threshold() public {
         DeployCfg memory cfg = _defaultCfg();
-        cfg.emergencyFloorCloseVolUsd6 = 1;
+        cfg.emergencyToFloorMaxCloseVolume = 1;
 
         VolumeDynamicFeeHookConfigHarness h = _deploy(cfg);
-        assertEq(h.emergencyFloorCloseVolUsd6(), 1);
+        assertEq(h.emergencyToFloorMaxCloseVolume(), 1);
     }
 
     function test_constructor_reverts_on_zero_owner() public {
@@ -378,40 +378,40 @@ contract VolumeDynamicFeeHookConfigAndEdgesTest is Test, VolumeDynamicFeeHookV2D
         hook.scheduleHookFeePercentChange(5);
     }
 
-    function test_scheduleMinCountedSwapUsd6_rejects_parallel_pending_update() public {
-        hook.scheduleMinCountedSwapUsd6Change(4_500_000);
+    function test_scheduleMinCountedSwapVolume_rejects_parallel_pending_update() public {
+        hook.scheduleMinCountedSwapVolumeChange(4_500_000);
 
-        vm.expectRevert(VolumeDynamicFeeHook.PendingMinCountedSwapUsd6ChangeExists.selector);
-        hook.scheduleMinCountedSwapUsd6Change(5_000_000);
+        vm.expectRevert(VolumeDynamicFeeHook.PendingMinCountedSwapVolumeChangeExists.selector);
+        hook.scheduleMinCountedSwapVolumeChange(5_000_000);
     }
 
-    function test_scheduleMinCountedSwapUsd6_reverts_below_min_bound() public {
-        vm.expectRevert(VolumeDynamicFeeHook.InvalidMinCountedSwapUsd6.selector);
-        hook.scheduleMinCountedSwapUsd6Change(999_999);
+    function test_scheduleMinCountedSwapVolume_reverts_below_min_bound() public {
+        vm.expectRevert(VolumeDynamicFeeHook.InvalidMinCountedSwapVolume.selector);
+        hook.scheduleMinCountedSwapVolumeChange(999_999);
     }
 
-    function test_scheduleMinCountedSwapUsd6_reverts_above_max_bound() public {
-        vm.expectRevert(VolumeDynamicFeeHook.InvalidMinCountedSwapUsd6.selector);
-        hook.scheduleMinCountedSwapUsd6Change(10_000_001);
+    function test_scheduleMinCountedSwapVolume_reverts_above_max_bound() public {
+        vm.expectRevert(VolumeDynamicFeeHook.InvalidMinCountedSwapVolume.selector);
+        hook.scheduleMinCountedSwapVolumeChange(10_000_001);
     }
 
-    function test_scheduleMinCountedSwapUsd6_accepts_range_bounds() public {
-        hook.scheduleMinCountedSwapUsd6Change(1_000_000);
-        (bool exists, uint64 nextValue) = hook.pendingMinCountedSwapUsd6Change();
+    function test_scheduleMinCountedSwapVolume_accepts_range_bounds() public {
+        hook.scheduleMinCountedSwapVolumeChange(1_000_000);
+        (bool exists, uint64 nextValue) = hook.pendingMinCountedSwapVolumeChange();
         assertTrue(exists);
         assertEq(nextValue, 1_000_000);
 
-        hook.cancelMinCountedSwapUsd6Change();
+        hook.cancelMinCountedSwapVolumeChange();
 
-        hook.scheduleMinCountedSwapUsd6Change(10_000_000);
-        (exists, nextValue) = hook.pendingMinCountedSwapUsd6Change();
+        hook.scheduleMinCountedSwapVolumeChange(10_000_000);
+        (exists, nextValue) = hook.pendingMinCountedSwapVolumeChange();
         assertTrue(exists);
         assertEq(nextValue, 10_000_000);
     }
 
-    function test_default_minCountedSwapUsd6_is_4e6() public view {
-        assertEq(hook.minCountedSwapUsd6(), 4_000_000);
-        assertEq(hook.minCountedSwapUsd6(), hook.DEFAULT_MIN_COUNTED_SWAP_USD6());
+    function test_default_minCountedSwapVolume_is_4e6() public view {
+        assertEq(hook.minCountedSwapVolume(), 4_000_000);
+        assertEq(hook.minCountedSwapVolume(), hook.DEFAULT_MIN_COUNTED_SWAP_VOLUME());
     }
 
     function test_modeFees_are_exposed_explicitly() public view {

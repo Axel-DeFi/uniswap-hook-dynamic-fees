@@ -102,12 +102,12 @@ Monitoring must consume `EmergencyResetToFloorApplied` / `EmergencyResetToCashAp
 
 ## Dust threshold operations
 
-`minCountedSwapUsd6` is telemetry-only filtering and never blocks swaps.
+`minCountedSwapVolume` is telemetry-only filtering and never blocks swaps.
 Range for updates is `1e6..10e6`; default is `$4 / 4e6` (selected from observed v1 telemetry).
 
 Flow:
-1. `scheduleMinCountedSwapUsd6Change(value)`
-2. optional `cancelMinCountedSwapUsd6Change()`
+1. `scheduleMinCountedSwapVolumeChange(value)`
+2. optional `cancelMinCountedSwapVolumeChange()`
 3. activation happens automatically at next period boundary.
 
 Notes:
@@ -126,13 +126,13 @@ Notes:
   current release and the frozen `ops/local/config/deploy.env` constructor snapshot; current runtime/admin
   expectations come from `ops/local/config/defaults.env` only when explicitly overridden, otherwise they inherit the
   frozen snapshot. Reuse also requires the exact minimal callback surface, exact PoolManager binding, current
-  `minCountedSwapUsd6`, and zero pending owner / pending config changes.
+  `minCountedSwapVolume`, and zero pending owner / pending config changes.
 - `deploy.env` is loaded after scenario overlays and root `.env`, so `DEPLOY_*` keys remain the winning constructor
   snapshot even when runtime env overlays are used.
 
 Controller safety note:
-- `emergencyFloorCloseVolUsd6` must remain strictly greater than zero.
-- `emergencyFloorCloseVolUsd6` must remain strictly less than `minCloseVolToCashUsd6`.
+- `emergencyToFloorMaxCloseVolume` must remain strictly greater than zero.
+- `emergencyToFloorMaxCloseVolume` must remain strictly less than `floorToCashMinCloseVolume`.
 - Hold semantics are `N -> N - 1`; production guidance is `cashHoldPeriods >= 2`, `extremeHoldPeriods >= 2` (recommended `3..4`).
 - Non-local deploy/preflight paths block weak hold configs by default; explicit override: `ALLOW_WEAK_HOLD_PERIODS=1`.
 

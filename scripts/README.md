@@ -97,7 +97,7 @@ Primary artifacts:
   explicit runtime overrides.
 - `pause()`/`unpause()` are freeze/resume semantics (not swap stop, not HookFee stop).
 - Emergency resets are paused-only and explicit (`toFloor` / `toCash`).
-- `minCountedSwapUsd6` is telemetry-only dust filtering, not a swap gate.
+- `minCountedSwapVolume` is telemetry-only dust filtering, not a swap gate.
 - Default telemetry dust threshold is `$4 / 4e6` (selected from observed v1 telemetry).
 - Threshold updates are pending-state only, bounded to `1e6..10e6`, and activate at next period boundary.
 - Threshold updates intentionally have no timelock; recalibration target cadence is 5 days offchain.
@@ -112,14 +112,15 @@ Primary artifacts:
   `ops/<network>/config/defaults.env`. Reuse requires the exact minimal callback surface (`afterInitialize`,
   `afterSwap`, `afterSwapReturnDelta` only), and requires full config identity match plus exact PoolManager binding
   and zero pending state:
-  `owner()`, no `pendingOwner()`, stable decimals mode, current `minCountedSwapUsd6()`, fees, HookFee percent,
+  `owner()`, no `pendingOwner()`, stable decimals mode, current `minCountedSwapVolume()`, fees, HookFee percent,
   timing params, controller params, and no pending HookFee / min-counted-swap changes.
 - Auxiliary scripts resolve network defaults from `ops/<network>/config/defaults.env` and live addresses from
   `ops/<network>/out/state/<network>.addresses.json`.
 - Ownership transfer (`proposeNewOwner` -> `acceptOwner`) automatically moves payout destination without extra sync calls.
 - `approxLpFeesUsd6` is approximate analytics, not accounting output.
 - Pool key uses strict dynamic fee flag matching (`key.fee == LPFeeLibrary.DYNAMIC_FEE_FLAG`).
-- `emergencyFloorCloseVolUsd6` must satisfy `0 < emergencyFloorCloseVolUsd6 < minCloseVolToCashUsd6`.
+- `emergencyToFloorMaxCloseVolume` must satisfy
+  `0 < emergencyToFloorMaxCloseVolume < floorToCashMinCloseVolume`.
 - Hold semantics are `N -> N - 1` effective protected periods; production guidance is
   `CASH_HOLD_PERIODS >= 2` and `EXTREME_HOLD_PERIODS >= 2` (recommended `3..4`).
 - Non-local deploy/ensure/preflight guardrails block weak hold configs by default; explicit override:

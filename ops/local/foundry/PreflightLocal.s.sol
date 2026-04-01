@@ -99,27 +99,27 @@ contract PreflightLocal is Script {
         if (hookValidation.ok) {
             bool hookIsDeployed = cfg.hookAddress != address(0) && cfg.hookAddress.code.length > 0;
 
-            uint64 minCloseVolToCashUsd6;
-            uint64 emergencyFloorCloseVolUsd6;
+            uint64 floorToCashMinCloseVolume;
+            uint64 emergencyToFloorMaxCloseVolume;
             uint8 cashHoldPeriods;
             uint8 extremeHoldPeriods;
 
             if (hookIsDeployed) {
                 VolumeDynamicFeeHook h = VolumeDynamicFeeHook(payable(cfg.hookAddress));
-                minCloseVolToCashUsd6 = h.minCloseVolToCashUsd6();
-                emergencyFloorCloseVolUsd6 = h.emergencyFloorCloseVolUsd6();
+                floorToCashMinCloseVolume = h.floorToCashMinCloseVolume();
+                emergencyToFloorMaxCloseVolume = h.emergencyToFloorMaxCloseVolume();
                 cashHoldPeriods = h.cashHoldPeriods();
                 extremeHoldPeriods = h.extremeHoldPeriods();
             } else {
-                minCloseVolToCashUsd6 = cfg.minCloseVolToCashUsd6;
-                emergencyFloorCloseVolUsd6 = cfg.emergencyFloorCloseVolUsd6;
+                floorToCashMinCloseVolume = cfg.floorToCashMinCloseVolume;
+                emergencyToFloorMaxCloseVolume = cfg.emergencyToFloorMaxCloseVolume;
                 cashHoldPeriods = cfg.cashHoldPeriods;
                 extremeHoldPeriods = cfg.extremeHoldPeriods;
             }
 
             if (
-                emergencyFloorCloseVolUsd6 == 0
-                    || emergencyFloorCloseVolUsd6 >= minCloseVolToCashUsd6
+                emergencyToFloorMaxCloseVolume == 0
+                    || emergencyToFloorMaxCloseVolume >= floorToCashMinCloseVolume
             ) {
                 hookValidation.ok = false;
                 hookValidation.reason = "invalid emergency floor relation (require 0 < emergency < minCloseToCash)";

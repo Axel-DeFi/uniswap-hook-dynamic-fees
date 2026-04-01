@@ -61,7 +61,7 @@ contract PermissionSurfaceHookMock {
         return address(0);
     }
 
-    function minCountedSwapUsd6() external pure returns (uint64) {
+    function minCountedSwapVolume() external pure returns (uint64) {
         return 4_000_000;
     }
 
@@ -69,7 +69,7 @@ contract PermissionSurfaceHookMock {
         return (false, 0, 0);
     }
 
-    function pendingMinCountedSwapUsd6Change() external pure returns (bool, uint64) {
+    function pendingMinCountedSwapVolumeChange() external pure returns (bool, uint64) {
         return (false, 0);
     }
 
@@ -97,27 +97,27 @@ contract PermissionSurfaceHookMock {
         return 3600;
     }
 
-    function minCloseVolToCashUsd6() external pure returns (uint64) {
-        return 1_000 * 1e6;
+    function floorToCashMinCloseVolume() external pure returns (uint64) {
+        return 400 * 1e6;
     }
 
-    function cashEnterTriggerBps() external pure returns (uint16) {
-        return 18_000;
+    function floorToCashMinFlowBps() external pure returns (uint16) {
+        return 13_500;
     }
 
     function cashHoldPeriods() external pure returns (uint8) {
         return 4;
     }
 
-    function minCloseVolToExtremeUsd6() external pure returns (uint64) {
-        return 4_000 * 1e6;
+    function cashToExtremeMinCloseVolume() external pure returns (uint64) {
+        return 2_500 * 1e6;
     }
 
-    function extremeEnterTriggerBps() external pure returns (uint16) {
-        return 40_000;
+    function cashToExtremeMinFlowBps() external pure returns (uint16) {
+        return 41_000;
     }
 
-    function upExtremeConfirmPeriods() external pure returns (uint8) {
+    function cashToExtremeConfirmPeriods() external pure returns (uint8) {
         return 2;
     }
 
@@ -125,28 +125,28 @@ contract PermissionSurfaceHookMock {
         return 4;
     }
 
-    function extremeExitTriggerBps() external pure returns (uint16) {
-        return 13_000;
+    function extremeToCashMaxFlowBps() external pure returns (uint16) {
+        return 12_000;
     }
 
-    function downExtremeConfirmPeriods() external pure returns (uint8) {
+    function extremeToCashConfirmPeriods() external pure returns (uint8) {
         return 2;
     }
 
-    function cashExitTriggerBps() external pure returns (uint16) {
-        return 13_000;
+    function cashToFloorMaxFlowBps() external pure returns (uint16) {
+        return 12_000;
     }
 
-    function downCashConfirmPeriods() external pure returns (uint8) {
+    function cashToFloorConfirmPeriods() external pure returns (uint8) {
         return 3;
     }
 
-    function emergencyFloorCloseVolUsd6() external pure returns (uint64) {
-        return 600 * 1e6;
+    function emergencyToFloorMaxCloseVolume() external pure returns (uint64) {
+        return 100 * 1e6;
     }
 
-    function emergencyConfirmPeriods() external pure returns (uint8) {
-        return 3;
+    function emergencyToFloorConfirmPeriods() external pure returns (uint8) {
+        return 6;
     }
 }
 
@@ -166,19 +166,19 @@ contract HookValidationHarness is VolumeDynamicFeeHook {
         uint32 _lullResetSeconds,
         address ownerAddr,
         uint16 hookFeePercent,
-        uint64 _minCloseVolToCashUsd6,
-        uint16 _cashEnterTriggerBps,
+        uint64 _floorToCashMinCloseVolume,
+        uint16 _floorToCashMinFlowBps,
         uint8 _cashHoldPeriods,
-        uint64 _minCloseVolToExtremeUsd6,
-        uint16 _extremeEnterTriggerBps,
-        uint8 _upExtremeConfirmPeriods,
+        uint64 _cashToExtremeMinCloseVolume,
+        uint16 _cashToExtremeMinFlowBps,
+        uint8 _cashToExtremeConfirmPeriods,
         uint8 _extremeHoldPeriods,
-        uint16 _extremeExitTriggerBps,
-        uint8 _downExtremeConfirmPeriods,
-        uint16 _cashExitTriggerBps,
-        uint8 _downCashConfirmPeriods,
-        uint64 _emergencyFloorCloseVolUsd6,
-        uint8 _emergencyConfirmPeriods
+        uint16 _extremeToCashMaxFlowBps,
+        uint8 _extremeToCashConfirmPeriods,
+        uint16 _cashToFloorMaxFlowBps,
+        uint8 _cashToFloorConfirmPeriods,
+        uint64 _emergencyToFloorMaxCloseVolume,
+        uint8 _emergencyToFloorConfirmPeriods
     )
         VolumeDynamicFeeHook(
             _poolManager,
@@ -195,19 +195,19 @@ contract HookValidationHarness is VolumeDynamicFeeHook {
             _lullResetSeconds,
             ownerAddr,
             hookFeePercent,
-            _minCloseVolToCashUsd6,
-            _cashEnterTriggerBps,
+            _floorToCashMinCloseVolume,
+            _floorToCashMinFlowBps,
             _cashHoldPeriods,
-            _minCloseVolToExtremeUsd6,
-            _extremeEnterTriggerBps,
-            _upExtremeConfirmPeriods,
+            _cashToExtremeMinCloseVolume,
+            _cashToExtremeMinFlowBps,
+            _cashToExtremeConfirmPeriods,
             _extremeHoldPeriods,
-            _extremeExitTriggerBps,
-            _downExtremeConfirmPeriods,
-            _cashExitTriggerBps,
-            _downCashConfirmPeriods,
-            _emergencyFloorCloseVolUsd6,
-            _emergencyConfirmPeriods
+            _extremeToCashMaxFlowBps,
+            _extremeToCashConfirmPeriods,
+            _cashToFloorMaxFlowBps,
+            _cashToFloorConfirmPeriods,
+            _emergencyToFloorMaxCloseVolume,
+            _emergencyToFloorConfirmPeriods
         )
     {}
 
@@ -295,7 +295,7 @@ contract HookValidationLibTest is Test, VolumeDynamicFeeHookV2DeployHelper {
         HookValidationHarness hook = _deploy(address(this), 6, V2_INITIAL_HOOK_FEE_PERCENT);
         OpsTypes.CoreConfig memory cfg =
             _matchingCfg(address(hook), address(this), 6, V2_INITIAL_HOOK_FEE_PERCENT);
-        cfg.minCountedSwapUsd6 = 1_500_000;
+        cfg.minCountedSwapVolume = 1_500_000;
 
         OpsTypes.HookValidation memory validation = HookValidationLib.validateHook(cfg);
         assertFalse(validation.ok);
@@ -315,7 +315,7 @@ contract HookValidationLibTest is Test, VolumeDynamicFeeHookV2DeployHelper {
 
     function test_validateHook_rejects_pending_minCountedSwap_change() public {
         HookValidationHarness hook = _deploy(address(this), 6, V2_INITIAL_HOOK_FEE_PERCENT);
-        hook.scheduleMinCountedSwapUsd6Change(1_500_000);
+        hook.scheduleMinCountedSwapVolumeChange(1_500_000);
 
         OpsTypes.CoreConfig memory cfg =
             _matchingCfg(address(hook), address(this), 6, V2_INITIAL_HOOK_FEE_PERCENT);
@@ -410,19 +410,19 @@ contract HookValidationLibTest is Test, VolumeDynamicFeeHookV2DeployHelper {
             LULL_RESET_SECONDS,
             owner_,
             hookFeePercent_,
-            V2_MIN_VOLUME_TO_ENTER_CASH_USD6,
-            V2_CASH_ENTER_TRIGGER_BPS,
+            V2_FLOOR_TO_CASH_MIN_CLOSE_VOLUME,
+            V2_FLOOR_TO_CASH_MIN_FLOW_BPS,
             V2_CASH_HOLD_PERIODS,
-            V2_MIN_VOLUME_TO_ENTER_EXTREME_USD6,
-            V2_EXTREME_ENTER_TRIGGER_BPS,
-            V2_UP_EXTREME_CONFIRM_PERIODS,
+            V2_CASH_TO_EXTREME_MIN_CLOSE_VOLUME,
+            V2_CASH_TO_EXTREME_MIN_FLOW_BPS,
+            V2_CASH_TO_EXTREME_CONFIRM_PERIODS,
             V2_EXTREME_HOLD_PERIODS,
-            V2_EXTREME_EXIT_TRIGGER_BPS,
-            V2_DOWN_EXTREME_CONFIRM_PERIODS,
-            V2_CASH_EXIT_TRIGGER_BPS,
-            V2_DOWN_CASH_CONFIRM_PERIODS,
-            V2_EMERGENCY_FLOOR_TRIGGER_USD6,
-            V2_EMERGENCY_CONFIRM_PERIODS
+            V2_EXTREME_TO_CASH_MAX_FLOW_BPS,
+            V2_EXTREME_TO_CASH_CONFIRM_PERIODS,
+            V2_CASH_TO_FLOOR_MAX_FLOW_BPS,
+            V2_CASH_TO_FLOOR_CONFIRM_PERIODS,
+            V2_EMERGENCY_TO_FLOOR_MAX_CLOSE_VOLUME,
+            V2_EMERGENCY_TO_FLOOR_CONFIRM_PERIODS
         );
     }
 
@@ -454,19 +454,19 @@ contract HookValidationLibTest is Test, VolumeDynamicFeeHookV2DeployHelper {
         cfg.emaPeriods = EMA_PERIODS;
         cfg.lullResetSeconds = LULL_RESET_SECONDS;
         cfg.hookFeePercent = hookFeePercent_;
-        cfg.minCountedSwapUsd6 = 4_000_000;
-        cfg.minCloseVolToCashUsd6 = V2_MIN_VOLUME_TO_ENTER_CASH_USD6;
-        cfg.cashEnterTriggerBps = V2_CASH_ENTER_TRIGGER_BPS;
+        cfg.minCountedSwapVolume = 4_000_000;
+        cfg.floorToCashMinCloseVolume = V2_FLOOR_TO_CASH_MIN_CLOSE_VOLUME;
+        cfg.floorToCashMinFlowBps = V2_FLOOR_TO_CASH_MIN_FLOW_BPS;
         cfg.cashHoldPeriods = V2_CASH_HOLD_PERIODS;
-        cfg.minCloseVolToExtremeUsd6 = V2_MIN_VOLUME_TO_ENTER_EXTREME_USD6;
-        cfg.extremeEnterTriggerBps = V2_EXTREME_ENTER_TRIGGER_BPS;
-        cfg.upExtremeConfirmPeriods = V2_UP_EXTREME_CONFIRM_PERIODS;
+        cfg.cashToExtremeMinCloseVolume = V2_CASH_TO_EXTREME_MIN_CLOSE_VOLUME;
+        cfg.cashToExtremeMinFlowBps = V2_CASH_TO_EXTREME_MIN_FLOW_BPS;
+        cfg.cashToExtremeConfirmPeriods = V2_CASH_TO_EXTREME_CONFIRM_PERIODS;
         cfg.extremeHoldPeriods = V2_EXTREME_HOLD_PERIODS;
-        cfg.extremeExitTriggerBps = V2_EXTREME_EXIT_TRIGGER_BPS;
-        cfg.downExtremeConfirmPeriods = V2_DOWN_EXTREME_CONFIRM_PERIODS;
-        cfg.cashExitTriggerBps = V2_CASH_EXIT_TRIGGER_BPS;
-        cfg.downCashConfirmPeriods = V2_DOWN_CASH_CONFIRM_PERIODS;
-        cfg.emergencyFloorCloseVolUsd6 = V2_EMERGENCY_FLOOR_TRIGGER_USD6;
-        cfg.emergencyConfirmPeriods = V2_EMERGENCY_CONFIRM_PERIODS;
+        cfg.extremeToCashMaxFlowBps = V2_EXTREME_TO_CASH_MAX_FLOW_BPS;
+        cfg.extremeToCashConfirmPeriods = V2_EXTREME_TO_CASH_CONFIRM_PERIODS;
+        cfg.cashToFloorMaxFlowBps = V2_CASH_TO_FLOOR_MAX_FLOW_BPS;
+        cfg.cashToFloorConfirmPeriods = V2_CASH_TO_FLOOR_CONFIRM_PERIODS;
+        cfg.emergencyToFloorMaxCloseVolume = V2_EMERGENCY_TO_FLOOR_MAX_CLOSE_VOLUME;
+        cfg.emergencyToFloorConfirmPeriods = V2_EMERGENCY_TO_FLOOR_CONFIRM_PERIODS;
     }
 }

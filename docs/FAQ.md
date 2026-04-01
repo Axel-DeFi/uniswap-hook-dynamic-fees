@@ -64,7 +64,8 @@ Non-local deploy/preflight guardrails block weak hold configs by default unless 
 
 Yes.
 The automatic emergency floor trigger is evaluated before hold protection checks during normal unpaused runtime operation.
-If consecutive closed periods stay below `emergencyFloorCloseVolUsd6` long enough to satisfy `emergencyConfirmPeriods`,
+If consecutive closed periods stay below `emergencyToFloorMaxCloseVolume` long enough to satisfy
+`emergencyToFloorConfirmPeriods`,
 the controller resets to `FLOOR` even when `holdRemaining > 0`.
 
 ## Can one swap close multiple overdue periods?
@@ -83,7 +84,7 @@ Only when paused and explicit reset is required:
 Operationally, `emergencyResetToCash()` is typically preferred default.
 Monitoring should track emergency reset events directly, not only fee update events.
 
-## What is `minCountedSwapUsd6`?
+## What is `minCountedSwapVolume`?
 
 A telemetry dust filter:
 - swaps below threshold are excluded from period volume statistics,
@@ -144,12 +145,12 @@ exposes the exact minimal callback surface, and matches the expected config iden
 - `owner()`,
 - no `pendingOwner()`,
 - configured stable decimals mode,
-- current `minCountedSwapUsd6()`,
+- current `minCountedSwapVolume()`,
 - mode fees,
 - `hookFeePercent`,
 - timing params,
 - controller params,
-- and no pending `HookFeePercent` / `minCountedSwapUsd6` changes.
+- and no pending `HookFeePercent` / `minCountedSwapVolume` changes.
 
 ## Is wash-trading fully prevented onchain?
 
@@ -180,5 +181,5 @@ To avoid accidental ETH transfers into hook accounting. ETH movement is explicit
 
 ## Can emergency floor threshold be zero?
 
-No. `emergencyFloorCloseVolUsd6` must be strictly greater than zero in constructor and paused config updates.
-It must also stay strictly below `minCloseVolToCashUsd6`.
+No. `emergencyToFloorMaxCloseVolume` must be strictly greater than zero in constructor and paused config updates.
+It must also stay strictly below `floorToCashMinCloseVolume`.
