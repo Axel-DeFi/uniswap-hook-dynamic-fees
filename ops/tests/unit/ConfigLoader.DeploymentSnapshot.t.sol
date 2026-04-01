@@ -155,20 +155,20 @@ contract ConfigLoaderDeploymentSnapshotTest is Test {
         vm.setEnv("EMA_PERIODS", "16");
         vm.setEnv("LULL_RESET_SECONDS", "7200");
         vm.setEnv("HOOK_FEE_PERCENT", "3");
-        vm.setEnv("MIN_COUNTED_SWAP_USD6", "4000000");
-        vm.setEnv("MIN_VOLUME_TO_ENTER_CASH_USD", "1500");
-        vm.setEnv("CASH_ENTER_TRIGGER_EMA_X", "2.02");
+        vm.setEnv("MIN_COUNTED_SWAP_VOLUME", "4000000");
+        vm.setEnv("FLOOR_TO_CASH_MIN_CLOSE_VOLUME", "1500000000");
+        vm.setEnv("FLOOR_TO_CASH_MIN_FLOW_EMA_X", "2.02");
         vm.setEnv("CASH_HOLD_PERIODS", "5");
-        vm.setEnv("MIN_VOLUME_TO_ENTER_EXTREME_USD", "4500");
-        vm.setEnv("EXTREME_ENTER_TRIGGER_EMA_X", "4.32");
-        vm.setEnv("ENTER_EXTREME_CONFIRM_PERIODS", "3");
+        vm.setEnv("CASH_TO_EXTREME_MIN_CLOSE_VOLUME", "4500000000");
+        vm.setEnv("CASH_TO_EXTREME_MIN_FLOW_EMA_X", "4.32");
+        vm.setEnv("CASH_TO_EXTREME_CONFIRM_PERIODS", "3");
         vm.setEnv("EXTREME_HOLD_PERIODS", "5");
-        vm.setEnv("EXTREME_EXIT_TRIGGER_EMA_X", "1.28");
-        vm.setEnv("EXIT_EXTREME_CONFIRM_PERIODS", "3");
-        vm.setEnv("CASH_EXIT_TRIGGER_EMA_X", "1.28");
-        vm.setEnv("EXIT_CASH_CONFIRM_PERIODS", "4");
-        vm.setEnv("EMERGENCY_FLOOR_TRIGGER_USD", "700");
-        vm.setEnv("EMERGENCY_CONFIRM_PERIODS", "4");
+        vm.setEnv("EXTREME_TO_CASH_MAX_FLOW_EMA_X", "1.28");
+        vm.setEnv("EXTREME_TO_CASH_CONFIRM_PERIODS", "3");
+        vm.setEnv("CASH_TO_FLOOR_MAX_FLOW_EMA_X", "1.28");
+        vm.setEnv("CASH_TO_FLOOR_CONFIRM_PERIODS", "4");
+        vm.setEnv("EMERGENCY_TO_FLOOR_MAX_CLOSE_VOLUME", "700000000");
+        vm.setEnv("EMERGENCY_TO_FLOOR_CONFIRM_PERIODS", "4");
 
         _setBaseDeployEnv();
     }
@@ -192,18 +192,18 @@ contract ConfigLoaderDeploymentSnapshotTest is Test {
         vm.setEnv("DEPLOY_EMA_PERIODS", "8");
         vm.setEnv("DEPLOY_LULL_RESET_SECONDS", "3600");
         vm.setEnv("DEPLOY_HOOK_FEE_PERCENT", "1");
-        vm.setEnv("DEPLOY_MIN_VOLUME_TO_ENTER_CASH_USD", "1000");
-        vm.setEnv("DEPLOY_CASH_ENTER_TRIGGER_EMA_X", "1.85");
+        vm.setEnv("DEPLOY_FLOOR_TO_CASH_MIN_CLOSE_VOLUME", "1000000000");
+        vm.setEnv("DEPLOY_FLOOR_TO_CASH_MIN_FLOW_EMA_X", "1.85");
         vm.setEnv("DEPLOY_CASH_HOLD_PERIODS", "4");
-        vm.setEnv("DEPLOY_MIN_VOLUME_TO_ENTER_EXTREME_USD", "4000");
-        vm.setEnv("DEPLOY_EXTREME_ENTER_TRIGGER_EMA_X", "4.05");
-        vm.setEnv("DEPLOY_ENTER_EXTREME_CONFIRM_PERIODS", "2");
+        vm.setEnv("DEPLOY_CASH_TO_EXTREME_MIN_CLOSE_VOLUME", "4000000000");
+        vm.setEnv("DEPLOY_CASH_TO_EXTREME_MIN_FLOW_EMA_X", "4.05");
+        vm.setEnv("DEPLOY_CASH_TO_EXTREME_CONFIRM_PERIODS", "2");
         vm.setEnv("DEPLOY_EXTREME_HOLD_PERIODS", "4");
-        vm.setEnv("DEPLOY_EXTREME_EXIT_TRIGGER_EMA_X", "1.25");
-        vm.setEnv("DEPLOY_EXIT_EXTREME_CONFIRM_PERIODS", "2");
-        vm.setEnv("DEPLOY_CASH_EXIT_TRIGGER_EMA_X", "1.25");
-        vm.setEnv("DEPLOY_EXIT_CASH_CONFIRM_PERIODS", "3");
-        vm.setEnv("DEPLOY_EMERGENCY_FLOOR_TRIGGER_USD", "600");
-        vm.setEnv("DEPLOY_EMERGENCY_CONFIRM_PERIODS", "3");
+        vm.setEnv("DEPLOY_EXTREME_TO_CASH_MAX_FLOW_EMA_X", "1.25");
+        vm.setEnv("DEPLOY_EXTREME_TO_CASH_CONFIRM_PERIODS", "2");
+        vm.setEnv("DEPLOY_CASH_TO_FLOOR_MAX_FLOW_EMA_X", "1.25");
+        vm.setEnv("DEPLOY_CASH_TO_FLOOR_CONFIRM_PERIODS", "3");
+        vm.setEnv("DEPLOY_EMERGENCY_TO_FLOOR_MAX_CLOSE_VOLUME", "600000000");
+        vm.setEnv("DEPLOY_EMERGENCY_TO_FLOOR_CONFIRM_PERIODS", "3");
     }
 }

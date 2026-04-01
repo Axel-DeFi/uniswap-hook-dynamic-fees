@@ -7,38 +7,38 @@ contract OptimismConfigFilesTest is Test {
     function test_optimism_deploy_env_has_target_redeploy_profile() public view {
         string memory text = vm.readFile("ops/optimism/config/deploy.env");
 
-        _assertContains(text, "DEPLOY_MIN_VOLUME_TO_ENTER_CASH_USD=400");
-        _assertContains(text, "DEPLOY_CASH_ENTER_TRIGGER_EMA_X=1.35");
+        _assertContains(text, "DEPLOY_FLOOR_TO_CASH_MIN_CLOSE_VOLUME=400000000");
+        _assertContains(text, "DEPLOY_FLOOR_TO_CASH_MIN_FLOW_EMA_X=1.35");
         _assertContains(text, "DEPLOY_CASH_HOLD_PERIODS=2");
-        _assertContains(text, "DEPLOY_MIN_VOLUME_TO_ENTER_EXTREME_USD=2500");
-        _assertContains(text, "DEPLOY_EXTREME_ENTER_TRIGGER_EMA_X=4.10");
-        _assertContains(text, "DEPLOY_ENTER_EXTREME_CONFIRM_PERIODS=2");
+        _assertContains(text, "DEPLOY_CASH_TO_EXTREME_MIN_CLOSE_VOLUME=2500000000");
+        _assertContains(text, "DEPLOY_CASH_TO_EXTREME_MIN_FLOW_EMA_X=4.10");
+        _assertContains(text, "DEPLOY_CASH_TO_EXTREME_CONFIRM_PERIODS=2");
         _assertContains(text, "DEPLOY_EXTREME_HOLD_PERIODS=2");
-        _assertContains(text, "DEPLOY_EXTREME_EXIT_TRIGGER_EMA_X=1.20");
-        _assertContains(text, "DEPLOY_EXIT_EXTREME_CONFIRM_PERIODS=2");
-        _assertContains(text, "DEPLOY_CASH_EXIT_TRIGGER_EMA_X=1.20");
-        _assertContains(text, "DEPLOY_EXIT_CASH_CONFIRM_PERIODS=3");
-        _assertContains(text, "DEPLOY_EMERGENCY_FLOOR_TRIGGER_USD=100");
-        _assertContains(text, "DEPLOY_EMERGENCY_CONFIRM_PERIODS=6");
+        _assertContains(text, "DEPLOY_EXTREME_TO_CASH_MAX_FLOW_EMA_X=1.20");
+        _assertContains(text, "DEPLOY_EXTREME_TO_CASH_CONFIRM_PERIODS=2");
+        _assertContains(text, "DEPLOY_CASH_TO_FLOOR_MAX_FLOW_EMA_X=1.20");
+        _assertContains(text, "DEPLOY_CASH_TO_FLOOR_CONFIRM_PERIODS=3");
+        _assertContains(text, "DEPLOY_EMERGENCY_TO_FLOOR_MAX_CLOSE_VOLUME=100000000");
+        _assertContains(text, "DEPLOY_EMERGENCY_TO_FLOOR_CONFIRM_PERIODS=6");
     }
 
     function test_optimism_defaults_env_has_runtime_expectations_for_target_profile() public view {
         string memory text = vm.readFile("ops/optimism/config/defaults.env");
 
-        _assertContains(text, "MIN_COUNTED_SWAP_USD6=4000000");
-        _assertContains(text, "MIN_VOLUME_TO_ENTER_CASH_USD=400");
-        _assertContains(text, "CASH_ENTER_TRIGGER_EMA_X=1.35");
+        _assertContains(text, "MIN_COUNTED_SWAP_VOLUME=4000000");
+        _assertContains(text, "FLOOR_TO_CASH_MIN_CLOSE_VOLUME=400000000");
+        _assertContains(text, "FLOOR_TO_CASH_MIN_FLOW_EMA_X=1.35");
         _assertContains(text, "CASH_HOLD_PERIODS=2");
-        _assertContains(text, "MIN_VOLUME_TO_ENTER_EXTREME_USD=2500");
-        _assertContains(text, "EXTREME_ENTER_TRIGGER_EMA_X=4.10");
-        _assertContains(text, "ENTER_EXTREME_CONFIRM_PERIODS=2");
+        _assertContains(text, "CASH_TO_EXTREME_MIN_CLOSE_VOLUME=2500000000");
+        _assertContains(text, "CASH_TO_EXTREME_MIN_FLOW_EMA_X=4.10");
+        _assertContains(text, "CASH_TO_EXTREME_CONFIRM_PERIODS=2");
         _assertContains(text, "EXTREME_HOLD_PERIODS=2");
-        _assertContains(text, "EXTREME_EXIT_TRIGGER_EMA_X=1.20");
-        _assertContains(text, "EXIT_EXTREME_CONFIRM_PERIODS=2");
-        _assertContains(text, "CASH_EXIT_TRIGGER_EMA_X=1.20");
-        _assertContains(text, "EXIT_CASH_CONFIRM_PERIODS=3");
-        _assertContains(text, "EMERGENCY_FLOOR_TRIGGER_USD=100");
-        _assertContains(text, "EMERGENCY_CONFIRM_PERIODS=6");
+        _assertContains(text, "EXTREME_TO_CASH_MAX_FLOW_EMA_X=1.20");
+        _assertContains(text, "EXTREME_TO_CASH_CONFIRM_PERIODS=2");
+        _assertContains(text, "CASH_TO_FLOOR_MAX_FLOW_EMA_X=1.20");
+        _assertContains(text, "CASH_TO_FLOOR_CONFIRM_PERIODS=3");
+        _assertContains(text, "EMERGENCY_TO_FLOOR_MAX_CLOSE_VOLUME=100000000");
+        _assertContains(text, "EMERGENCY_TO_FLOOR_CONFIRM_PERIODS=6");
     }
 
     function test_show_hook_config_uses_new_controller_names() public view {

@@ -56,26 +56,27 @@ Stable-token decimals resolution:
 ## Timing / controller
 
 Human-readable units for controller keys:
-- `*_TRIGGER_EMA_X` keys use the close-volume trigger as a multiple of EMA. Example: `1.25` means `1.25x EMA`.
-- dollar keys use literal USD amounts per closed period. Example: `1000` means `$1,000`, `0.50` means `$0.50`.
+- `*_FLOW_EMA_X` keys use the close-volume trigger as a multiple of EMA. Example: `1.25` means `1.25x EMA`.
+- all `*VOLUME` keys use dollars in the internal six-decimal scale. Example: `1000000000` means `$1,000`.
+- the six-decimal dollar unit is documented here and does not appear in key names.
 
 - `PERIOD_SECONDS` — close period length in seconds. Example: `60`.
 - `EMA_PERIODS` — EMA denominator in periods. Example: `12`.
 - `LULL_RESET_SECONDS` — inactivity timeout that forces a fresh open period. Example: `600`.
 - `HOOK_FEE_PERCENT` — additional trader fee as a percent of the active LP fee. Example: `10`.
-- `MIN_VOLUME_TO_ENTER_CASH_USD` — minimum close volume required before `FLOOR -> CASH` is allowed. Example: `1000`.
-- `CASH_ENTER_TRIGGER_EMA_X` — `closeVol / EMA` trigger for `FLOOR -> CASH`. Example: `1.90`.
+- `FLOOR_TO_CASH_MIN_CLOSE_VOLUME` — minimum close volume required before `FLOOR -> CASH` is allowed. Example: `1000000000`.
+- `FLOOR_TO_CASH_MIN_FLOW_EMA_X` — `closeVol / EMA` trigger for `FLOOR -> CASH`. Example: `1.90`.
 - `CASH_HOLD_PERIODS` — configured cash hold length `N` (`N - 1` fully protected periods). Example: `4`.
-- `MIN_VOLUME_TO_ENTER_EXTREME_USD` — minimum close volume required before `CASH -> EXTREME` is allowed. Example: `4000`.
-- `EXTREME_ENTER_TRIGGER_EMA_X` — `closeVol / EMA` trigger for `CASH -> EXTREME`. Example: `4.10`.
-- `ENTER_EXTREME_CONFIRM_PERIODS` — consecutive qualifying closes required before entering `EXTREME`. Example: `2`.
+- `CASH_TO_EXTREME_MIN_CLOSE_VOLUME` — minimum close volume required before `CASH -> EXTREME` is allowed. Example: `4000000000`.
+- `CASH_TO_EXTREME_MIN_FLOW_EMA_X` — `closeVol / EMA` trigger for `CASH -> EXTREME`. Example: `4.10`.
+- `CASH_TO_EXTREME_CONFIRM_PERIODS` — consecutive qualifying closes required before entering `EXTREME`. Example: `2`.
 - `EXTREME_HOLD_PERIODS` — configured hold length after entering `EXTREME`. Example: `4`.
-- `EXTREME_EXIT_TRIGGER_EMA_X` — `closeVol / EMA` trigger for `EXTREME -> CASH`. Example: `1.20`.
-- `EXIT_EXTREME_CONFIRM_PERIODS` — consecutive qualifying closes required before leaving `EXTREME`. Example: `2`.
-- `CASH_EXIT_TRIGGER_EMA_X` — `closeVol / EMA` trigger for `CASH -> FLOOR`. Example: `1.20`.
-- `EXIT_CASH_CONFIRM_PERIODS` — consecutive qualifying closes required before leaving `CASH`. Example: `3`.
-- `EMERGENCY_FLOOR_TRIGGER_USD` — emergency floor threshold checked against close volume. Example: `600`.
-- `EMERGENCY_CONFIRM_PERIODS` — consecutive closes below `EMERGENCY_FLOOR_TRIGGER_USD` required for emergency reset. Example: `3`.
+- `EXTREME_TO_CASH_MAX_FLOW_EMA_X` — `closeVol / EMA` trigger for `EXTREME -> CASH`. Example: `1.20`.
+- `EXTREME_TO_CASH_CONFIRM_PERIODS` — consecutive qualifying closes required before leaving `EXTREME`. Example: `2`.
+- `CASH_TO_FLOOR_MAX_FLOW_EMA_X` — `closeVol / EMA` trigger for `CASH -> FLOOR`. Example: `1.20`.
+- `CASH_TO_FLOOR_CONFIRM_PERIODS` — consecutive qualifying closes required before leaving `CASH`. Example: `3`.
+- `EMERGENCY_TO_FLOOR_MAX_CLOSE_VOLUME` — emergency floor threshold checked against close volume. Example: `600000000`.
+- `EMERGENCY_TO_FLOOR_CONFIRM_PERIODS` — consecutive closes below `EMERGENCY_TO_FLOOR_MAX_CLOSE_VOLUME` required for emergency reset. Example: `3`.
 
 ## Frozen deployment snapshot
 
@@ -97,19 +98,19 @@ the snapshot cannot drift with outer environment changes.
 - `DEPLOY_EMA_PERIODS`
 - `DEPLOY_LULL_RESET_SECONDS`
 - `DEPLOY_HOOK_FEE_PERCENT`
-- `DEPLOY_MIN_VOLUME_TO_ENTER_CASH_USD` — same meaning as `MIN_VOLUME_TO_ENTER_CASH_USD`. Example: `1000`.
-- `DEPLOY_CASH_ENTER_TRIGGER_EMA_X` — same meaning as `CASH_ENTER_TRIGGER_EMA_X`. Example: `1.90`.
+- `DEPLOY_FLOOR_TO_CASH_MIN_CLOSE_VOLUME` — same meaning as `FLOOR_TO_CASH_MIN_CLOSE_VOLUME`. Example: `1000000000`.
+- `DEPLOY_FLOOR_TO_CASH_MIN_FLOW_EMA_X` — same meaning as `FLOOR_TO_CASH_MIN_FLOW_EMA_X`. Example: `1.90`.
 - `DEPLOY_CASH_HOLD_PERIODS`
-- `DEPLOY_MIN_VOLUME_TO_ENTER_EXTREME_USD` — same meaning as `MIN_VOLUME_TO_ENTER_EXTREME_USD`. Example: `4000`.
-- `DEPLOY_EXTREME_ENTER_TRIGGER_EMA_X` — same meaning as `EXTREME_ENTER_TRIGGER_EMA_X`. Example: `4.10`.
-- `DEPLOY_ENTER_EXTREME_CONFIRM_PERIODS` — same meaning as `ENTER_EXTREME_CONFIRM_PERIODS`. Example: `2`.
+- `DEPLOY_CASH_TO_EXTREME_MIN_CLOSE_VOLUME` — same meaning as `CASH_TO_EXTREME_MIN_CLOSE_VOLUME`. Example: `4000000000`.
+- `DEPLOY_CASH_TO_EXTREME_MIN_FLOW_EMA_X` — same meaning as `CASH_TO_EXTREME_MIN_FLOW_EMA_X`. Example: `4.10`.
+- `DEPLOY_CASH_TO_EXTREME_CONFIRM_PERIODS` — same meaning as `CASH_TO_EXTREME_CONFIRM_PERIODS`. Example: `2`.
 - `DEPLOY_EXTREME_HOLD_PERIODS`
-- `DEPLOY_EXTREME_EXIT_TRIGGER_EMA_X` — same meaning as `EXTREME_EXIT_TRIGGER_EMA_X`. Example: `1.20`.
-- `DEPLOY_EXIT_EXTREME_CONFIRM_PERIODS` — same meaning as `EXIT_EXTREME_CONFIRM_PERIODS`. Example: `2`.
-- `DEPLOY_CASH_EXIT_TRIGGER_EMA_X` — same meaning as `CASH_EXIT_TRIGGER_EMA_X`. Example: `1.20`.
-- `DEPLOY_EXIT_CASH_CONFIRM_PERIODS` — same meaning as `EXIT_CASH_CONFIRM_PERIODS`. Example: `3`.
-- `DEPLOY_EMERGENCY_FLOOR_TRIGGER_USD` — same meaning as `EMERGENCY_FLOOR_TRIGGER_USD`. Example: `600`.
-- `DEPLOY_EMERGENCY_CONFIRM_PERIODS`
+- `DEPLOY_EXTREME_TO_CASH_MAX_FLOW_EMA_X` — same meaning as `EXTREME_TO_CASH_MAX_FLOW_EMA_X`. Example: `1.20`.
+- `DEPLOY_EXTREME_TO_CASH_CONFIRM_PERIODS` — same meaning as `EXTREME_TO_CASH_CONFIRM_PERIODS`. Example: `2`.
+- `DEPLOY_CASH_TO_FLOOR_MAX_FLOW_EMA_X` — same meaning as `CASH_TO_FLOOR_MAX_FLOW_EMA_X`. Example: `1.20`.
+- `DEPLOY_CASH_TO_FLOOR_CONFIRM_PERIODS` — same meaning as `CASH_TO_FLOOR_CONFIRM_PERIODS`. Example: `3`.
+- `DEPLOY_EMERGENCY_TO_FLOOR_MAX_CLOSE_VOLUME` — same meaning as `EMERGENCY_TO_FLOOR_MAX_CLOSE_VOLUME`. Example: `600000000`.
+- `DEPLOY_EMERGENCY_TO_FLOOR_CONFIRM_PERIODS`
 - `INIT_PRICE_USD` — pool bootstrap price consumed by `ensure-pool`. Example: `2500`.
 
 For all profiles, constructor-aligned runtime keys are optional and fall back to the corresponding `DEPLOY_*` values.
@@ -117,14 +118,19 @@ Use the runtime key only when validation should expect post-deploy drift from th
 
 ## Optional runtime overrides
 
-- `MIN_COUNTED_SWAP_USD6` — telemetry dust filter in raw `USD6` when a non-default runtime threshold is required.
+- `MIN_COUNTED_SWAP_VOLUME` — telemetry dust filter in the internal six-decimal dollar scale when a non-default runtime threshold is required.
   When omitted, the loader uses `4_000_000`. Example: `4000000` for `$4`.
 
 Controller constraint notes:
-- `EMERGENCY_FLOOR_TRIGGER_USD` must be strictly greater than zero.
-- `EMERGENCY_FLOOR_TRIGGER_USD` must be strictly lower than `MIN_VOLUME_TO_ENTER_CASH_USD`.
-- `CASH_ENTER_TRIGGER_EMA_X` must be less than or equal to `EXTREME_ENTER_TRIGGER_EMA_X`.
-- `EXTREME_EXIT_TRIGGER_EMA_X` must be less than or equal to `CASH_EXIT_TRIGGER_EMA_X`.
+- `EMERGENCY_TO_FLOOR_MAX_CLOSE_VOLUME` must be strictly greater than zero.
+- `EMERGENCY_TO_FLOOR_MAX_CLOSE_VOLUME` must be strictly lower than `FLOOR_TO_CASH_MIN_CLOSE_VOLUME`.
+- `FLOOR_TO_CASH_MIN_FLOW_EMA_X` must be less than or equal to `CASH_TO_EXTREME_MIN_FLOW_EMA_X`.
+- `EXTREME_TO_CASH_MAX_FLOW_EMA_X` must be less than or equal to `CASH_TO_FLOOR_MAX_FLOW_EMA_X`.
+- `CASH_HOLD_PERIODS` and `EXTREME_HOLD_PERIODS` block only the ordinary down path.
+- The emergency path continues counting during hold.
+- The earliest ordinary `cash -> floor` descent is `cashHoldPeriods + cashToFloorConfirmPeriods - 1`.
+- The earliest ordinary `extreme -> cash` descent is `extremeHoldPeriods + extremeToCashConfirmPeriods - 1`.
+- The earliest emergency descent is `emergencyToFloorConfirmPeriods`.
 - Hold semantics are `N -> N - 1` fully protected periods; production guidance is
   `CASH_HOLD_PERIODS >= 2` and `EXTREME_HOLD_PERIODS >= 2` (recommended `3..4`).
 

@@ -162,7 +162,7 @@ contract VolumeDynamicFeeHookAdminTest is Test, VolumeDynamicFeeHookV2DeployHelp
     uint8 internal constant MAX_HOLD_PERIODS = 15;
     uint8 internal constant MAX_UP_EXTREME_CONFIRM_PERIODS = 7;
     uint8 internal constant MAX_DOWN_CONFIRM_PERIODS = 15;
-    uint8 internal constant MAX_EMERGENCY_CONFIRM_PERIODS = 15;
+    uint8 internal constant MAX_EMERGENCY_STREAK_LIMIT = 15;
 
     uint8 internal constant TRACE_COUNTER_HOLD_SHIFT = 1;
     uint8 internal constant TRACE_COUNTER_UP_EXTREME_SHIFT = 5;
@@ -550,7 +550,7 @@ contract VolumeDynamicFeeHookAdminTest is Test, VolumeDynamicFeeHookV2DeployHelp
             MAX_HOLD_PERIODS,
             MAX_UP_EXTREME_CONFIRM_PERIODS,
             MAX_DOWN_CONFIRM_PERIODS,
-            MAX_EMERGENCY_CONFIRM_PERIODS
+            MAX_EMERGENCY_STREAK_LIMIT
         );
 
         assertEq((packed >> PAUSED_BIT) & 1, 1, "paused bit must stay at bit 232");
@@ -563,7 +563,7 @@ contract VolumeDynamicFeeHookAdminTest is Test, VolumeDynamicFeeHookV2DeployHelp
         assertEq((packed >> DOWN_STREAK_SHIFT) & 0x0F, MAX_DOWN_CONFIRM_PERIODS, "down streak must use 4 bits");
         assertEq(
             (packed >> EMERGENCY_STREAK_SHIFT) & 0x0F,
-            MAX_EMERGENCY_CONFIRM_PERIODS,
+            MAX_EMERGENCY_STREAK_LIMIT,
             "emergency streak must use 4 bits"
         );
         assertEq(packed >> 248, 0, "packed counters must still fit inside the existing single state slot");
@@ -588,7 +588,7 @@ contract VolumeDynamicFeeHookAdminTest is Test, VolumeDynamicFeeHookV2DeployHelp
         assertEq(holdRemaining, MAX_HOLD_PERIODS);
         assertEq(upExtremeStreak, MAX_UP_EXTREME_CONFIRM_PERIODS);
         assertEq(downStreak, MAX_DOWN_CONFIRM_PERIODS);
-        assertEq(emergencyStreak, MAX_EMERGENCY_CONFIRM_PERIODS);
+        assertEq(emergencyStreak, MAX_EMERGENCY_STREAK_LIMIT);
     }
 
     function test_packControllerTransitionCounters_supports_new_maximum_values_without_truncation() public view {
@@ -597,7 +597,7 @@ contract VolumeDynamicFeeHookAdminTest is Test, VolumeDynamicFeeHookV2DeployHelp
             MAX_HOLD_PERIODS,
             MAX_UP_EXTREME_CONFIRM_PERIODS,
             MAX_DOWN_CONFIRM_PERIODS,
-            MAX_EMERGENCY_CONFIRM_PERIODS
+            MAX_EMERGENCY_STREAK_LIMIT
         );
 
         assertEq(counters & 1, 1, "paused flag must stay at bit 0");
@@ -614,7 +614,7 @@ contract VolumeDynamicFeeHookAdminTest is Test, VolumeDynamicFeeHookV2DeployHelp
         );
         assertEq(
             (counters >> TRACE_COUNTER_EMERGENCY_SHIFT) & 0x0F,
-            MAX_EMERGENCY_CONFIRM_PERIODS,
+            MAX_EMERGENCY_STREAK_LIMIT,
             "emergency streak must use 4 bits"
         );
         assertEq(
@@ -624,7 +624,7 @@ contract VolumeDynamicFeeHookAdminTest is Test, VolumeDynamicFeeHookV2DeployHelp
                     | (uint16(MAX_HOLD_PERIODS) << TRACE_COUNTER_HOLD_SHIFT)
                     | (uint16(MAX_UP_EXTREME_CONFIRM_PERIODS) << TRACE_COUNTER_UP_EXTREME_SHIFT)
                     | (uint16(MAX_DOWN_CONFIRM_PERIODS) << TRACE_COUNTER_DOWN_SHIFT)
-                    | (uint16(MAX_EMERGENCY_CONFIRM_PERIODS) << TRACE_COUNTER_EMERGENCY_SHIFT)
+                    | (uint16(MAX_EMERGENCY_STREAK_LIMIT) << TRACE_COUNTER_EMERGENCY_SHIFT)
             ),
             "trace counters must still fit inside uint16"
         );
@@ -1403,7 +1403,7 @@ contract VolumeDynamicFeeHookAdminTest is Test, VolumeDynamicFeeHookV2DeployHelp
         p.cashToExtremeConfirmPeriods = MAX_UP_EXTREME_CONFIRM_PERIODS;
         p.extremeToCashConfirmPeriods = MAX_DOWN_CONFIRM_PERIODS;
         p.cashToFloorConfirmPeriods = MAX_DOWN_CONFIRM_PERIODS;
-        p.emergencyToFloorConfirmPeriods = MAX_EMERGENCY_CONFIRM_PERIODS;
+        p.emergencyToFloorConfirmPeriods = MAX_EMERGENCY_STREAK_LIMIT;
 
         hook.setControllerParams(p);
 
@@ -1413,7 +1413,7 @@ contract VolumeDynamicFeeHookAdminTest is Test, VolumeDynamicFeeHookV2DeployHelp
         assertEq(updated.cashToExtremeConfirmPeriods, MAX_UP_EXTREME_CONFIRM_PERIODS);
         assertEq(updated.extremeToCashConfirmPeriods, MAX_DOWN_CONFIRM_PERIODS);
         assertEq(updated.cashToFloorConfirmPeriods, MAX_DOWN_CONFIRM_PERIODS);
-        assertEq(updated.emergencyToFloorConfirmPeriods, MAX_EMERGENCY_CONFIRM_PERIODS);
+        assertEq(updated.emergencyToFloorConfirmPeriods, MAX_EMERGENCY_STREAK_LIMIT);
     }
 
     function test_setControllerParams_reverts_when_ranges_exceed_new_maximums() public {
@@ -1445,7 +1445,7 @@ contract VolumeDynamicFeeHookAdminTest is Test, VolumeDynamicFeeHookV2DeployHelp
         hook.setControllerParams(p);
 
         p = _defaultControllerParams();
-        p.emergencyToFloorConfirmPeriods = uint8(MAX_EMERGENCY_CONFIRM_PERIODS + 1);
+        p.emergencyToFloorConfirmPeriods = uint8(MAX_EMERGENCY_STREAK_LIMIT + 1);
         vm.expectRevert(VolumeDynamicFeeHook.InvalidConfirmPeriods.selector);
         hook.setControllerParams(p);
     }
@@ -1834,13 +1834,13 @@ contract VolumeDynamicFeeHookAdminTest is Test, VolumeDynamicFeeHookV2DeployHelp
         VolumeDynamicFeeHook.ControllerParams memory p = _defaultControllerParams();
         p.cashHoldPeriods = 1;
         p.cashToFloorConfirmPeriods = MAX_DOWN_CONFIRM_PERIODS;
-        p.emergencyToFloorConfirmPeriods = MAX_EMERGENCY_CONFIRM_PERIODS;
+        p.emergencyToFloorConfirmPeriods = MAX_EMERGENCY_STREAK_LIMIT;
         hook.setControllerParams(p);
         hook.unpause();
 
         _enterCashMode();
 
-        for (uint256 i = 1; i < MAX_EMERGENCY_CONFIRM_PERIODS; ++i) {
+        for (uint256 i = 1; i < MAX_EMERGENCY_STREAK_LIMIT; ++i) {
             _advanceOnePeriod();
             _closeCurrentPeriod();
 

@@ -69,10 +69,10 @@ contract EnvLibBoundsTest is Test {
 
     function test_checked_uint_narrowing_accepts_in_range_values() public view {
         assertEq(harness.toUint8Checked(type(uint8).max, "EMA_PERIODS"), type(uint8).max);
-        assertEq(harness.toUint16Checked(type(uint16).max, "CASH_ENTER_TRIGGER_EMA_X"), type(uint16).max);
+        assertEq(harness.toUint16Checked(type(uint16).max, "FLOOR_TO_CASH_MIN_FLOW_EMA_X"), type(uint16).max);
         assertEq(harness.toUint24Checked(type(uint24).max, "FLOOR_FEE_PERCENT"), type(uint24).max);
         assertEq(harness.toUint32Checked(type(uint32).max, "PERIOD_SECONDS"), type(uint32).max);
-        assertEq(harness.toUint64Checked(type(uint64).max, "MIN_VOLUME_TO_ENTER_CASH_USD"), type(uint64).max);
+        assertEq(harness.toUint64Checked(type(uint64).max, "FLOOR_TO_CASH_MIN_CLOSE_VOLUME"), type(uint64).max);
         assertEq(
             harness.toPositiveInt24Checked(uint256(uint24(type(int24).max)), "TICK_SPACING"), type(int24).max
         );
@@ -98,13 +98,13 @@ contract EnvLibBoundsTest is Test {
     }
 
     function test_require_bps_from_multiplier_x_parses_decimal_multiple() public {
-        vm.setEnv("TEST_CASH_ENTER_TRIGGER_EMA_X", "1.8525");
-        assertEq(harness.requireBpsFromMultiplierX("TEST_CASH_ENTER_TRIGGER_EMA_X"), 18_525);
+        vm.setEnv("TEST_FLOOR_TO_CASH_MIN_FLOW_EMA_X", "1.8525");
+        assertEq(harness.requireBpsFromMultiplierX("TEST_FLOOR_TO_CASH_MIN_FLOW_EMA_X"), 18_525);
     }
 
     function test_require_usd6_from_usd_parses_decimal_dollars() public {
-        vm.setEnv("TEST_EMERGENCY_FLOOR_TRIGGER_USD", "600.1250019");
-        assertEq(harness.requireUsd6FromUsd("TEST_EMERGENCY_FLOOR_TRIGGER_USD"), 600_125_001);
+        vm.setEnv("TEST_EMERGENCY_TO_FLOOR_MAX_CLOSE_VOLUME_INPUT", "600.1250019");
+        assertEq(harness.requireUsd6FromUsd("TEST_EMERGENCY_TO_FLOOR_MAX_CLOSE_VOLUME_INPUT"), 600_125_001);
     }
 
     function test_checked_uint8_narrowing_reverts_on_overflow() public {
