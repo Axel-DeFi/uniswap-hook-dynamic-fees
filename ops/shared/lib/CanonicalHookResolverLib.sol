@@ -19,7 +19,7 @@ library CanonicalHookResolverLib {
         (canonicalHookAddress,,) = HookIdentityLib.expectedHookAddress(deployCfg);
 
         if (runtimeCfg.hookAddress != address(0) && runtimeCfg.hookAddress != canonicalHookAddress) {
-            revert("HOOK_ADDRESS not canonical for current release/deployment snapshot");
+            revert("HOOK_ADDRESS not canonical for deployment snapshot");
         }
 
         runtimeCfg.hookAddress = canonicalHookAddress;

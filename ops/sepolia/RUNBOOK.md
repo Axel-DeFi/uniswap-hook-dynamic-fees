@@ -30,7 +30,7 @@ ops/sepolia/scripts/ensure-pool.sh
 ops/sepolia/scripts/ensure-liquidity.sh
 ```
 
-`ensure-hook.sh` reuses only the canonical valid hook for the current release plus frozen
+`ensure-hook.sh` reuses only the canonical valid hook for the frozen
 `ops/sepolia/config/deploy.env` snapshot; if the canonical hook is missing it deploys it, and if the canonical address
 is already occupied by invalid code it fails loud instead of silently repointing reuse.
 `ensure-pool.sh` and `ensure-liquidity.sh` also enforce canonical hook identity inside their Foundry scripts and run
@@ -126,7 +126,7 @@ Timelock visibility is intentional. The main exposed effect is HookFee timing; L
 - Hot-wallet owner usage is unacceptable for production.
 - Owner key custody should be cold/hardware.
 - Reuse of an existing hook in deploy/ensure/preflight is pinned to the canonical CREATE2 address derived from the
-  current release and the frozen `ops/sepolia/config/deploy.env` constructor snapshot; current runtime/admin
+  frozen `ops/sepolia/config/deploy.env` constructor snapshot; current runtime/admin
   expectations come from `ops/sepolia/config/defaults.env` only when explicitly overridden, otherwise they inherit the
   frozen snapshot. Reuse also requires the exact minimal callback surface, exact PoolManager binding, current
   `minCountedSwapVolume`, and zero pending owner / pending config changes.

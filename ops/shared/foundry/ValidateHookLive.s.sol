@@ -16,7 +16,7 @@ contract ValidateHookLive is LiveOpsBase {
         (address canonicalHookAddress,,) = HookIdentityLib.expectedHookAddress(deployCfg);
 
         if (cfg.hookAddress != address(0) && cfg.hookAddress != canonicalHookAddress) {
-            revert("HOOK_ADDRESS not canonical for current release/deployment snapshot");
+            revert("HOOK_ADDRESS not canonical for deployment snapshot");
         }
 
         cfg.hookAddress = canonicalHookAddress;

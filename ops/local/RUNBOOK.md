@@ -123,7 +123,7 @@ Notes:
 - Production owner must be multisig; local EOA owner is acceptable only for dev/test.
 - Hot-wallet owner usage is unacceptable for production; use cold/hardware custody.
 - Reuse of an existing hook in deploy/ensure/preflight is pinned to the canonical CREATE2 address derived from the
-  current release and the frozen `ops/local/config/deploy.env` constructor snapshot; current runtime/admin
+  frozen `ops/local/config/deploy.env` constructor snapshot; current runtime/admin
   expectations come from `ops/local/config/defaults.env` only when explicitly overridden, otherwise they inherit the
   frozen snapshot. Reuse also requires the exact minimal callback surface, exact PoolManager binding, current
   `minCountedSwapVolume`, and zero pending owner / pending config changes.

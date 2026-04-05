@@ -39,7 +39,7 @@ Stable-token decimals resolution:
 - `HOOK_ADDRESS` remains an optional runtime override.
   - tracked configs should not pin it; shared live wrappers may hydrate it from `ops/<network>/out/state/*.addresses.json`
   - when provided for deploy/ensure/preflight validation, it must be the canonical CREATE2 hook address for the
-    current release and the frozen deployment snapshot loaded from `ops/<network>/config/deploy.env`
+    frozen deployment snapshot loaded from `ops/<network>/config/deploy.env`
 - `POOL_ID` remains an optional runtime override for explicit validation and diagnostics.
   - tracked configs should not pin it; when provided, it is validated against the canonical hook pool key
 

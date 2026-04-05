@@ -36,6 +36,6 @@ Sepolia validation scripts mirror local phase names, with explicit read-only and
 - `gas.sh` also enforces preflight, auto-prepares a short-period timing scenario, and restores original timing params on exit.
 - `ensure-pool` and `ensure-liquidity` now also enforce the same preflight gate by default.
 - Broadcast-capable hook/pool/liquidity scripts resolve `HOOK_ADDRESS` to the canonical hook for the current
-  release + deployment snapshot before sending transactions.
+  deployment snapshot before sending transactions.
 - Set `OPS_REQUIRE_PREFLIGHT=0` only for explicit break-glass diagnostics.
 - Broadcast-capable scripts also re-check budget safety before sending transactions.

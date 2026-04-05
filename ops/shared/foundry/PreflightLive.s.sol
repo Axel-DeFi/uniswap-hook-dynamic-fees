@@ -38,7 +38,7 @@ contract PreflightLive is LiveOpsBase {
         if (cfg.hookAddress != address(0)) {
             if (cfg.hookAddress != canonicalHookAddress) {
                 hookValidation.ok = false;
-                hookValidation.reason = "HOOK_ADDRESS not canonical for current release/deployment snapshot";
+                hookValidation.reason = "HOOK_ADDRESS not canonical for deployment snapshot";
             } else if (canonicalHookAddress.code.length == 0) {
                 hookValidation.ok = false;
                 hookValidation.reason = "stale HOOK_ADDRESS (no code)";

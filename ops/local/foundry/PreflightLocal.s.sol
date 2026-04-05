@@ -58,7 +58,7 @@ contract PreflightLocal is Script {
 
         if (hookConfigured && !configuredHookCanonical) {
             hookValidation.ok = false;
-            hookValidation.reason = "HOOK_ADDRESS not canonical for current release/deployment snapshot";
+            hookValidation.reason = "HOOK_ADDRESS not canonical for deployment snapshot";
         } else if (hookDeployed) {
             cfg.hookAddress = canonicalHookAddress;
             hookValidation = HookValidationLib.validateHook(cfg);

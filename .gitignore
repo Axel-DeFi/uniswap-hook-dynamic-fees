@@ -5,6 +5,10 @@ broadcast/
 scripts/out/
 tmp/
 
+# Local generated artifacts
+audit/
+verify-input.json
+
 # OS / IDE
 .DS_Store
 __MACOSX/
@@ -13,13 +17,3 @@ __MACOSX/
 
 # Secrets
 .env
-docs/PROMPT_FOR_AI.md
-
-# Local-only helper scripts
-scripts/private_lp_deposits.sh
-
-# Audit bundle: ignore everything except two final PDF reports
-audit_bundle/**
-!audit_bundle/
-!audit_bundle/audit_VolumeDynamicFeeHook_RU.pdf
-!audit_bundle/concept_VolumeDynamicFeeHook_LP.pdf

@@ -19,7 +19,7 @@ ops/optimism/scripts/ensure-liquidity.sh
 ```
 
 All three phases use the shared canonical live-ops stack:
-- canonical CREATE2 hook identity derived from the current release and `ops/optimism/config/deploy.env`,
+- canonical CREATE2 hook identity derived from `ops/optimism/config/deploy.env`,
 - exact callback surface validation,
 - exact PoolManager binding,
 - full runtime config validation,
