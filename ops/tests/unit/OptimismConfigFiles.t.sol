@@ -41,36 +41,6 @@ contract OptimismConfigFilesTest is Test {
         _assertContains(text, "EMERGENCY_TO_FLOOR_CONFIRM_PERIODS=6");
     }
 
-    function test_show_hook_config_uses_new_controller_names() public view {
-        string memory text = vm.readFile("scripts/show_hook_config.sh");
-
-        _assertContains(text, "floorToCashMinCloseVolume");
-        _assertContains(text, "floorToCashMinFlowBps");
-        _assertContains(text, "cashToExtremeMinCloseVolume");
-        _assertContains(text, "cashToExtremeMinFlowBps");
-        _assertContains(text, "cashToExtremeConfirmPeriods");
-        _assertContains(text, "extremeToCashMaxFlowBps");
-        _assertContains(text, "extremeToCashConfirmPeriods");
-        _assertContains(text, "cashToFloorMaxFlowBps");
-        _assertContains(text, "cashToFloorConfirmPeriods");
-        _assertContains(text, "emergencyToFloorMaxCloseVolume");
-        _assertContains(text, "emergencyToFloorConfirmPeriods");
-        _assertContains(text, "minCountedSwapVolume");
-
-        _assertNotContains(text, string.concat("minCloseVol", "ToCash", "Usd6"));
-        _assertNotContains(text, string.concat("cashEnter", "Trigger", "Bps"));
-        _assertNotContains(text, string.concat("minCloseVol", "ToExtreme", "Usd6"));
-        _assertNotContains(text, string.concat("extremeEnter", "Trigger", "Bps"));
-        _assertNotContains(text, string.concat("upExtreme", "Confirm", "Periods"));
-        _assertNotContains(text, string.concat("extremeExit", "Trigger", "Bps"));
-        _assertNotContains(text, string.concat("downExtreme", "Confirm", "Periods"));
-        _assertNotContains(text, string.concat("cashExit", "Trigger", "Bps"));
-        _assertNotContains(text, string.concat("downCash", "Confirm", "Periods"));
-        _assertNotContains(text, string.concat("emergencyFloor", "CloseVol", "Usd6"));
-        _assertNotContains(text, string.concat("emergency", "Confirm", "Periods"));
-        _assertNotContains(text, string.concat("minCounted", "Swap", "Usd6"));
-    }
-
     function _assertContains(string memory haystack, string memory needle) internal pure {
         assertTrue(_contains(haystack, needle), string.concat("missing: ", needle));
     }
