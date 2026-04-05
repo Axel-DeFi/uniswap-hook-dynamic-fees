@@ -46,7 +46,7 @@ gas_setup_paths() {
 gas_broadcast_path() {
   local script_file="$1"
   local chain_id="$2"
-  printf '%s/scripts/out/broadcast/%s/%s/run-latest.json\n' "${ROOT_DIR}" "${script_file}" "${chain_id}"
+  printf '%s/broadcast/%s/%s/run-latest.json\n' "${ROOT_DIR}" "${script_file}" "${chain_id}"
 }
 
 gas_hex_to_dec() {

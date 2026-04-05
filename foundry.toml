@@ -2,7 +2,7 @@
 src = "src"
 test = "ops/tests"
 out = "out"
-cache_path = "scripts/out/cache"
+cache_path = "cache"
 libs = ["lib"]
 solc_version = "0.8.26"
 optimizer = true
@@ -13,8 +13,7 @@ bytecode_hash = "ipfs"
 gas_reports = ["VolumeDynamicFeeHook"]
 offline = true
 
-# Store forge script broadcast artifacts under scripts/out as well.
-broadcast = "scripts/out/broadcast"
+broadcast = "broadcast"
 
 # Keep remappings in remappings.txt for reproducibility.
 auto_detect_remappings = false
@@ -22,7 +21,6 @@ auto_detect_remappings = false
 # Needed for scripts that read environment variables and write deployment artifacts
 fs_permissions = [
   { access = "read", path = "./" },
-  { access = "read-write", path = "scripts/out" },
   { access = "read-write", path = "ops/local/out" },
   { access = "read-write", path = "ops/sepolia/out" },
   { access = "read-write", path = "ops/optimism/out" }
@@ -32,7 +30,7 @@ fs_permissions = [
 src = "src"
 test = "ops/tests"
 out = "out"
-cache_path = "scripts/out/cache"
+cache_path = "cache"
 libs = ["lib"]
 solc_version = "0.8.26"
 optimizer = true
@@ -42,11 +40,10 @@ evm_version = "cancun"
 bytecode_hash = "ipfs"
 gas_reports = ["VolumeDynamicFeeHook"]
 offline = true
-broadcast = "scripts/out/broadcast"
+broadcast = "broadcast"
 auto_detect_remappings = false
 fs_permissions = [
   { access = "read", path = "./" },
-  { access = "read-write", path = "scripts/out" },
   { access = "read-write", path = "ops/local/out" },
   { access = "read-write", path = "ops/sepolia/out" },
   { access = "read-write", path = "ops/optimism/out" }
