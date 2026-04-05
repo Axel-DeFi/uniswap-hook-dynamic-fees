@@ -44,6 +44,7 @@ contract MeasureGasLocalReportTest is Test, GasMeasurementLocalBase {
             "OPS_GAS_SAMPLES_PATH",
             string.concat(vm.projectRoot(), "/ops/local/out/reports/gas.samples.local.json")
         );
+        _ensureParentDir(samplesPath);
 
         string memory json = "[";
         bool first = true;
@@ -83,6 +84,21 @@ contract MeasureGasLocalReportTest is Test, GasMeasurementLocalBase {
 
         json = string.concat(json, "]");
         vm.writeFile(samplesPath, json);
+    }
+
+    function _ensureParentDir(string memory path) internal {
+        bytes memory pathBytes = bytes(path);
+
+        for (uint256 i = pathBytes.length; i > 0; --i) {
+            if (pathBytes[i - 1] == "/") {
+                bytes memory dirBytes = new bytes(i - 1);
+                for (uint256 j = 0; j < i - 1; ++j) {
+                    dirBytes[j] = pathBytes[j];
+                }
+                vm.createDir(string(dirBytes), true);
+                return;
+            }
+        }
     }
 
     function _measureOperation(GasMeasurementLib.Operation operation) internal returns (uint256 gasUsed) {

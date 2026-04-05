@@ -5,10 +5,6 @@ broadcast/
 scripts/out/
 tmp/
 
-# Local generated artifacts
-audit/
-verify-input.json
-
 # OS / IDE
 .DS_Store
 __MACOSX/
