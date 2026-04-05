@@ -61,6 +61,10 @@ contract RunSmokeSwapsLive is LiveOpsBase {
 
         PoolKey memory key = _poolKey(cfg);
         IPoolManager manager = IPoolManager(cfg.poolManager);
+        if (manager.getLiquidity(key.toId()) == 0) {
+            LoggingLib.ok("smoke swap skipped (pool has zero liquidity)");
+            return;
+        }
         (uint160 sqrtPriceX96,,,) = manager.getSlot0(key.toId());
 
         SwapPlan memory plan = _selectPlan(cfg, sqrtPriceX96, amountStable);
