@@ -44,5 +44,5 @@ For operational details, use:
 
 ## License / Usage Notice
 
-This repository is source-available for security review and technical evaluation only.
+This repository is source-available for review only. No license is granted for use, modification, deployment, or redistribution without prior written permission.
 See `LICENSE` for the full terms.
