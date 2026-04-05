@@ -8,6 +8,7 @@ File-backed live config is loaded in this order:
 
 In normal day-to-day setup, edit `deploy.env`.
 Keep `defaults.env` for runtime wiring, budgets, and explicit post-deploy runtime overrides.
+Do not persist live `HOOK_ADDRESS` or `POOL_ID` bindings in tracked `defaults.env`.
 
 After file loading, wrapper scripts may hydrate runtime-only addresses from state JSON:
 - `POOL_MANAGER`, `HOOK_ADDRESS`, `VOLATILE`, `STABLE` from `ops/<network>/out/state/*.addresses.json`
@@ -35,10 +36,12 @@ Stable-token decimals resolution:
 
 ## Hook / pool binding
 
-- `HOOK_ADDRESS` (optional for bootstrap, required for ensure/smoke/full/emergency)
+- `HOOK_ADDRESS` remains an optional runtime override.
+  - tracked configs should not pin it; shared live wrappers may hydrate it from `ops/<network>/out/state/*.addresses.json`
   - when provided for deploy/ensure/preflight validation, it must be the canonical CREATE2 hook address for the
     current release and the frozen deployment snapshot loaded from `ops/<network>/config/deploy.env`
-- `POOL_ID` (optional, validated against the canonical hook pool key when provided)
+- `POOL_ID` remains an optional runtime override for explicit validation and diagnostics.
+  - tracked configs should not pin it; when provided, it is validated against the canonical hook pool key
 
 ## Pool initialization
 

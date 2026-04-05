@@ -7,6 +7,7 @@ contract OptimismConfigFilesTest is Test {
     function test_optimism_deploy_env_has_target_redeploy_profile() public view {
         string memory text = vm.readFile("ops/optimism/config/deploy.env");
 
+        _assertContains(text, "DEPLOY_TICK_SPACING=60");
         _assertContains(text, "DEPLOY_FLOOR_TO_CASH_MIN_CLOSE_VOLUME=400000000");
         _assertContains(text, "DEPLOY_FLOOR_TO_CASH_MIN_FLOW_EMA_X=1.35");
         _assertContains(text, "DEPLOY_CASH_HOLD_PERIODS=2");
@@ -25,6 +26,8 @@ contract OptimismConfigFilesTest is Test {
     function test_optimism_defaults_env_has_runtime_expectations_for_target_profile() public view {
         string memory text = vm.readFile("ops/optimism/config/defaults.env");
 
+        _assertNotContains(text, "HOOK_ADDRESS=");
+        _assertNotContains(text, "POOL_ID=");
         _assertContains(text, "MIN_COUNTED_SWAP_VOLUME=4000000");
         _assertContains(text, "FLOOR_TO_CASH_MIN_CLOSE_VOLUME=400000000");
         _assertContains(text, "FLOOR_TO_CASH_MIN_FLOW_EMA_X=1.35");
